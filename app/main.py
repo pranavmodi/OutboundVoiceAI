@@ -116,4 +116,13 @@ async def process_speech(
     vr.play(reply_url)
     return Response(content=str(vr), media_type="application/xml")
 
+if __name__ == "__main__":
+    # Simulation entrypoint
+    import os
+    from .call_provider.factory import get_call_provider
+    provider = get_call_provider()
+    if os.getenv("CALL_PROVIDER", "twilio").lower() == "simulator":
+        provider.start_call()
+    else:
+        print("This module defines the FastAPI app. Run with uvicorn for HTTP server.")
 

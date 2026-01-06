@@ -69,4 +69,16 @@ curl -i "$URL/voice"                       # should include <Gather>
 curl -i -X POST "$URL/call?to=+15551230000&base_url=$URL"
 ```
 
+### Simulator Mode (local, no Twilio)
+- Set provider and run:
+```bash
+CALL_PROVIDER=simulator python -m app.main
+```
+- Flow:
+  - Plays the greeting locally
+  - Prompts you each turn: enter a WAV/MP3 file path to transcribe (preferred) or type text
+  - Generates an AI reply and plays it locally
+  - Press `q` to end
+- Switch back to Twilio by running the API normally with uvicorn (default provider is `twilio`).
+
 
