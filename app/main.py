@@ -1,6 +1,8 @@
+import os
 from fastapi import FastAPI, Request, Query, HTTPException, Form
 from fastapi.responses import PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 
 from twilio.twiml.voice_response import VoiceResponse
@@ -9,9 +11,31 @@ from twilio.base.exceptions import TwilioRestException
 from .tts import generate_tts_mp3, generate_ai_audio, generate_ai_response_audio
 from .llm import generate_ai_reply
 from .twilio_call import place_outbound_call
+from .api import dashboard_router, websocket_router
 
 
-app = FastAPI(title="AI Outbound Voice POC", version="0.1.0")
+app = FastAPI(title="AI Outbound Voice Orchestrator", version="0.2.0")
+
+# CORS middleware for frontend
+# Configure allowed origins via CORS_ORIGINS env var (comma-separated) or use defaults
+_default_origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
+_cors_origins = os.getenv("CORS_ORIGINS")
+if _cors_origins:
+    _allowed_origins = [o.strip() for o in _cors_origins.split(",")]
+else:
+    _allowed_origins = _default_origins
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Include API routers
+app.include_router(dashboard_router)
+app.include_router(websocket_router)
 
 # Legacy static (kept for compatibility)
 STATIC_DIR = Path("static")

@@ -1,0 +1,135 @@
+export interface QueueInfo {
+  queue_name: string;
+  calls_waiting: number;
+  oldest_wait_seconds: number;
+  agents_available: number;
+  agents_logged_in: number;
+}
+
+export interface QueueState {
+  global_calls_waiting: number;
+  global_oldest_wait_seconds: number;
+  global_agents_available: number;
+  global_agents_logged_in: number;
+  outbound_allowed: boolean;
+  stable_polls_count: number;
+  last_poll_time: string | null;
+  ami_connected: boolean;
+  queues: QueueInfo[];
+}
+
+export interface Patient {
+  patient_id: string;
+  name: string;
+  phone: string;
+  language: string;
+  order_id: string | null;
+  order_created: string | null;
+  intake_status: string;
+  has_called_in_before: boolean;
+  has_abandoned_before: boolean;
+  ai_called_before: boolean;
+  attempt_count: number;
+  last_attempt_at: string | null;
+  last_outcome: string | null;
+  due_by: string | null;
+  priority_bucket: number;
+}
+
+export interface TranscriptEntry {
+  speaker: string;
+  text: string;
+  timestamp: string;
+}
+
+export interface CallLog {
+  call_id: string;
+  patient_id: string;
+  patient_name: string;
+  phone: string;
+  order_id: string | null;
+  priority_bucket: number;
+  started_at: string | null;
+  ended_at: string | null;
+  duration_seconds: number;
+  outcome: string;
+  transfer_attempted: boolean;
+  transfer_success: boolean;
+  voicemail_left: boolean;
+  sms_sent: boolean;
+  queue_snapshot: QueueState | null;
+  transcript: TranscriptEntry[];
+  error_code: string | null;
+  error_message: string | null;
+}
+
+export interface Statistics {
+  total_calls: number;
+  outcomes: Record<string, number>;
+  avg_duration_seconds: number;
+  transfer_rate: number;
+}
+
+export interface SystemStatus {
+  queue_state: QueueState;
+  outbound_queue_count: number;
+  has_active_call: boolean;
+  active_call: CallLog | null;
+  statistics: Statistics;
+}
+
+// WebSocket message types
+export type WSMessageType =
+  | "initial_state"
+  | "call_started"
+  | "call_ended"
+  | "transcript"
+  | "audio"
+  | "status"
+  | "status_update"
+  | "error"
+  | "ping"
+  | "pong";
+
+export interface WSMessage {
+  type: WSMessageType;
+  [key: string]: unknown;
+}
+
+export interface WSInitialState extends WSMessage {
+  type: "initial_state";
+  queue_state: QueueState;
+  active_call: CallLog | null;
+  statistics: Statistics;
+}
+
+export interface WSCallStarted extends WSMessage {
+  type: "call_started";
+  call: CallLog;
+}
+
+export interface WSCallEnded extends WSMessage {
+  type: "call_ended";
+  call: CallLog;
+}
+
+export interface WSTranscript extends WSMessage {
+  type: "transcript";
+  speaker: string;
+  text: string;
+}
+
+export interface WSAudio extends WSMessage {
+  type: "audio";
+  data: string; // base64 encoded
+}
+
+export interface WSStatus extends WSMessage {
+  type: "status" | "status_update";
+  status: string;
+}
+
+export interface WSError extends WSMessage {
+  type: "error";
+  message: string;
+}
