@@ -177,6 +177,9 @@ async def voice_websocket(websocket: WebSocket):
             elif "bytes" in message:
                 # Binary audio data from browser
                 audio_data = message["bytes"]
+                if not hasattr(voice_websocket, '_audio_received_logged'):
+                    voice_websocket._audio_received_logged = True
+                    print(f"[WebSocket] Received audio from browser: {len(audio_data)} bytes")
                 await orchestrator.send_audio(audio_data)
 
     except WebSocketDisconnect:

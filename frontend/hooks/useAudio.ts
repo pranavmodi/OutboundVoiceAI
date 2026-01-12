@@ -56,6 +56,9 @@ export function useAudio(): UseAudioReturn {
 
       mediaStreamRef.current = stream;
 
+      console.log("[Audio] AudioContext sample rate:", audioContext.sampleRate);
+      console.log("[Audio] Stream tracks:", stream.getAudioTracks().map(t => t.getSettings()));
+
       // Create audio nodes
       const source = audioContext.createMediaStreamSource(stream);
       const analyser = audioContext.createAnalyser();
@@ -67,6 +70,7 @@ export function useAudio(): UseAudioReturn {
       const processor = audioContext.createScriptProcessor(4096, 1, 1);
       processorRef.current = processor;
 
+      let audioChunkCount = 0;
       processor.onaudioprocess = (e) => {
         const inputData = e.inputBuffer.getChannelData(0);
 
@@ -80,6 +84,10 @@ export function useAudio(): UseAudioReturn {
         // Send to callback
         if (audioCallbackRef.current) {
           audioCallbackRef.current(pcmData.buffer);
+          audioChunkCount++;
+          if (audioChunkCount === 1) {
+            console.log("[Audio] Sending first audio chunk:", pcmData.buffer.byteLength, "bytes");
+          }
         }
       };
 

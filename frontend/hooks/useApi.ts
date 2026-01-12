@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import type { SystemStatus, Patient, CallLog, QueueState } from "@/types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -142,7 +142,7 @@ export function useApi() {
     }
   }, []);
 
-  return {
+  return useMemo(() => ({
     loading,
     error,
     getStatus,
@@ -156,5 +156,19 @@ export function useApi() {
     simulateAmiFailure,
     simulateAmiRecovery,
     resetPatients,
-  };
+  }), [
+    loading,
+    error,
+    getStatus,
+    getQueueState,
+    getPatients,
+    getOutboundQueue,
+    getCalls,
+    getCall,
+    simulateBusyQueue,
+    simulateQuietQueue,
+    simulateAmiFailure,
+    simulateAmiRecovery,
+    resetPatients,
+  ]);
 }

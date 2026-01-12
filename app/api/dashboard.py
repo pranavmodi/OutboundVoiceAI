@@ -1,4 +1,5 @@
 """REST API endpoints for dashboard."""
+import os
 from fastapi import APIRouter, HTTPException
 from typing import Optional
 
@@ -163,3 +164,15 @@ async def get_statistics():
     """Get call statistics."""
     call_log_provider = get_call_log_provider()
     return call_log_provider.get_statistics()
+
+
+@router.get("/config/check")
+async def check_configuration():
+    """Check system configuration status (for diagnostics)."""
+    api_key = os.getenv("OPENAI_API_KEY", "")
+
+    return {
+        "openai_api_key_configured": bool(api_key),
+        "openai_api_key_format_valid": api_key.startswith("sk-") if api_key else False,
+        "openai_api_key_preview": f"{api_key[:7]}...{api_key[-4:]}" if len(api_key) > 15 else "(too short or not set)",
+    }

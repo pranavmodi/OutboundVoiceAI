@@ -73,8 +73,10 @@ class CallOrchestrator:
         success = await self._voice_service.connect(call.call_id, patient.name)
         if not success:
             call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
-            if self.on_error:
-                await self.on_error("Failed to connect to voice service")
+            # Note: The actual error was already sent via on_error callback from voice service
+            self._voice_service = None
+            self._current_call = None
+            self._current_patient = None
             return None
 
         if self.on_status_update:

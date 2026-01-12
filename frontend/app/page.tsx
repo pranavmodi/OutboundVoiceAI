@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -31,9 +31,12 @@ export default function Dashboard() {
   const [patients, setPatients] = useState<Patient[]>([]);
   const [calls, setCalls] = useState<CallLog[]>([]);
   const [activeCall, setActiveCall] = useState<CallLog | null>(null);
+  const [isLoaded, setIsLoaded] = useState(false);
 
-  // Load initial data
+  // Load initial data - only once
   useEffect(() => {
+    if (isLoaded) return;
+
     const loadData = async () => {
       const [status, patientList, callList] = await Promise.all([
         api.getStatus(),
@@ -47,33 +50,43 @@ export default function Dashboard() {
       }
       setPatients(patientList);
       setCalls(callList);
+      setIsLoaded(true);
     };
 
     loadData();
+  }, [isLoaded, api]);
 
-    // Poll for updates every 5 seconds
+  // Poll queue state every 10 seconds
+  useEffect(() => {
     const interval = setInterval(async () => {
       const state = await api.getQueueState();
       if (state) setQueueState(state);
-    }, 5000);
+    }, 10000);
 
     return () => clearInterval(interval);
-  }, [api]);
+  }, []);
 
-  // Connect voice WebSocket when needed
+  // Store refs to always have latest functions
+  const voiceRef = useRef(voice);
+  const audioRef = useRef(audio);
+  voiceRef.current = voice;
+  audioRef.current = audio;
+
+  // Set up audio callbacks - only once
+  const audioSetupRef = useRef(false);
   useEffect(() => {
-    // Set up audio callback for received audio
+    if (audioSetupRef.current) return;
+    audioSetupRef.current = true;
+
     voice.onAudioReceived((audioData) => {
-      audio.playAudio(audioData);
+      audioRef.current.playAudio(audioData);
+    });
+
+    audio.onAudioData((data) => {
+      // Use ref to always get latest sendAudio function
+      voiceRef.current.sendAudio(data);
     });
   }, [voice, audio]);
-
-  // Set up audio recording callback
-  useEffect(() => {
-    audio.onAudioData((data) => {
-      voice.sendAudio(data);
-    });
-  }, [audio, voice]);
 
   // Handle call start
   const handleCallPatient = useCallback(async (patientId: string) => {

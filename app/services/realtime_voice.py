@@ -86,6 +86,80 @@ If asked something outside scope, say you're not able to help with that and offe
 - One question at a time
 - Allow pauses for natural speech
 - Do not interrupt
+
+---
+
+## PRECISE IMAGING COMPANY INFORMATION
+
+### Locations
+We have 3 convenient locations:
+
+1. **Downtown Los Angeles**
+   - 350 South Grand Avenue, Suite 100, Los Angeles, CA 90071
+   - Near the Pershing Square Metro station
+   - Parking available in the building garage
+
+2. **Burbank**
+   - 2500 West Olive Avenue, Suite 200, Burbank, CA 91505
+   - Free parking lot on site
+   - Near the Burbank Town Center
+
+3. **Long Beach**
+   - 100 Oceangate, Suite 400, Long Beach, CA 90802
+   - Validated parking in the building
+   - Near the Long Beach Convention Center
+
+### Office Hours
+- **Monday to Friday**: 7:00 AM to 7:00 PM
+- **Saturday**: 8:00 AM to 4:00 PM
+- **Sunday**: Closed
+- We offer early morning and evening appointments for your convenience.
+
+### Contact Information
+- **Main Phone**: 1-800-555-SCAN (1-800-555-7226)
+- **Website**: www.preciseimaging.com
+- **Patient Portal**: portal.preciseimaging.com
+- **Email**: scheduling@preciseimaging.com
+
+### What to Bring to Your MRI Appointment
+1. **Photo ID** - Driver's license or government-issued ID
+2. **Insurance card** - Both front and back
+3. **Referral or prescription** - From your doctor (if not already sent to us)
+4. **List of medications** - Including dosages
+5. **Prior imaging** - CDs or reports from previous scans if you have them
+
+### MRI Preparation Instructions
+- **Clothing**: Wear comfortable, loose-fitting clothes without metal (zippers, buttons, underwire). We provide gowns if needed.
+- **Metal**: Remove all jewelry, watches, hair clips, belts, and piercings before the scan.
+- **Eating**: You can eat normally unless your doctor gave specific instructions. For abdominal MRIs, you may need to fast for 4 hours.
+- **Arrive early**: Please arrive 15 minutes before your appointment to complete paperwork.
+- **Claustrophobia**: Let us know if you're anxious about enclosed spaces - we can discuss options.
+- **Implants**: Tell us about any metal implants, pacemakers, or medical devices.
+
+### How Long Does an MRI Take?
+- Most MRI scans take **30 to 60 minutes** depending on the body part being scanned.
+- Some specialized scans may take up to 90 minutes.
+- You'll need to lie still during the scan.
+- You can listen to music during the procedure.
+
+### Scheduling Process
+1. When transferred to scheduling, a team member will verify your insurance.
+2. They'll find an appointment time that works for you.
+3. You'll receive a confirmation text and email with appointment details.
+4. A reminder will be sent 24 hours before your appointment.
+5. You can reschedule or cancel through our patient portal or by calling us.
+
+### Insurance and Payment
+- We accept most major insurance plans including Medicare.
+- Our team will verify your coverage before your appointment.
+- For questions about coverage or costs, our scheduling team can help.
+- Payment plans are available if needed.
+
+### After the Scan
+- Results are typically sent to your doctor within 24-48 hours.
+- Your doctor will review the results and contact you.
+- You can also view results in the patient portal once released.
+- We do not provide results directly to patients - please contact your referring physician.
 """
 
 
@@ -107,6 +181,21 @@ class RealtimeVoiceService:
 
     async def connect(self, call_id: str, patient_name: str) -> bool:
         """Connect to OpenAI Realtime API and start a session."""
+        # Validate API key first
+        if not self._api_key:
+            error_msg = "OPENAI_API_KEY not set in environment"
+            print(f"[RealtimeVoice] Error: {error_msg}")
+            if self.on_error:
+                await self.on_error(error_msg)
+            return False
+
+        if not self._api_key.startswith("sk-"):
+            error_msg = f"Invalid API key format (should start with 'sk-')"
+            print(f"[RealtimeVoice] Error: {error_msg}")
+            if self.on_error:
+                await self.on_error(error_msg)
+            return False
+
         try:
             url = f"{OPENAI_REALTIME_URL}?model={OPENAI_MODEL}"
             headers = {
@@ -114,7 +203,10 @@ class RealtimeVoiceService:
                 "OpenAI-Beta": "realtime=v1",
             }
 
+            print(f"[RealtimeVoice] Connecting to {url}...")
             self._ws = await websockets.connect(url, additional_headers=headers)
+            print(f"[RealtimeVoice] WebSocket connected successfully")
+
             self._session = VoiceSession(
                 session_id="",
                 call_id=call_id,
@@ -129,9 +221,21 @@ class RealtimeVoiceService:
 
             return True
 
-        except Exception as e:
+        except websockets.exceptions.InvalidStatusCode as e:
+            error_msg = f"OpenAI rejected connection (HTTP {e.status_code})"
+            if e.status_code == 401:
+                error_msg = "Invalid OpenAI API key (401 Unauthorized)"
+            elif e.status_code == 403:
+                error_msg = "API key doesn't have access to Realtime API (403 Forbidden)"
+            print(f"[RealtimeVoice] Error: {error_msg}")
             if self.on_error:
-                await self.on_error(f"Connection failed: {str(e)}")
+                await self.on_error(error_msg)
+            return False
+        except Exception as e:
+            error_msg = f"Connection failed: {type(e).__name__}: {str(e)}"
+            print(f"[RealtimeVoice] Error: {error_msg}")
+            if self.on_error:
+                await self.on_error(error_msg)
             return False
 
     async def _configure_session(self, patient_name: str):
@@ -232,6 +336,10 @@ class RealtimeVoiceService:
             data = json.loads(message)
             msg_type = data.get("type", "")
 
+            # Log important message types
+            if msg_type not in ("response.audio.delta", "response.audio_transcript.delta"):
+                print(f"[RealtimeVoice] Received: {msg_type}")
+
             if msg_type == "session.created":
                 self._session.session_id = data.get("session", {}).get("id", "")
                 if self.on_session_created:
@@ -299,6 +407,10 @@ class RealtimeVoiceService:
             return
 
         audio_b64 = base64.b64encode(audio_data).decode("utf-8")
+        # Debug: log audio chunks being sent (first time only to avoid spam)
+        if not hasattr(self, '_audio_logged'):
+            self._audio_logged = True
+            print(f"[RealtimeVoice] Sending audio chunk: {len(audio_data)} bytes")
         await self._send({
             "type": "input_audio_buffer.append",
             "audio": audio_b64,

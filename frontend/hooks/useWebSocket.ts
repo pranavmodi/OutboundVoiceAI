@@ -234,9 +234,18 @@ export function useVoiceWS(): UseVoiceWSReturn {
     }
   }, []);
 
+  const audioSentCountRef = useRef(0);
   const sendAudio = useCallback((audioData: ArrayBuffer) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(audioData);
+      audioSentCountRef.current++;
+      if (audioSentCountRef.current === 1) {
+        console.log("[VoiceWS] Sending first audio chunk to backend:", audioData.byteLength, "bytes");
+      }
+    } else {
+      if (audioSentCountRef.current === 0) {
+        console.warn("[VoiceWS] Cannot send audio - WebSocket not open, state:", wsRef.current?.readyState);
+      }
     }
   }, []);
 
