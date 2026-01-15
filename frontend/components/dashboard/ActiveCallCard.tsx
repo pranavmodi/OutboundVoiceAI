@@ -26,6 +26,7 @@ interface ActiveCallCardProps {
   audioLevel: number;
   onEndCall: () => void;
   onToggleMic: () => void;
+  lastCallInfo?: { patientName: string; duration: number } | null;
 }
 
 export function ActiveCallCard({
@@ -36,6 +37,7 @@ export function ActiveCallCard({
   audioLevel,
   onEndCall,
   onToggleMic,
+  lastCallInfo,
 }: ActiveCallCardProps) {
   const [duration, setDuration] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -61,6 +63,73 @@ export function ActiveCallCard({
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [transcript]);
+
+  // Show last call transcript if no active call but transcript exists
+  if (!call && transcript.length > 0) {
+    return (
+      <Card className="border-muted">
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="flex items-center gap-2 text-lg">
+              <PhoneOff className="h-5 w-5 text-muted-foreground" />
+              Call Ended
+            </CardTitle>
+            {lastCallInfo && (
+              <Badge variant="outline" className="flex items-center gap-1">
+                <Clock className="h-3 w-3" />
+                {formatDuration(lastCallInfo.duration)}
+              </Badge>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {lastCallInfo && (
+            <div className="rounded-md bg-background p-3">
+              <p className="font-medium">{lastCallInfo.patientName}</p>
+              <p className="text-sm text-muted-foreground">Call completed</p>
+            </div>
+          )}
+
+          {/* Transcript from ended call */}
+          <div className="space-y-2">
+            <h4 className="text-sm font-medium">Call Transcript</h4>
+            <ScrollArea className="h-[250px] rounded-md border bg-background p-3">
+              <div ref={scrollRef} className="space-y-3">
+                {transcript.map((entry, index) => (
+                  <div
+                    key={index}
+                    className={`flex gap-2 ${
+                      entry.speaker === "ai" ? "justify-start" : "justify-end"
+                    }`}
+                  >
+                    {entry.speaker === "ai" && (
+                      <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                        <Bot className="h-3 w-3" />
+                      </div>
+                    )}
+                    <div
+                      className={`rounded-lg px-3 py-2 text-sm max-w-[80%] ${
+                        entry.speaker === "ai"
+                          ? "bg-muted"
+                          : "bg-primary text-primary-foreground"
+                      }`}
+                    >
+                      {entry.text}
+                    </div>
+                    {entry.speaker === "patient" && (
+                      <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-secondary">
+                        <User className="h-3 w-3" />
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </ScrollArea>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
 
   if (!call) {
     return (

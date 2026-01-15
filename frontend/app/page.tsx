@@ -32,6 +32,9 @@ export default function Dashboard() {
   const [calls, setCalls] = useState<CallLog[]>([]);
   const [activeCall, setActiveCall] = useState<CallLog | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
+  const [lastCallInfo, setLastCallInfo] = useState<{ patientName: string; duration: number } | null>(null);
+  const [callStartTime, setCallStartTime] = useState<number | null>(null);
+  const [callingPatientName, setCallingPatientName] = useState<string>("");
 
   // Load initial data - only once
   useEffect(() => {
@@ -90,30 +93,50 @@ export default function Dashboard() {
 
   // Handle call start
   const handleCallPatient = useCallback(async (patientId: string) => {
+    // Find patient name
+    const patient = patients.find(p => p.patient_id === patientId);
+    setCallingPatientName(patient?.name || "Patient");
+    setCallStartTime(Date.now());
+    setLastCallInfo(null); // Clear last call info when starting new call
+
     // Connect to voice WebSocket if not connected
     if (!voice.connected) {
       voice.connect();
-      // Wait for connection
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      // Wait for connection with retry
+      for (let i = 0; i < 20; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        if (voiceRef.current.connected) break;
+      }
     }
+
+    // Start recording first (so we're ready when AI responds)
+    await audio.startRecording();
+
+    // Small delay to ensure audio is flowing
+    await new Promise((resolve) => setTimeout(resolve, 200));
 
     // Start the call
     voice.startCall(patientId);
-
-    // Start recording (user speaks as patient)
-    await audio.startRecording();
-  }, [voice, audio]);
+  }, [voice, audio, patients]);
 
   // Handle call end
   const handleEndCall = useCallback(() => {
+    // Save last call info before ending
+    const duration = callStartTime ? Math.floor((Date.now() - callStartTime) / 1000) : 0;
+    setLastCallInfo({
+      patientName: callingPatientName,
+      duration,
+    });
+
     voice.endCall();
     audio.stopRecording();
     setActiveCall(null);
+    setCallStartTime(null);
 
     // Refresh data
     api.getCalls().then(setCalls);
     api.getOutboundQueue().then(setPatients);
-  }, [voice, audio, api]);
+  }, [voice, audio, api, callStartTime, callingPatientName]);
 
   // Handle mic toggle
   const handleToggleMic = useCallback(async () => {
@@ -173,22 +196,12 @@ export default function Dashboard() {
                 </p>
               </div>
             </div>
-            <div className="flex items-center gap-3">
-              {voice.connected ? (
-                <Badge variant="success" className="flex items-center gap-1">
-                  <Wifi className="h-3 w-3" />
-                  Voice Connected
-                </Badge>
-              ) : (
-                <Badge variant="outline" className="flex items-center gap-1">
-                  <WifiOff className="h-3 w-3" />
-                  Voice Disconnected
-                </Badge>
-              )}
-              <Button variant="outline" size="sm" onClick={() => voice.connect()}>
-                {voice.connected ? "Reconnect" : "Connect Voice"}
-              </Button>
-            </div>
+            {voice.isCallActive && (
+              <Badge variant="success" className="flex items-center gap-1">
+                <Wifi className="h-3 w-3" />
+                Call Active
+              </Badge>
+            )}
           </div>
         </div>
       </header>
@@ -227,11 +240,11 @@ export default function Dashboard() {
               call={voice.isCallActive ? ({
                 call_id: "active",
                 patient_id: "",
-                patient_name: patients.find(p => voice.transcript.length > 0)?.name || "Patient",
+                patient_name: callingPatientName || "Patient",
                 phone: "",
                 order_id: null,
                 priority_bucket: 0,
-                started_at: new Date().toISOString(),
+                started_at: callStartTime ? new Date(callStartTime).toISOString() : new Date().toISOString(),
                 ended_at: null,
                 duration_seconds: 0,
                 outcome: "in_progress",
@@ -250,6 +263,7 @@ export default function Dashboard() {
               audioLevel={audio.audioLevel}
               onEndCall={handleEndCall}
               onToggleMic={handleToggleMic}
+              lastCallInfo={lastCallInfo}
             />
             <CallHistoryCard calls={calls} onRefresh={handleRefreshCalls} />
           </div>
