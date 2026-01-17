@@ -2,7 +2,6 @@
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import {
   Users,
@@ -18,19 +17,9 @@ import type { QueueState } from "@/types";
 
 interface QueueStatusCardProps {
   queueState: QueueState | null;
-  onSimulateBusy: () => void;
-  onSimulateQuiet: () => void;
-  onSimulateAmiFailure: () => void;
-  onSimulateAmiRecovery: () => void;
 }
 
-export function QueueStatusCard({
-  queueState,
-  onSimulateBusy,
-  onSimulateQuiet,
-  onSimulateAmiFailure,
-  onSimulateAmiRecovery,
-}: QueueStatusCardProps) {
+export function QueueStatusCard({ queueState }: QueueStatusCardProps) {
   if (!queueState) {
     return (
       <Card>
@@ -159,30 +148,6 @@ export function QueueStatusCard({
                 </div>
               </div>
             ))}
-          </div>
-        </div>
-
-        <Separator />
-
-        {/* Simulation Controls */}
-        <div className="space-y-2">
-          <h4 className="text-sm font-medium text-muted-foreground">Simulate Scenarios</h4>
-          <div className="flex flex-wrap gap-2">
-            <Button variant="outline" size="sm" onClick={onSimulateQuiet}>
-              Quiet Queue
-            </Button>
-            <Button variant="outline" size="sm" onClick={onSimulateBusy}>
-              Busy Queue
-            </Button>
-            {queueState.ami_connected ? (
-              <Button variant="outline" size="sm" onClick={onSimulateAmiFailure}>
-                AMI Failure
-              </Button>
-            ) : (
-              <Button variant="outline" size="sm" onClick={onSimulateAmiRecovery}>
-                AMI Recovery
-              </Button>
-            )}
           </div>
         </div>
       </CardContent>

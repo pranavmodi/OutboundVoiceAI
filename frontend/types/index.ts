@@ -133,3 +133,25 @@ export interface WSError extends WSMessage {
   type: "error";
   message: string;
 }
+
+// System Settings Types
+export interface BusinessHours {
+  start_time: string;
+  end_time: string;
+  enabled: boolean;
+  timezone: string;
+}
+
+export interface QueueThresholds {
+  calls_waiting_threshold: number;
+  oldest_wait_threshold_seconds: number;
+  stable_polls_required: number;
+}
+
+export interface SystemSettings {
+  system_enabled: boolean;
+  business_hours: BusinessHours;
+  queue_thresholds: QueueThresholds;
+  can_make_calls: boolean;
+  is_within_business_hours: boolean;
+}

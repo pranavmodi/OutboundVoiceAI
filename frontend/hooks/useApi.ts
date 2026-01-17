@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useMemo } from "react";
-import type { SystemStatus, Patient, CallLog, QueueState } from "@/types";
+import type { SystemStatus, Patient, CallLog, QueueState, SystemSettings, BusinessHours, QueueThresholds } from "@/types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -142,6 +142,73 @@ export function useApi() {
     }
   }, []);
 
+  // Settings API methods
+  const getSettings = useCallback(async (): Promise<SystemSettings | null> => {
+    try {
+      return await fetchApi<SystemSettings>("/api/settings");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
+  const updateSettings = useCallback(async (settings: Omit<SystemSettings, 'can_make_calls' | 'is_within_business_hours'>): Promise<SystemSettings | null> => {
+    try {
+      return await fetchApi<SystemSettings>("/api/settings", {
+        method: "PUT",
+        body: JSON.stringify(settings),
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
+  const setSystemEnabled = useCallback(async (enabled: boolean): Promise<SystemSettings | null> => {
+    try {
+      return await fetchApi<SystemSettings>("/api/settings/system-enabled", {
+        method: "PUT",
+        body: JSON.stringify({ enabled }),
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
+  const updateBusinessHours = useCallback(async (businessHours: BusinessHours): Promise<SystemSettings | null> => {
+    try {
+      return await fetchApi<SystemSettings>("/api/settings/business-hours", {
+        method: "PUT",
+        body: JSON.stringify(businessHours),
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
+  const updateQueueThresholds = useCallback(async (thresholds: QueueThresholds): Promise<SystemSettings | null> => {
+    try {
+      return await fetchApi<SystemSettings>("/api/settings/queue-thresholds", {
+        method: "PUT",
+        body: JSON.stringify(thresholds),
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
+  const getTimezones = useCallback(async (): Promise<string[]> => {
+    try {
+      return await fetchApi<string[]>("/api/settings/timezones");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return [];
+    }
+  }, []);
+
   return useMemo(() => ({
     loading,
     error,
@@ -156,6 +223,12 @@ export function useApi() {
     simulateAmiFailure,
     simulateAmiRecovery,
     resetPatients,
+    getSettings,
+    updateSettings,
+    setSystemEnabled,
+    updateBusinessHours,
+    updateQueueThresholds,
+    getTimezones,
   }), [
     loading,
     error,
@@ -170,5 +243,11 @@ export function useApi() {
     simulateAmiFailure,
     simulateAmiRecovery,
     resetPatients,
+    getSettings,
+    updateSettings,
+    setSystemEnabled,
+    updateBusinessHours,
+    updateQueueThresholds,
+    getTimezones,
   ]);
 }

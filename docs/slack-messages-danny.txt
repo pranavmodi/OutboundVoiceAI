@@ -153,5 +153,11 @@ Open full table
 
 Aman Soni: Hello @Danny Rackow ,
 Could you please clarify which patient list Parnav requires for calls? For example, should the list include patients with a Scheduled status only, or any other specific statuses as well?
-Additionally, if a patient has already been contacted but their status remains unchanged, should that patient reappear in the call list? If so, under what conditions?Danny Rackow: It should use the list from the ordered scheduler page.  Call the ones that show at the top firstDanny Rackow: then when contact is made. The AI agent will mark one of the four actions from the ordered scheduler page just like a human would so it would pull it from the list and put to the bottom of the listNeeraj Jha: Okay, Thanks for the clarification.
+Additionally, if a patient has already been contacted but their status remains unchanged, should that patient reappear in the call list? If so, under what conditions?
+
+Danny Rackow: It should use the list from the ordered scheduler page.  Call the ones that show at the top first
+
+Danny Rackow: then when contact is made. The AI agent will mark one of the four actions from the ordered scheduler page just like a human would so it would pull it from the list and put to the bottom of the list
+
+Neeraj Jha: Okay, Thanks for the clarification.
 Will share the ordered scheduler list with Pranav

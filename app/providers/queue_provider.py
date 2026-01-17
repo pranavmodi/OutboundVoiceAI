@@ -7,11 +7,6 @@ from app.models import QueueInfo, GlobalQueueState
 class MockQueueProvider:
     """Simulates FreePBX/Asterisk queue monitoring via AMI."""
 
-    # Gating thresholds
-    CALLS_WAITING_THRESHOLD = 1
-    OLDEST_WAIT_THRESHOLD_SECONDS = 30
-    STABLE_POLLS_REQUIRED = 3
-
     def __init__(self):
         self._state = GlobalQueueState(
             queues=[
@@ -29,11 +24,18 @@ class MockQueueProvider:
 
     def poll(self) -> GlobalQueueState:
         """Poll queues and update state (called every 10 seconds)."""
+        # Import here to avoid circular imports
+        from app.providers.settings_provider import get_settings_provider
+
         if not self._ami_connected:
             self._state.ami_connected = False
             self._state.outbound_allowed = False
             self._stable_polls = 0
             return self._state
+
+        # Get dynamic thresholds from settings
+        settings_provider = get_settings_provider()
+        thresholds = settings_provider.get_thresholds()
 
         # Aggregate metrics
         self._state.global_calls_waiting = sum(q.calls_waiting for q in self._state.queues)
@@ -45,11 +47,11 @@ class MockQueueProvider:
         self._state.last_poll_time = datetime.now()
         self._state.ami_connected = True
 
-        # Check gating conditions
+        # Check gating conditions using dynamic thresholds
         conditions_met = (
             self._state.global_agents_available >= 1
-            and self._state.global_calls_waiting <= self.CALLS_WAITING_THRESHOLD
-            and self._state.global_oldest_wait_seconds <= self.OLDEST_WAIT_THRESHOLD_SECONDS
+            and self._state.global_calls_waiting <= thresholds.calls_waiting_threshold
+            and self._state.global_oldest_wait_seconds <= thresholds.oldest_wait_threshold_seconds
         )
 
         if conditions_met:
@@ -58,7 +60,7 @@ class MockQueueProvider:
             self._stable_polls = 0
 
         self._state.stable_polls_count = self._stable_polls
-        self._state.outbound_allowed = self._stable_polls >= self.STABLE_POLLS_REQUIRED
+        self._state.outbound_allowed = self._stable_polls >= thresholds.stable_polls_required
 
         return self._state
 
@@ -95,12 +97,17 @@ class MockQueueProvider:
 
     def simulate_quiet_queue(self):
         """Simulate a quiet queue scenario (outbound allowed)."""
+        # Import here to avoid circular imports
+        from app.providers.settings_provider import get_settings_provider
+
         for queue in self._state.queues:
             queue.calls_waiting = 0
             queue.oldest_wait_seconds = 0
             queue.agents_available = 2
-        # Force stable polls to allow outbound
-        self._stable_polls = self.STABLE_POLLS_REQUIRED
+        # Force stable polls to allow outbound using dynamic threshold
+        settings_provider = get_settings_provider()
+        thresholds = settings_provider.get_thresholds()
+        self._stable_polls = thresholds.stable_polls_required
         self.poll()
 
     def simulate_ami_failure(self):

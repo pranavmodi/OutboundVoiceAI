@@ -11,7 +11,7 @@ from twilio.base.exceptions import TwilioRestException
 from .tts import generate_tts_mp3, generate_ai_audio, generate_ai_response_audio
 from .llm import generate_ai_reply
 from .twilio_call import place_outbound_call
-from .api import dashboard_router, websocket_router
+from .api import dashboard_router, websocket_router, settings_router
 
 
 app = FastAPI(title="AI Outbound Voice Orchestrator", version="0.2.0")
@@ -36,6 +36,7 @@ app.add_middleware(
 # Include API routers
 app.include_router(dashboard_router)
 app.include_router(websocket_router)
+app.include_router(settings_router)
 
 # Legacy static (kept for compatibility)
 STATIC_DIR = Path("static")

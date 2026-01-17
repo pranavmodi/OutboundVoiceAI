@@ -2,19 +2,19 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   QueueStatusCard,
   PatientQueueCard,
   ActiveCallCard,
   CallHistoryCard,
 } from "@/components/dashboard";
+import { SimulationConsole, OperatorConsole } from "@/components/console";
 import { useApi } from "@/hooks/useApi";
 import { useVoiceWS } from "@/hooks/useWebSocket";
 import { useAudio } from "@/hooks/useAudio";
-import { Phone, Wifi, WifiOff } from "lucide-react";
-import type { Patient, CallLog, QueueState } from "@/types";
+import { Phone, Wifi, LayoutDashboard, Terminal, Settings } from "lucide-react";
+import type { Patient, CallLog, QueueState, SystemSettings } from "@/types";
 
 export default function Dashboard() {
   // API hooks
@@ -36,15 +36,21 @@ export default function Dashboard() {
   const [callStartTime, setCallStartTime] = useState<number | null>(null);
   const [callingPatientName, setCallingPatientName] = useState<string>("");
 
+  // Settings state
+  const [settings, setSettings] = useState<SystemSettings | null>(null);
+  const [timezones, setTimezones] = useState<string[]>([]);
+
   // Load initial data - only once
   useEffect(() => {
     if (isLoaded) return;
 
     const loadData = async () => {
-      const [status, patientList, callList] = await Promise.all([
+      const [status, patientList, callList, settingsData, tzList] = await Promise.all([
         api.getStatus(),
         api.getOutboundQueue(),
         api.getCalls(),
+        api.getSettings(),
+        api.getTimezones(),
       ]);
 
       if (status) {
@@ -53,6 +59,8 @@ export default function Dashboard() {
       }
       setPatients(patientList);
       setCalls(callList);
+      setSettings(settingsData);
+      setTimezones(tzList);
       setIsLoaded(true);
     };
 
@@ -168,6 +176,28 @@ export default function Dashboard() {
     if (state) setQueueState(state);
   }, [api]);
 
+  const handleResetPatients = useCallback(async () => {
+    await api.resetPatients();
+    const patientList = await api.getOutboundQueue();
+    setPatients(patientList);
+  }, [api]);
+
+  // Settings handlers
+  const handleSetSystemEnabled = useCallback(async (enabled: boolean) => {
+    const newSettings = await api.setSystemEnabled(enabled);
+    if (newSettings) setSettings(newSettings);
+  }, [api]);
+
+  const handleUpdateBusinessHours = useCallback(async (businessHours: SystemSettings["business_hours"]) => {
+    const newSettings = await api.updateBusinessHours(businessHours);
+    if (newSettings) setSettings(newSettings);
+  }, [api]);
+
+  const handleUpdateQueueThresholds = useCallback(async (thresholds: SystemSettings["queue_thresholds"]) => {
+    const newSettings = await api.updateQueueThresholds(thresholds);
+    if (newSettings) setSettings(newSettings);
+  }, [api]);
+
   // Refresh handlers
   const handleRefreshPatients = useCallback(async () => {
     const patientList = await api.getOutboundQueue();
@@ -215,59 +245,97 @@ export default function Dashboard() {
           </div>
         )}
 
-        <div className="grid gap-6 lg:grid-cols-2">
-          {/* Left Column */}
-          <div className="space-y-6">
-            <QueueStatusCard
+        <Tabs defaultValue="dashboard" className="space-y-6">
+          <TabsList className="grid w-full grid-cols-3 lg:w-auto lg:inline-flex">
+            <TabsTrigger value="dashboard" className="flex items-center gap-2">
+              <LayoutDashboard className="h-4 w-4" />
+              Dashboard
+            </TabsTrigger>
+            <TabsTrigger value="simulation" className="flex items-center gap-2">
+              <Terminal className="h-4 w-4" />
+              Simulation
+            </TabsTrigger>
+            <TabsTrigger value="operator" className="flex items-center gap-2">
+              <Settings className="h-4 w-4" />
+              Operator
+            </TabsTrigger>
+          </TabsList>
+
+          {/* Dashboard Tab */}
+          <TabsContent value="dashboard" className="space-y-6">
+            <div className="grid gap-6 lg:grid-cols-2">
+              {/* Left Column */}
+              <div className="space-y-6">
+                <QueueStatusCard queueState={queueState} />
+                <PatientQueueCard
+                  patients={patients}
+                  onCallPatient={handleCallPatient}
+                  onRefresh={handleRefreshPatients}
+                  isCallActive={voice.isCallActive}
+                  outboundAllowed={queueState?.outbound_allowed ?? false}
+                />
+              </div>
+
+              {/* Right Column */}
+              <div className="space-y-6">
+                <ActiveCallCard
+                  call={voice.isCallActive ? ({
+                    call_id: "active",
+                    patient_id: "",
+                    patient_name: callingPatientName || "Patient",
+                    phone: "",
+                    order_id: null,
+                    priority_bucket: 0,
+                    started_at: callStartTime ? new Date(callStartTime).toISOString() : new Date().toISOString(),
+                    ended_at: null,
+                    duration_seconds: 0,
+                    outcome: "in_progress",
+                    transfer_attempted: false,
+                    transfer_success: false,
+                    voicemail_left: false,
+                    sms_sent: false,
+                    queue_snapshot: null,
+                    transcript: [],
+                    error_code: null,
+                    error_message: null,
+                  } as CallLog) : null}
+                  status={voice.callStatus}
+                  transcript={voice.transcript}
+                  isRecording={audio.isRecording}
+                  audioLevel={audio.audioLevel}
+                  onEndCall={handleEndCall}
+                  onToggleMic={handleToggleMic}
+                  lastCallInfo={lastCallInfo}
+                />
+                <CallHistoryCard calls={calls} onRefresh={handleRefreshCalls} />
+              </div>
+            </div>
+          </TabsContent>
+
+          {/* Simulation Tab */}
+          <TabsContent value="simulation">
+            <SimulationConsole
               queueState={queueState}
+              patients={patients}
               onSimulateBusy={handleSimulateBusy}
               onSimulateQuiet={handleSimulateQuiet}
               onSimulateAmiFailure={handleSimulateAmiFailure}
               onSimulateAmiRecovery={handleSimulateAmiRecovery}
+              onResetPatients={handleResetPatients}
             />
-            <PatientQueueCard
-              patients={patients}
-              onCallPatient={handleCallPatient}
-              onRefresh={handleRefreshPatients}
-              isCallActive={voice.isCallActive}
-              outboundAllowed={queueState?.outbound_allowed ?? false}
-            />
-          </div>
+          </TabsContent>
 
-          {/* Right Column */}
-          <div className="space-y-6">
-            <ActiveCallCard
-              call={voice.isCallActive ? ({
-                call_id: "active",
-                patient_id: "",
-                patient_name: callingPatientName || "Patient",
-                phone: "",
-                order_id: null,
-                priority_bucket: 0,
-                started_at: callStartTime ? new Date(callStartTime).toISOString() : new Date().toISOString(),
-                ended_at: null,
-                duration_seconds: 0,
-                outcome: "in_progress",
-                transfer_attempted: false,
-                transfer_success: false,
-                voicemail_left: false,
-                sms_sent: false,
-                queue_snapshot: null,
-                transcript: [],
-                error_code: null,
-                error_message: null,
-              } as CallLog) : null}
-              status={voice.callStatus}
-              transcript={voice.transcript}
-              isRecording={audio.isRecording}
-              audioLevel={audio.audioLevel}
-              onEndCall={handleEndCall}
-              onToggleMic={handleToggleMic}
-              lastCallInfo={lastCallInfo}
+          {/* Operator Tab */}
+          <TabsContent value="operator">
+            <OperatorConsole
+              settings={settings}
+              timezones={timezones}
+              onSetSystemEnabled={handleSetSystemEnabled}
+              onUpdateBusinessHours={handleUpdateBusinessHours}
+              onUpdateQueueThresholds={handleUpdateQueueThresholds}
             />
-            <CallHistoryCard calls={calls} onRefresh={handleRefreshCalls} />
-          </div>
-        </div>
+          </TabsContent>
+        </Tabs>
       </main>
 
       {/* Footer */}
