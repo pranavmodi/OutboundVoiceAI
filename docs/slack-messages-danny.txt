@@ -146,3 +146,12 @@ CallID	PatientID	PhoneNumber	ReferrerID	PhoneDirection	StartDate	UserId	EndDate	
 135523	PRE1141441	5624474049	0	outbound	2025-12-30 05:29:23.000	3697	2025-12-30 05:29:55.000	ERICK TAFOLLA		0	1767144610.6063	/2025/12/30/out-5624474049-185-20251230-173010-1767144610.6063.WAV	0	0	0
 135522	PRE1141441	5624474049	0	outbound	2025-12-30 05:27:01.000	3697	2025-12-30 05:28:04.000	ERICK TAFOLLA		0	1767144460.6056	/2025/12/30/out-5624474049-185-20251230-172740-1767144460.6056.WAV	0	0	0
 Open full table
+
+
+
+
+
+Aman Soni: Hello @Danny Rackow ,
+Could you please clarify which patient list Parnav requires for calls? For example, should the list include patients with a Scheduled status only, or any other specific statuses as well?
+Additionally, if a patient has already been contacted but their status remains unchanged, should that patient reappear in the call list? If so, under what conditions?Danny Rackow: It should use the list from the ordered scheduler page.  Call the ones that show at the top firstDanny Rackow: then when contact is made. The AI agent will mark one of the four actions from the ordered scheduler page just like a human would so it would pull it from the list and put to the bottom of the listNeeraj Jha: Okay, Thanks for the clarification.
+Will share the ordered scheduler list with Pranav
