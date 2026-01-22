@@ -99,6 +99,8 @@ export default function Dashboard() {
     });
   }, [voice, audio]);
 
+  
+
   // Handle call start
   const handleCallPatient = useCallback(async (patientId: string) => {
     // Find patient name
@@ -126,6 +128,56 @@ export default function Dashboard() {
     // Start the call
     voice.startCall(patientId);
   }, [voice, audio, patients]);
+
+  // Chain next call automatically when the current call ends
+  const prevActiveRef = useRef(false);
+  const chainingRef = useRef(false);
+  useEffect(() => {
+    const wasActive = prevActiveRef.current;
+    const nowActive = voice.isCallActive;
+    prevActiveRef.current = nowActive;
+    if (wasActive && !nowActive) {
+      // Call ended -> stop recording and consider dialing next patient
+      audio.stopRecording();
+      if (chainingRef.current) return;
+      chainingRef.current = true;
+      (async () => {
+        // Refresh queue, status, and settings before deciding
+        const [queue, status, newSettings] = await Promise.all([
+          api.getOutboundQueue(),
+          api.getStatus(),
+          api.getSettings(),
+        ]);
+        if (queue) setPatients(queue);
+        if (status) setQueueState(status.queue_state);
+        if (newSettings) setSettings(newSettings);
+
+        const outboundAllowed =
+          (status?.queue_state?.outbound_allowed) ?? (queueState?.outbound_allowed ?? false);
+        const canMakeCalls =
+          (newSettings?.can_make_calls) ?? (settings?.can_make_calls ?? true);
+
+        if (canMakeCalls && outboundAllowed && (queue?.length ?? 0) > 0) {
+          // Short pause between calls
+          await new Promise((r) => setTimeout(r, 300));
+          handleCallPatient(queue![0].patient_id);
+        }
+        chainingRef.current = false;
+      })();
+    }
+  }, [voice.isCallActive, api, audio, handleCallPatient, queueState, settings]);
+
+  // Auto-start first call on load if allowed
+  const autoCallRef = useRef(false);
+  useEffect(() => {
+    if (!isLoaded || autoCallRef.current) return;
+    const outboundAllowed = queueState?.outbound_allowed ?? false;
+    if (settings?.can_make_calls && outboundAllowed && patients.length > 0) {
+      autoCallRef.current = true;
+      // Start call with the top-priority patient
+      handleCallPatient(patients[0].patient_id);
+    }
+  }, [isLoaded, settings, queueState, patients, handleCallPatient]);
 
   // Handle call end
   const handleEndCall = useCallback(() => {

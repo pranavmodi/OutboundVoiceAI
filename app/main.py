@@ -13,25 +13,43 @@ from .llm import generate_ai_reply
 from .twilio_call import place_outbound_call
 from .api import dashboard_router, websocket_router, settings_router
 
-
 app = FastAPI(title="AI Outbound Voice Orchestrator", version="0.2.0")
 
 # CORS middleware for frontend
-# Configure allowed origins via CORS_ORIGINS env var (comma-separated) or use defaults
+# - Configure CORS_ORIGINS env var (comma-separated) to specify explicit origins
+# - Optionally configure CORS_ORIGIN_REGEX to allow a regex (e.g., local LAN IPs)
 _default_origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
 _cors_origins = os.getenv("CORS_ORIGINS")
+_origin_regex_env = os.getenv("CORS_ORIGIN_REGEX")
 if _cors_origins:
-    _allowed_origins = [o.strip() for o in _cors_origins.split(",")]
+    _allowed_origins = [o.strip() for o in _cors_origins.split(",") if o.strip()]
 else:
     _allowed_origins = _default_origins
+_default_origin_regex = r"https?://(localhost|127\.0\.0\.1|0\.0\.0\.0|192\.168\.\d{1,3}\.\d{1,3})(:\d+)?$"
+_allow_origin_regex = _origin_regex_env.strip() if _origin_regex_env else _default_origin_regex
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
+    allow_origin_regex=_allow_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Fallback OPTIONS handler to ensure permissive preflight responses
+@app.options("/{rest_of_path:path}")
+def options_fallback(rest_of_path: str, request: Request):
+    origin = request.headers.get("origin")
+    acr_headers = request.headers.get("access-control-request-headers")
+    response = Response(status_code=204)
+    if origin:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Vary"] = "Origin"
+    response.headers["Access-Control-Allow-Methods"] = "*"
+    response.headers["Access-Control-Allow-Headers"] = acr_headers or "*"
+    response.headers["Access-Control-Max-Age"] = "600"
+    return response
 
 # Include API routers
 app.include_router(dashboard_router)
@@ -51,7 +69,6 @@ app.mount("/audio", StaticFiles(directory=str(AUDIO_DIR)), name="audio")
 @app.get("/health", response_class=PlainTextResponse)
 def health() -> str:
     return "ok"
-
 
 @app.post("/call")
 @app.get("/call")

@@ -204,7 +204,8 @@ class RealtimeVoiceService:
             }
 
             print(f"[RealtimeVoice] Connecting to {url}...")
-            self._ws = await websockets.connect(url, additional_headers=headers)
+            # websockets.connect expects 'extra_headers' (not 'additional_headers')
+            self._ws = await websockets.connect(url, extra_headers=headers)
             print(f"[RealtimeVoice] WebSocket connected successfully")
 
             self._session = VoiceSession(
