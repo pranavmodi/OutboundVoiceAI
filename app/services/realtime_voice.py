@@ -166,10 +166,18 @@ We have 3 convenient locations:
 class RealtimeVoiceService:
     """Manages OpenAI Realtime API connections for voice calls."""
 
-    def __init__(self):
+    def __init__(self, audio_format: str = "pcm16"):
+        """Initialize voice service.
+
+        Args:
+            audio_format: Audio format for OpenAI Realtime API.
+                          "pcm16" for browser WebSocket (24kHz 16-bit PCM).
+                          "g711_ulaw" for Twilio media streams (8kHz mulaw).
+        """
         self._ws = None  # WebSocket connection
         self._session: Optional[VoiceSession] = None
         self._api_key = os.getenv("OPENAI_API_KEY", "")
+        self._audio_format = audio_format
 
         # Callbacks
         self.on_transcript: Optional[Callable[[str, str], Any]] = None  # (speaker, text)
@@ -247,8 +255,8 @@ class RealtimeVoiceService:
                 "modalities": ["text", "audio"],
                 "instructions": SYSTEM_INSTRUCTIONS.replace("{patient_name}", patient_name),
                 "voice": "alloy",
-                "input_audio_format": "pcm16",
-                "output_audio_format": "pcm16",
+                "input_audio_format": self._audio_format,
+                "output_audio_format": self._audio_format,
                 "input_audio_transcription": {
                     "model": "whisper-1",
                 },

@@ -2,6 +2,7 @@
 import asyncio
 import json
 import base64
+import logging
 from typing import Set
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -9,6 +10,8 @@ from app.services.call_orchestrator import get_orchestrator
 from app.services.dispatcher import get_dispatcher
 from app.providers import get_queue_provider, get_call_log_provider
 from app.models import CallOutcome
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -163,8 +166,9 @@ async def voice_websocket(websocket: WebSocket):
 
                 if msg_type == "start_call":
                     patient_id = data.get("patient_id")
+                    call_mode = data.get("call_mode", "web")
                     if patient_id:
-                        await orchestrator.start_call(patient_id)
+                        await orchestrator.start_call(patient_id, call_mode=call_mode)
 
                 elif msg_type == "end_call":
                     outcome_str = data.get("outcome", "completed")
@@ -201,3 +205,29 @@ async def voice_websocket(websocket: WebSocket):
         # End any active call
         if orchestrator.is_call_active:
             await orchestrator.end_call(CallOutcome.FAILED)
+
+
+@router.websocket("/ws/twilio-media/{stream_id}")
+async def twilio_media_websocket(websocket: WebSocket, stream_id: str):
+    """WebSocket endpoint for Twilio media streams.
+
+    Twilio connects here after our TwiML <Connect><Stream> instruction.
+    We bridge the audio to/from the OpenAI RealtimeVoiceService.
+    """
+    from app.services.twilio_voice_service import pop_bridge
+
+    await websocket.accept()
+    logger.info(f"Twilio media stream connected: stream_id={stream_id}")
+
+    bridge = pop_bridge(stream_id)
+    if not bridge:
+        logger.error(f"No pending bridge for stream_id={stream_id}")
+        await websocket.close(code=4000, reason="No pending bridge")
+        return
+
+    try:
+        await bridge.handle_twilio_ws(websocket)
+    except WebSocketDisconnect:
+        logger.info(f"Twilio media stream disconnected: stream_id={stream_id}")
+    except Exception as e:
+        logger.error(f"Twilio media stream error: {e}")

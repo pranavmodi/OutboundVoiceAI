@@ -1,6 +1,7 @@
 """REST API endpoints for dashboard."""
 import os
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel
 from typing import Optional
 
@@ -242,6 +243,29 @@ async def apply_simulation(request: SimulationApplyRequest):
         "patient_count": len(patient_provider.get_all_patients()),
         "dispatcher_status": dispatcher.get_status(),
     }
+
+
+@router.post("/twilio/twiml/{stream_id}")
+@router.get("/twilio/twiml/{stream_id}")
+async def twilio_twiml(stream_id: str):
+    """Return TwiML that connects Twilio to our media stream WebSocket."""
+    # Build the WebSocket URL for Twilio to connect to
+    public_url = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+    if not public_url:
+        public_url = os.getenv("NEXT_PUBLIC_API_URL", "http://localhost:8000").rstrip("/")
+
+    # Convert http(s) to ws(s)
+    ws_url = public_url.replace("https://", "wss://").replace("http://", "ws://")
+    stream_url = f"{ws_url}/ws/twilio-media/{stream_id}"
+
+    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Connect>
+        <Stream url="{stream_url}" />
+    </Connect>
+</Response>"""
+
+    return Response(content=twiml, media_type="application/xml")
 
 
 @router.get("/config/check")

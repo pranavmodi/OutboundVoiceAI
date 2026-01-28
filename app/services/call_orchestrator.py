@@ -1,11 +1,15 @@
 """Call orchestrator service managing the call lifecycle."""
 import asyncio
+import logging
+import os
 from typing import Optional, Callable, Any
 from datetime import datetime
 
 from app.models import CallLog, CallOutcome, Patient
 from app.providers import get_queue_provider, get_patient_provider, get_call_log_provider
 from app.services.realtime_voice import RealtimeVoiceService
+
+logger = logging.getLogger(__name__)
 
 
 class CallOrchestrator:
@@ -15,6 +19,8 @@ class CallOrchestrator:
         self._voice_service: Optional[RealtimeVoiceService] = None
         self._current_call: Optional[CallLog] = None
         self._current_patient: Optional[Patient] = None
+        self._twilio_bridge = None  # TwilioMediaBridge when in twilio mode
+        self._call_mode: str = "web"  # "web" or "twilio"
 
         # Callbacks for UI updates
         self.on_call_started: Optional[Callable[[CallLog], Any]] = None
@@ -24,7 +30,7 @@ class CallOrchestrator:
         self.on_status_update: Optional[Callable[[str], Any]] = None
         self.on_error: Optional[Callable[[str], Any]] = None
 
-    async def start_call(self, patient_id: str) -> Optional[CallLog]:
+    async def start_call(self, patient_id: str, call_mode: str = "web") -> Optional[CallLog]:
         """Start an outbound call to a patient."""
         # Check if call already in progress
         call_log_provider = get_call_log_provider()
@@ -57,12 +63,17 @@ class CallOrchestrator:
 
         self._current_call = call
         self._current_patient = patient
+        self._call_mode = call_mode
 
         if self.on_status_update:
-            await self.on_status_update("Connecting...")
+            mode_label = "Twilio" if call_mode == "twilio" else "Web"
+            await self.on_status_update(f"Connecting ({mode_label})...")
+
+        # Choose audio format based on mode
+        audio_format = "g711_ulaw" if call_mode == "twilio" else "pcm16"
 
         # Initialize voice service
-        self._voice_service = RealtimeVoiceService()
+        self._voice_service = RealtimeVoiceService(audio_format=audio_format)
         self._voice_service.on_transcript = self._handle_transcript
         self._voice_service.on_audio = self._handle_audio
         self._voice_service.on_function_call = self._handle_function_call
@@ -73,19 +84,57 @@ class CallOrchestrator:
         success = await self._voice_service.connect(call.call_id, patient.name)
         if not success:
             call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
-            # Note: The actual error was already sent via on_error callback from voice service
             self._voice_service = None
             self._current_call = None
             self._current_patient = None
             return None
 
-        if self.on_status_update:
-            await self.on_status_update("Connected - AI Speaking")
+        # In Twilio mode, place the actual phone call and set up media bridge
+        if call_mode == "twilio":
+            try:
+                from app.services.twilio_voice_service import (
+                    TwilioMediaBridge,
+                    place_twilio_call,
+                    generate_stream_id,
+                    register_bridge,
+                )
+
+                stream_id = generate_stream_id()
+                bridge = TwilioMediaBridge(self._voice_service)
+                register_bridge(stream_id, bridge)
+                self._twilio_bridge = bridge
+
+                # Build TwiML URL — the backend serves the TwiML
+                backend_host = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+                if not backend_host:
+                    # Fallback to CORS origin or localhost
+                    backend_host = os.getenv("NEXT_PUBLIC_API_URL", "http://localhost:8000").rstrip("/")
+                twiml_url = f"{backend_host}/api/twilio/twiml/{stream_id}"
+
+                if self.on_status_update:
+                    await self.on_status_update(f"Calling {patient.phone} via Twilio...")
+
+                place_twilio_call(to_number=patient.phone, twiml_url=twiml_url)
+
+            except Exception as e:
+                logger.error(f"Failed to place Twilio call: {e}")
+                if self.on_error:
+                    await self.on_error(f"Twilio call failed: {str(e)}")
+                call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
+                await self._voice_service.disconnect()
+                self._voice_service = None
+                self._current_call = None
+                self._current_patient = None
+                self._twilio_bridge = None
+                return None
+        else:
+            if self.on_status_update:
+                await self.on_status_update("Connected - AI Speaking")
 
         if self.on_call_started:
             await self.on_call_started(call)
 
-        # Start the conversation
+        # Start the conversation (AI greeting)
         await self._voice_service.start_conversation()
 
         return call
@@ -111,6 +160,8 @@ class CallOrchestrator:
             await self._voice_service.disconnect()
             self._voice_service = None
 
+        self._twilio_bridge = None
+
         if self.on_call_ended:
             await self.on_call_ended(self._current_call)
 
@@ -119,6 +170,7 @@ class CallOrchestrator:
 
         self._current_call = None
         self._current_patient = None
+        self._call_mode = "web"
 
     async def send_audio(self, audio_data: bytes):
         """Send audio from the patient (browser) to OpenAI."""

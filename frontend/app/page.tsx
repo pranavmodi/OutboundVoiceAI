@@ -44,6 +44,9 @@ export default function Dashboard() {
   const [settings, setSettings] = useState<SystemSettings | null>(null);
   const [timezones, setTimezones] = useState<string[]>([]);
 
+  // Call mode: "web" (browser audio) or "twilio" (real phone call)
+  const [callMode, setCallMode] = useState<string>("web");
+
   // Load initial data - only once
   useEffect(() => {
     if (isLoaded) return;
@@ -118,15 +121,15 @@ export default function Dashboard() {
       }
     }
 
-    // Start recording first (so we're ready when AI responds)
-    await audio.startRecording();
+    // In web mode, start recording (browser audio); in twilio mode, audio goes through the phone
+    if (callMode === "web") {
+      await audio.startRecording();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
 
-    // Small delay to ensure audio is flowing
-    await new Promise((resolve) => setTimeout(resolve, 200));
-
-    // Start the call
-    voice.startCall(patientId);
-  }, [voice, audio, patients]);
+    // Start the call with mode
+    voice.startCall(patientId, callMode);
+  }, [voice, audio, patients, callMode]);
 
   // Stop recording when call ends
   const prevActiveRef = useRef(false);
@@ -328,6 +331,8 @@ export default function Dashboard() {
           <TabsContent value="simulation">
             <SimulationConsole
               onApplySimulation={handleApplySimulation}
+              callMode={callMode}
+              onCallModeChange={setCallMode}
             />
           </TabsContent>
 
