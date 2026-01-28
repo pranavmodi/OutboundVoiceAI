@@ -59,30 +59,124 @@ interface SimulationConfig {
   dispatcher: DispatcherSettings;
 }
 
-// ---------- Defaults ----------
+interface Scenario {
+  id: string;
+  label: string;
+  description: string;
+  amiConnected: boolean;
+  queues: QueueRow[];
+  patients: PatientRow[];
+  dispatcher: DispatcherSettings;
+}
 
-const DEFAULT_QUEUES: QueueRow[] = [
-  { queue_name: "scheduling_en", calls_waiting: 0, oldest_wait_seconds: 0, agents_available: 2, agents_logged_in: 3 },
-  { queue_name: "scheduling_es", calls_waiting: 0, oldest_wait_seconds: 0, agents_available: 1, agents_logged_in: 1 },
-  { queue_name: "intake", calls_waiting: 0, oldest_wait_seconds: 0, agents_available: 1, agents_logged_in: 2 },
+// ---------- Scenarios ----------
+
+const SCENARIOS: Scenario[] = [
+  {
+    id: "default",
+    label: "Default (Full Queue)",
+    description: "3 queues with agents available, 7 patients across all priority buckets. Standard dispatcher settings.",
+    amiConnected: true,
+    queues: [
+      { queue_name: "scheduling_en", calls_waiting: 0, oldest_wait_seconds: 0, agents_available: 2, agents_logged_in: 3 },
+      { queue_name: "scheduling_es", calls_waiting: 0, oldest_wait_seconds: 0, agents_available: 1, agents_logged_in: 1 },
+      { queue_name: "intake", calls_waiting: 0, oldest_wait_seconds: 0, agents_available: 1, agents_logged_in: 2 },
+    ],
+    patients: [
+      { name: "John Smith", phone: "555-0101", language: "en", has_abandoned_before: true, has_called_in_before: false, ai_called_before: false, attempt_count: 0 },
+      { name: "Maria Garcia", phone: "555-0102", language: "es", has_abandoned_before: true, has_called_in_before: false, ai_called_before: false, attempt_count: 0 },
+      { name: "Robert Johnson", phone: "555-0103", language: "en", has_abandoned_before: true, has_called_in_before: false, ai_called_before: true, attempt_count: 1 },
+      { name: "Emily Davis", phone: "555-0104", language: "en", has_abandoned_before: false, has_called_in_before: true, ai_called_before: false, attempt_count: 0 },
+      { name: "Michael Wilson", phone: "555-0105", language: "en", has_abandoned_before: false, has_called_in_before: false, ai_called_before: false, attempt_count: 0 },
+      { name: "Sarah Brown", phone: "555-0106", language: "en", has_abandoned_before: false, has_called_in_before: false, ai_called_before: false, attempt_count: 0 },
+      { name: "Wei Zhang", phone: "555-0107", language: "zh", has_abandoned_before: false, has_called_in_before: true, ai_called_before: false, attempt_count: 0 },
+    ],
+    dispatcher: { poll_interval: 10, dispatch_timeout: 30, max_attempts: 3, min_hours_between: 6 },
+  },
+  {
+    id: "single_patient_ready",
+    label: "Single Patient Ready",
+    description: "One patient waiting, one agent available. Simplest scenario to trigger a single outbound call immediately.",
+    amiConnected: true,
+    queues: [
+      { queue_name: "scheduling_en", calls_waiting: 0, oldest_wait_seconds: 0, agents_available: 1, agents_logged_in: 1 },
+    ],
+    patients: [
+      { name: "Alice Taylor", phone: "555-0201", language: "en", has_abandoned_before: true, has_called_in_before: false, ai_called_before: false, attempt_count: 0 },
+    ],
+    dispatcher: { poll_interval: 5, dispatch_timeout: 30, max_attempts: 3, min_hours_between: 6 },
+  },
+  {
+    id: "busy_queues",
+    label: "Busy Queues (Blocked)",
+    description: "All queues are overloaded with calls waiting and no agents free. Outbound should be blocked by gating conditions.",
+    amiConnected: true,
+    queues: [
+      { queue_name: "scheduling_en", calls_waiting: 5, oldest_wait_seconds: 120, agents_available: 0, agents_logged_in: 3 },
+      { queue_name: "scheduling_es", calls_waiting: 3, oldest_wait_seconds: 90, agents_available: 0, agents_logged_in: 1 },
+      { queue_name: "intake", calls_waiting: 4, oldest_wait_seconds: 60, agents_available: 0, agents_logged_in: 2 },
+    ],
+    patients: [
+      { name: "John Smith", phone: "555-0101", language: "en", has_abandoned_before: true, has_called_in_before: false, ai_called_before: false, attempt_count: 0 },
+      { name: "Maria Garcia", phone: "555-0102", language: "es", has_abandoned_before: true, has_called_in_before: false, ai_called_before: false, attempt_count: 0 },
+    ],
+    dispatcher: { poll_interval: 10, dispatch_timeout: 30, max_attempts: 3, min_hours_between: 6 },
+  },
+  {
+    id: "ami_down",
+    label: "AMI Disconnected",
+    description: "AMI connection is down. Dispatcher will block all outbound calls regardless of queue or patient state.",
+    amiConnected: false,
+    queues: [
+      { queue_name: "scheduling_en", calls_waiting: 0, oldest_wait_seconds: 0, agents_available: 2, agents_logged_in: 3 },
+    ],
+    patients: [
+      { name: "John Smith", phone: "555-0101", language: "en", has_abandoned_before: true, has_called_in_before: false, ai_called_before: false, attempt_count: 0 },
+    ],
+    dispatcher: { poll_interval: 10, dispatch_timeout: 30, max_attempts: 3, min_hours_between: 6 },
+  },
+  {
+    id: "multilingual",
+    label: "Multilingual Patients",
+    description: "Three patients in different languages (EN, ES, ZH), one agent available. Tests language routing.",
+    amiConnected: true,
+    queues: [
+      { queue_name: "scheduling_en", calls_waiting: 0, oldest_wait_seconds: 0, agents_available: 1, agents_logged_in: 1 },
+      { queue_name: "scheduling_es", calls_waiting: 0, oldest_wait_seconds: 0, agents_available: 1, agents_logged_in: 1 },
+    ],
+    patients: [
+      { name: "John Smith", phone: "555-0101", language: "en", has_abandoned_before: true, has_called_in_before: false, ai_called_before: false, attempt_count: 0 },
+      { name: "Maria Garcia", phone: "555-0102", language: "es", has_abandoned_before: true, has_called_in_before: false, ai_called_before: false, attempt_count: 0 },
+      { name: "Wei Zhang", phone: "555-0107", language: "zh", has_abandoned_before: false, has_called_in_before: true, ai_called_before: false, attempt_count: 0 },
+    ],
+    dispatcher: { poll_interval: 10, dispatch_timeout: 30, max_attempts: 3, min_hours_between: 6 },
+  },
+  {
+    id: "retry_scenario",
+    label: "Retry Exhaustion",
+    description: "Two patients near their max attempt limit. One has 2/3 attempts used, the other has 3/3 (exhausted). Only the first should be eligible.",
+    amiConnected: true,
+    queues: [
+      { queue_name: "scheduling_en", calls_waiting: 0, oldest_wait_seconds: 0, agents_available: 1, agents_logged_in: 1 },
+    ],
+    patients: [
+      { name: "Robert Johnson", phone: "555-0103", language: "en", has_abandoned_before: true, has_called_in_before: false, ai_called_before: true, attempt_count: 2 },
+      { name: "Emily Davis", phone: "555-0104", language: "en", has_abandoned_before: false, has_called_in_before: true, ai_called_before: true, attempt_count: 3 },
+    ],
+    dispatcher: { poll_interval: 5, dispatch_timeout: 30, max_attempts: 3, min_hours_between: 0 },
+  },
+  {
+    id: "empty_queue",
+    label: "No Patients",
+    description: "Agents available but no patients in the outbound queue. Dispatcher should tick but find no candidate.",
+    amiConnected: true,
+    queues: [
+      { queue_name: "scheduling_en", calls_waiting: 0, oldest_wait_seconds: 0, agents_available: 2, agents_logged_in: 3 },
+    ],
+    patients: [],
+    dispatcher: { poll_interval: 5, dispatch_timeout: 30, max_attempts: 3, min_hours_between: 6 },
+  },
 ];
-
-const DEFAULT_PATIENTS: PatientRow[] = [
-  { name: "John Smith", phone: "555-0101", language: "en", has_abandoned_before: true, has_called_in_before: false, ai_called_before: false, attempt_count: 0 },
-  { name: "Maria Garcia", phone: "555-0102", language: "es", has_abandoned_before: true, has_called_in_before: false, ai_called_before: false, attempt_count: 0 },
-  { name: "Robert Johnson", phone: "555-0103", language: "en", has_abandoned_before: true, has_called_in_before: false, ai_called_before: true, attempt_count: 1 },
-  { name: "Emily Davis", phone: "555-0104", language: "en", has_abandoned_before: false, has_called_in_before: true, ai_called_before: false, attempt_count: 0 },
-  { name: "Michael Wilson", phone: "555-0105", language: "en", has_abandoned_before: false, has_called_in_before: false, ai_called_before: false, attempt_count: 0 },
-  { name: "Sarah Brown", phone: "555-0106", language: "en", has_abandoned_before: false, has_called_in_before: false, ai_called_before: false, attempt_count: 0 },
-  { name: "Wei Zhang", phone: "555-0107", language: "zh", has_abandoned_before: false, has_called_in_before: true, ai_called_before: false, attempt_count: 0 },
-];
-
-const DEFAULT_DISPATCHER: DispatcherSettings = {
-  poll_interval: 10,
-  dispatch_timeout: 30,
-  max_attempts: 3,
-  min_hours_between: 6,
-};
 
 // ---------- Props ----------
 
@@ -93,12 +187,26 @@ interface SimulationConsoleProps {
 // ---------- Component ----------
 
 export function SimulationConsole({ onApplySimulation }: SimulationConsoleProps) {
-  const [queues, setQueues] = useState<QueueRow[]>(() => DEFAULT_QUEUES.map(q => ({ ...q })));
-  const [amiConnected, setAmiConnected] = useState(true);
-  const [patients, setPatients] = useState<PatientRow[]>(() => DEFAULT_PATIENTS.map(p => ({ ...p })));
-  const [dispatcher, setDispatcher] = useState<DispatcherSettings>({ ...DEFAULT_DISPATCHER });
+  const defaultScenario = SCENARIOS[0];
+  const [selectedScenarioId, setSelectedScenarioId] = useState(defaultScenario.id);
+  const [queues, setQueues] = useState<QueueRow[]>(() => defaultScenario.queues.map(q => ({ ...q })));
+  const [amiConnected, setAmiConnected] = useState(defaultScenario.amiConnected);
+  const [patients, setPatients] = useState<PatientRow[]>(() => defaultScenario.patients.map(p => ({ ...p })));
+  const [dispatcher, setDispatcher] = useState<DispatcherSettings>({ ...defaultScenario.dispatcher });
   const [applying, setApplying] = useState(false);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
+
+  // Scenario loader
+  const loadScenario = (scenarioId: string) => {
+    const scenario = SCENARIOS.find(s => s.id === scenarioId);
+    if (!scenario) return;
+    setSelectedScenarioId(scenarioId);
+    setQueues(scenario.queues.map(q => ({ ...q })));
+    setAmiConnected(scenario.amiConnected);
+    setPatients(scenario.patients.map(p => ({ ...p })));
+    setDispatcher({ ...scenario.dispatcher });
+    setFeedback(null);
+  };
 
   // Queue handlers
   const updateQueue = (index: number, field: keyof QueueRow, value: string | number) => {
@@ -157,6 +265,34 @@ export function SimulationConsole({ onApplySimulation }: SimulationConsoleProps)
           {feedback.message}
         </div>
       )}
+
+      {/* Scenario Preset Selector */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <RotateCcw className="h-5 w-5" />
+            Scenario Preset
+          </CardTitle>
+          <CardDescription>
+            Load a pre-built scenario to quickly configure all sections below. You can still edit individual values after loading.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <Select value={selectedScenarioId} onValueChange={loadScenario}>
+            <SelectTrigger className="w-full sm:w-80">
+              <SelectValue placeholder="Select a scenario..." />
+            </SelectTrigger>
+            <SelectContent>
+              {SCENARIOS.map(s => (
+                <SelectItem key={s.id} value={s.id}>{s.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-sm text-muted-foreground">
+            {SCENARIOS.find(s => s.id === selectedScenarioId)?.description}
+          </p>
+        </CardContent>
+      </Card>
 
       {/* Section 1: Queue Configuration */}
       <Card>
