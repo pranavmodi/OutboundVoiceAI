@@ -8,6 +8,7 @@ import {
   PatientQueueCard,
   ActiveCallCard,
   CallHistoryCard,
+  DispatcherEventsCard,
 } from "@/components/dashboard";
 import { SimulationConsole, OperatorConsole } from "@/components/console";
 import { useApi } from "@/hooks/useApi";
@@ -333,6 +334,7 @@ export default function Dashboard() {
                 <CallHistoryCard calls={calls} onRefresh={handleRefreshCalls} />
               </div>
             </div>
+            <DispatcherEventsCard events={dashboard.dispatcherEvents} />
           </TabsContent>
 
           {/* Simulation Tab */}

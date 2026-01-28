@@ -14,3 +14,6 @@ echo "Starting backend on http://localhost:$BACKEND_PORT"
 
 source .venv/bin/activate
 uvicorn app.main:app --host 0.0.0.0 --port $BACKEND_PORT --reload --log-level warning
+
+
+uvicorn app.main:app --host 0.0.0.0 --port 8003 --reload --log-level warning

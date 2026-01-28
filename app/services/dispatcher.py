@@ -87,90 +87,93 @@ class AutoCallDispatcher:
         queue_provider = get_queue_provider()
         queue_state = queue_provider.poll()
 
-        # 2. Broadcast queue_update to all dashboards
-        await broadcast_to_dashboards({
-            "type": "queue_update",
-            "queue_state": queue_state.to_dict(),
-        })
+        # Track the decision made this tick (broadcast at end)
+        tick_decision = None
 
         # 3. If DISPATCHED, check timeout
         if self._state == DispatcherState.DISPATCHED:
             if self._dispatched_at is not None:
                 elapsed = asyncio.get_event_loop().time() - self._dispatched_at
                 if elapsed > DISPATCH_TIMEOUT_SECONDS:
-                    self._log_decision("dispatch_timeout",
-                                       f"Dispatch timed out after {DISPATCH_TIMEOUT_SECONDS}s "
-                                       f"for patient {self._dispatched_patient_id}")
+                    tick_decision = self._log_decision(
+                        "dispatch_timeout",
+                        f"Dispatch timed out after {DISPATCH_TIMEOUT_SECONDS}s "
+                        f"for patient {self._dispatched_patient_id}")
                     self._state = DispatcherState.IDLE
                     self._dispatched_at = None
                     self._dispatched_patient_id = None
                 else:
-                    return  # Still waiting for frontend to start call
+                    tick_decision = {"decision": "waiting", "detail": "Waiting for frontend to start dispatched call", "state": self._state.value}
 
         # 4. If CALL_ACTIVE, skip
-        if self._state == DispatcherState.CALL_ACTIVE:
-            return
+        elif self._state == DispatcherState.CALL_ACTIVE:
+            tick_decision = {"decision": "call_active", "detail": "Call in progress, skipping", "state": self._state.value}
 
-        # 5. If not IDLE, skip (e.g. STOPPED shouldn't reach here, but guard)
-        if self._state != DispatcherState.IDLE:
-            return
+        # 5. If not IDLE, skip
+        elif self._state != DispatcherState.IDLE:
+            pass
 
-        # 6. Evaluate all gating conditions
-        settings_provider = get_settings_provider()
-        settings = settings_provider.get_settings()
-        call_log_provider = get_call_log_provider()
+        else:
+            # 6. Evaluate all gating conditions
+            settings_provider = get_settings_provider()
+            settings = settings_provider.get_settings()
+            call_log_provider = get_call_log_provider()
 
-        # system_enabled
-        if not settings.system_enabled:
-            self._log_decision("blocked", "system_enabled is false")
-            return
+            # system_enabled
+            if not settings.system_enabled:
+                tick_decision = self._log_decision("blocked", "system_enabled is false")
 
-        # is_within_business_hours
-        if not settings_provider.is_within_business_hours():
-            self._log_decision("blocked", "Outside business hours")
-            return
+            # is_within_business_hours
+            elif not settings_provider.is_within_business_hours():
+                tick_decision = self._log_decision("blocked", "Outside business hours")
 
-        # ami_connected (reflected in queue state)
-        if not queue_state.ami_connected:
-            self._log_decision("blocked", "AMI not connected")
-            return
+            # ami_connected (reflected in queue state)
+            elif not queue_state.ami_connected:
+                tick_decision = self._log_decision("blocked", "AMI not connected")
 
-        # outbound_allowed (agents, waits, stability)
-        if not queue_state.outbound_allowed:
-            self._log_decision("blocked", "Outbound not allowed by queue state")
-            return
+            # outbound_allowed (agents, waits, stability)
+            elif not queue_state.outbound_allowed:
+                tick_decision = self._log_decision("blocked", "Outbound not allowed by queue state")
 
-        # has_active_call
-        if call_log_provider.has_active_call():
-            self._log_decision("blocked", "Call already active")
-            return
+            # has_active_call
+            elif call_log_provider.has_active_call():
+                tick_decision = self._log_decision("blocked", "Call already active")
 
-        # 7. Get next candidate patient
-        patient_provider = get_patient_provider()
-        candidate = patient_provider.get_next_candidate(max_attempts=3, min_hours_between=6)
+            else:
+                # 7. Get next candidate patient
+                patient_provider = get_patient_provider()
+                candidate = patient_provider.get_next_candidate(max_attempts=3, min_hours_between=6)
 
-        if candidate is None:
-            self._log_decision("no_candidate", "No eligible patients in queue")
-            return
+                if candidate is None:
+                    tick_decision = self._log_decision("no_candidate", "No eligible patients in queue")
 
-        # 8. Check that at least one dashboard frontend is connected
-        if not dashboard_clients:
-            self._log_decision("no_frontend_connected",
-                               f"Would dispatch {candidate.name} but no frontend connected")
-            return
+                # 8. Check that at least one dashboard frontend is connected
+                elif not dashboard_clients:
+                    tick_decision = self._log_decision(
+                        "no_frontend_connected",
+                        f"Would dispatch {candidate.name} but no frontend connected")
 
-        # 9. Dispatch!
-        self._state = DispatcherState.DISPATCHED
-        self._dispatched_at = asyncio.get_event_loop().time()
-        self._dispatched_patient_id = candidate.patient_id
+                else:
+                    # 9. Dispatch!
+                    self._state = DispatcherState.DISPATCHED
+                    self._dispatched_at = asyncio.get_event_loop().time()
+                    self._dispatched_patient_id = candidate.patient_id
 
-        self._log_decision("dispatched",
-                           f"Dispatching call to {candidate.name} (id={candidate.patient_id})")
+                    tick_decision = self._log_decision(
+                        "dispatched",
+                        f"Dispatching call to {candidate.name} (id={candidate.patient_id})")
 
+                    await broadcast_to_dashboards({
+                        "type": "dispatch_call",
+                        "patient_id": candidate.patient_id,
+                        "patient_name": candidate.name,
+                    })
+
+        # 2. Broadcast queue_update + decision to all dashboards
         await broadcast_to_dashboards({
-            "type": "dispatch_call",
-            "patient_id": candidate.patient_id,
-            "patient_name": candidate.name,
+            "type": "queue_update",
+            "queue_state": queue_state.to_dict(),
+            "decision": tick_decision,
         })
 
     def notify_call_started(self, patient_id: str):
@@ -194,8 +197,8 @@ class AutoCallDispatcher:
             self._dispatched_patient_id = None
             self._log_decision("call_ended", "Call ended, returning to idle")
 
-    def _log_decision(self, decision: str, detail: str):
-        """Append to the circular decision buffer."""
+    def _log_decision(self, decision: str, detail: str) -> dict:
+        """Append to the circular decision buffer and return the entry."""
         entry = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "decision": decision,
@@ -204,6 +207,7 @@ class AutoCallDispatcher:
         }
         self._decision_log.append(entry)
         logger.info(f"[Dispatcher] {decision}: {detail}")
+        return entry
 
     def get_status(self) -> dict:
         """Return current dispatcher status for API."""

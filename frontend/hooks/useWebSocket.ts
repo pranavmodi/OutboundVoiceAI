@@ -11,6 +11,13 @@ interface DispatchedPatient {
   patient_name: string;
 }
 
+export interface DispatcherDecision {
+  timestamp: string;
+  decision: string;
+  detail: string;
+  state: string;
+}
+
 interface UseDashboardWSReturn {
   connected: boolean;
   queueState: QueueState | null;
@@ -19,6 +26,7 @@ interface UseDashboardWSReturn {
   lastStatus: string | null;
   dispatchedPatient: DispatchedPatient | null;
   clearDispatch: () => void;
+  dispatcherEvents: DispatcherDecision[];
 }
 
 export function useDashboardWS(): UseDashboardWSReturn {
@@ -28,6 +36,7 @@ export function useDashboardWS(): UseDashboardWSReturn {
   const [statistics, setStatistics] = useState<Statistics | null>(null);
   const [lastStatus, setLastStatus] = useState<string | null>(null);
   const [dispatchedPatient, setDispatchedPatient] = useState<DispatchedPatient | null>(null);
+  const [dispatcherEvents, setDispatcherEvents] = useState<DispatcherDecision[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -102,6 +111,13 @@ export function useDashboardWS(): UseDashboardWSReturn {
 
           case "queue_update":
             setQueueState(message.queue_state as QueueState);
+            if (message.decision) {
+              const decision = message.decision as DispatcherDecision;
+              if (!decision.timestamp) {
+                decision.timestamp = new Date().toISOString();
+              }
+              setDispatcherEvents((prev) => [decision, ...prev].slice(0, 50));
+            }
             break;
 
           case "dispatch_call":
@@ -137,7 +153,7 @@ export function useDashboardWS(): UseDashboardWSReturn {
     };
   }, [connect]);
 
-  return { connected, queueState, activeCall, statistics, lastStatus, dispatchedPatient, clearDispatch };
+  return { connected, queueState, activeCall, statistics, lastStatus, dispatchedPatient, clearDispatch, dispatcherEvents };
 }
 
 interface UseVoiceWSReturn {
