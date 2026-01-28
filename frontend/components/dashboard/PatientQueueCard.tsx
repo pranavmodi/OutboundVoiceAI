@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Users, Phone, RefreshCw } from "lucide-react";
+import { Users, Phone, RefreshCw, UserRound } from "lucide-react";
 import type { Patient } from "@/types";
 
 interface PatientQueueCardProps {
@@ -45,52 +45,56 @@ export function PatientQueueCard({
             Outbound Queue
           </CardTitle>
           <div className="flex items-center gap-2">
-            <Badge variant="secondary">{patients.length} patients</Badge>
-            <Button variant="ghost" size="icon" onClick={onRefresh}>
-              <RefreshCw className="h-4 w-4" />
+            <Badge variant="secondary" className="tabular-nums">
+              {patients.length} patient{patients.length !== 1 ? "s" : ""}
+            </Badge>
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onRefresh}>
+              <RefreshCw className="h-3.5 w-3.5" />
             </Button>
           </div>
         </div>
       </CardHeader>
       <CardContent className="flex-1 p-0">
         <ScrollArea className="h-[400px]">
-          <div className="space-y-1 p-4 pt-0">
+          <div className="space-y-1.5 px-6 pb-6">
             {patients.length === 0 ? (
-              <p className="text-center text-muted-foreground py-8">
-                No patients in queue
-              </p>
+              <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+                <UserRound className="h-10 w-10 mb-3 opacity-20" />
+                <p className="text-sm font-medium">No patients in queue</p>
+                <p className="text-xs mt-1">Patients will appear here when added</p>
+              </div>
             ) : (
               patients.map((patient, index) => (
                 <div
                   key={patient.patient_id}
-                  className="flex items-center justify-between rounded-md border p-3 hover:bg-muted/50 transition-colors"
+                  className="flex items-center justify-between rounded-lg bg-muted/40 px-3 py-2.5 hover:bg-muted/70 transition-colors"
                 >
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="text-sm text-muted-foreground">#{index + 1}</span>
-                      <span className="font-medium truncate">{patient.name}</span>
-                      <Badge variant={priorityColors[patient.priority_bucket]} className="text-xs">
+                      <span className="text-xs font-medium text-muted-foreground tabular-nums w-5">
+                        {index + 1}
+                      </span>
+                      <span className="text-sm font-medium truncate">{patient.name}</span>
+                      <Badge variant={priorityColors[patient.priority_bucket]} className="text-[10px] px-1.5 py-0">
                         P{patient.priority_bucket}
                       </Badge>
                     </div>
-                    <div className="flex items-center gap-3 mt-1 text-sm text-muted-foreground">
-                      <span>{patient.phone}</span>
-                      <span className="uppercase">{patient.language}</span>
+                    <div className="flex items-center gap-2.5 mt-1 ml-7 text-xs text-muted-foreground">
+                      <span className="tabular-nums">{patient.phone}</span>
+                      <span className="uppercase font-medium">{patient.language}</span>
                       {patient.attempt_count > 0 && (
-                        <span>{patient.attempt_count} attempts</span>
+                        <span className="tabular-nums">{patient.attempt_count} attempt{patient.attempt_count !== 1 ? "s" : ""}</span>
                       )}
                     </div>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      {priorityLabels[patient.priority_bucket]}
-                    </p>
                   </div>
                   <Button
                     size="sm"
+                    variant="outline"
                     onClick={() => onCallPatient(patient.patient_id)}
                     disabled={isCallActive || !outboundAllowed}
-                    className="ml-2 shrink-0"
+                    className="ml-3 shrink-0 h-8 text-xs"
                   >
-                    <Phone className="h-4 w-4 mr-1" />
+                    <Phone className="h-3 w-3 mr-1.5" />
                     Call
                   </Button>
                 </div>

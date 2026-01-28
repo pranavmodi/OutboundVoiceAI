@@ -67,7 +67,7 @@ export function ActiveCallCard({
   // Show last call transcript if no active call but transcript exists
   if (!call && transcript.length > 0) {
     return (
-      <Card className="border-muted">
+      <Card>
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
             <CardTitle className="flex items-center gap-2 text-lg">
@@ -75,7 +75,7 @@ export function ActiveCallCard({
               Call Ended
             </CardTitle>
             {lastCallInfo && (
-              <Badge variant="outline" className="flex items-center gap-1">
+              <Badge variant="outline" className="flex items-center gap-1 tabular-nums text-xs">
                 <Clock className="h-3 w-3" />
                 {formatDuration(lastCallInfo.duration)}
               </Badge>
@@ -84,17 +84,17 @@ export function ActiveCallCard({
         </CardHeader>
         <CardContent className="space-y-4">
           {lastCallInfo && (
-            <div className="rounded-md bg-background p-3">
-              <p className="font-medium">{lastCallInfo.patientName}</p>
-              <p className="text-sm text-muted-foreground">Call completed</p>
+            <div className="rounded-lg bg-muted/50 p-3">
+              <p className="text-sm font-medium">{lastCallInfo.patientName}</p>
+              <p className="text-xs text-muted-foreground mt-0.5">Call completed</p>
             </div>
           )}
 
           {/* Transcript from ended call */}
           <div className="space-y-2">
-            <h4 className="text-sm font-medium">Call Transcript</h4>
-            <ScrollArea className="h-[250px] rounded-md border bg-background p-3">
-              <div ref={scrollRef} className="space-y-3">
+            <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Transcript</h4>
+            <ScrollArea className="h-[250px] rounded-lg border bg-muted/20 p-3">
+              <div ref={scrollRef} className="space-y-2.5">
                 {transcript.map((entry, index) => (
                   <div
                     key={index}
@@ -103,12 +103,12 @@ export function ActiveCallCard({
                     }`}
                   >
                     {entry.speaker === "ai" && (
-                      <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                      <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
                         <Bot className="h-3 w-3" />
                       </div>
                     )}
                     <div
-                      className={`rounded-lg px-3 py-2 text-sm max-w-[80%] ${
+                      className={`rounded-lg px-3 py-1.5 text-sm max-w-[80%] ${
                         entry.speaker === "ai"
                           ? "bg-muted"
                           : "bg-primary text-primary-foreground"
@@ -134,7 +134,7 @@ export function ActiveCallCard({
   if (!call) {
     return (
       <Card className="border-dashed">
-        <CardHeader>
+        <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-lg">
             <Phone className="h-5 w-5" />
             Active Call
@@ -142,9 +142,9 @@ export function ActiveCallCard({
         </CardHeader>
         <CardContent>
           <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
-            <Phone className="h-12 w-12 mb-4 opacity-20" />
-            <p>No active call</p>
-            <p className="text-sm">Select a patient from the queue to start a call</p>
+            <Phone className="h-10 w-10 mb-3 opacity-15" />
+            <p className="text-sm font-medium">No active call</p>
+            <p className="text-xs mt-1">Select a patient from the queue to start</p>
           </div>
         </CardContent>
       </Card>
@@ -152,39 +152,37 @@ export function ActiveCallCard({
   }
 
   return (
-    <Card className="border-green-500/50 bg-green-50/30 dark:bg-green-900/10">
+    <Card className="border-emerald-500/40 shadow-sm shadow-emerald-500/5">
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between">
           <CardTitle className="flex items-center gap-2 text-lg">
             <div className="relative">
-              <Phone className="h-5 w-5 text-green-600" />
-              <span className="absolute -top-1 -right-1 h-2 w-2 rounded-full bg-green-500 animate-pulse" />
+              <Phone className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
+              <span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
             </div>
             Active Call
           </CardTitle>
-          <div className="flex items-center gap-2">
-            <Badge variant="success" className="flex items-center gap-1">
-              <Clock className="h-3 w-3" />
-              {formatDuration(duration)}
-            </Badge>
-          </div>
+          <Badge variant="success" className="flex items-center gap-1 tabular-nums text-xs">
+            <Clock className="h-3 w-3" />
+            {formatDuration(duration)}
+          </Badge>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
         {/* Patient Info */}
-        <div className="rounded-md bg-background p-3">
+        <div className="rounded-lg bg-muted/50 p-3">
           <div className="flex items-center justify-between">
             <div>
-              <p className="font-medium">{call.patient_name}</p>
-              <p className="text-sm text-muted-foreground">{call.phone}</p>
+              <p className="text-sm font-medium">{call.patient_name}</p>
+              <p className="text-xs text-muted-foreground tabular-nums mt-0.5">{call.phone}</p>
             </div>
-            <Badge variant="outline">Priority {call.priority_bucket}</Badge>
+            <Badge variant="outline" className="text-xs">P{call.priority_bucket}</Badge>
           </div>
         </div>
 
         {/* Status */}
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-muted-foreground">Status</span>
+        <div className="flex items-center justify-between text-sm">
+          <span className="text-muted-foreground">Status</span>
           <span className="font-medium">{status || "Connected"}</span>
         </div>
 
@@ -192,40 +190,41 @@ export function ActiveCallCard({
 
         {/* Audio Controls */}
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2.5">
             <Button
               variant={isRecording ? "default" : "outline"}
               size="sm"
+              className="h-8 text-xs"
               onClick={onToggleMic}
             >
               {isRecording ? (
                 <>
-                  <Mic className="h-4 w-4 mr-1" />
-                  Speaking
+                  <Mic className="h-3.5 w-3.5 mr-1.5" />
+                  Mic On
                 </>
               ) : (
                 <>
-                  <MicOff className="h-4 w-4 mr-1" />
+                  <MicOff className="h-3.5 w-3.5 mr-1.5" />
                   Muted
                 </>
               )}
             </Button>
             {isRecording && (
-              <div className="flex items-center gap-1 h-6">
+              <div className="flex items-center gap-0.5 h-5">
                 {[...Array(5)].map((_, i) => (
                   <div
                     key={i}
-                    className="audio-bar w-1 bg-green-500 rounded-full"
+                    className="audio-bar w-0.5 bg-emerald-500 rounded-full"
                     style={{
-                      height: `${Math.max(4, audioLevel * 24 * (0.5 + Math.random() * 0.5))}px`,
+                      height: `${Math.max(3, audioLevel * 20 * (0.5 + Math.random() * 0.5))}px`,
                     }}
                   />
                 ))}
               </div>
             )}
           </div>
-          <Button variant="destructive" size="sm" onClick={onEndCall}>
-            <PhoneOff className="h-4 w-4 mr-1" />
+          <Button variant="destructive" size="sm" className="h-8 text-xs" onClick={onEndCall}>
+            <PhoneOff className="h-3.5 w-3.5 mr-1.5" />
             End Call
           </Button>
         </div>
@@ -234,11 +233,11 @@ export function ActiveCallCard({
 
         {/* Live Transcript */}
         <div className="space-y-2">
-          <h4 className="text-sm font-medium">Live Transcript</h4>
-          <ScrollArea className="h-[200px] rounded-md border bg-background p-3">
-            <div ref={scrollRef} className="space-y-3">
+          <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Live Transcript</h4>
+          <ScrollArea className="h-[200px] rounded-lg border bg-muted/20 p-3">
+            <div ref={scrollRef} className="space-y-2.5">
               {transcript.length === 0 ? (
-                <p className="text-sm text-muted-foreground text-center py-4">
+                <p className="text-xs text-muted-foreground text-center py-6">
                   Waiting for conversation...
                 </p>
               ) : (
@@ -250,12 +249,12 @@ export function ActiveCallCard({
                     }`}
                   >
                     {entry.speaker === "ai" && (
-                      <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                      <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
                         <Bot className="h-3 w-3" />
                       </div>
                     )}
                     <div
-                      className={`rounded-lg px-3 py-2 text-sm max-w-[80%] ${
+                      className={`rounded-lg px-3 py-1.5 text-sm max-w-[80%] ${
                         entry.speaker === "ai"
                           ? "bg-muted"
                           : "bg-primary text-primary-foreground"

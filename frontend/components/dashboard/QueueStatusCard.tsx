@@ -12,6 +12,7 @@ import {
   AlertTriangle,
   Wifi,
   WifiOff,
+  Activity,
 } from "lucide-react";
 import type { QueueState } from "@/types";
 
@@ -24,13 +25,15 @@ export function QueueStatusCard({ queueState }: QueueStatusCardProps) {
     return (
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Phone className="h-5 w-5" />
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <Activity className="h-5 w-5" />
             Queue Status
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="text-muted-foreground">Loading...</p>
+          <div className="flex items-center justify-center py-8">
+            <p className="text-sm text-muted-foreground">Loading queue data...</p>
+          </div>
         </CardContent>
       </Card>
     );
@@ -41,57 +44,56 @@ export function QueueStatusCard({ queueState }: QueueStatusCardProps) {
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between">
           <CardTitle className="flex items-center gap-2 text-lg">
-            <Phone className="h-5 w-5" />
+            <Activity className="h-5 w-5" />
             Queue Status
           </CardTitle>
           <div className="flex items-center gap-2">
             {queueState.ami_connected ? (
-              <Badge variant="success" className="flex items-center gap-1">
+              <Badge variant="success" className="flex items-center gap-1 text-xs">
                 <Wifi className="h-3 w-3" />
-                AMI Connected
+                AMI
               </Badge>
             ) : (
-              <Badge variant="destructive" className="flex items-center gap-1">
+              <Badge variant="destructive" className="flex items-center gap-1 text-xs">
                 <WifiOff className="h-3 w-3" />
-                AMI Disconnected
+                AMI
               </Badge>
             )}
-            <Badge variant="outline">Mock Mode</Badge>
           </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        {/* Main Metrics */}
+        {/* Metrics Grid */}
         <div className="grid grid-cols-2 gap-4">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Users className="h-4 w-4" />
+          <div className="rounded-lg bg-muted/50 p-3 space-y-1">
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Users className="h-3.5 w-3.5" />
               Agents Available
             </div>
-            <p className="text-2xl font-bold">{queueState.global_agents_available}</p>
+            <p className="text-2xl font-semibold tabular-nums">{queueState.global_agents_available}</p>
             <p className="text-xs text-muted-foreground">
               of {queueState.global_agents_logged_in} logged in
             </p>
           </div>
-          <div className="space-y-1">
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Phone className="h-4 w-4" />
+          <div className="rounded-lg bg-muted/50 p-3 space-y-1">
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Phone className="h-3.5 w-3.5" />
               Calls Waiting
             </div>
-            <p className="text-2xl font-bold">{queueState.global_calls_waiting}</p>
+            <p className="text-2xl font-semibold tabular-nums">{queueState.global_calls_waiting}</p>
           </div>
-          <div className="space-y-1">
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Clock className="h-4 w-4" />
+          <div className="rounded-lg bg-muted/50 p-3 space-y-1">
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Clock className="h-3.5 w-3.5" />
               Oldest Wait
             </div>
-            <p className="text-2xl font-bold">{queueState.global_oldest_wait_seconds}s</p>
+            <p className="text-2xl font-semibold tabular-nums">{queueState.global_oldest_wait_seconds}s</p>
           </div>
-          <div className="space-y-1">
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <div className="rounded-lg bg-muted/50 p-3 space-y-1">
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
               Stable Polls
             </div>
-            <p className="text-2xl font-bold">{queueState.stable_polls_count}/3</p>
+            <p className="text-2xl font-semibold tabular-nums">{queueState.stable_polls_count}/3</p>
           </div>
         </div>
 
@@ -99,7 +101,7 @@ export function QueueStatusCard({ queueState }: QueueStatusCardProps) {
 
         {/* Outbound Status */}
         <div className="flex items-center justify-between">
-          <span className="font-medium">Outbound Allowed</span>
+          <span className="text-sm font-medium">Outbound Allowed</span>
           {queueState.outbound_allowed ? (
             <Badge variant="success" className="flex items-center gap-1">
               <CheckCircle className="h-3 w-3" />
@@ -114,9 +116,9 @@ export function QueueStatusCard({ queueState }: QueueStatusCardProps) {
         </div>
 
         {!queueState.outbound_allowed && (
-          <div className="flex items-start gap-2 rounded-md bg-yellow-50 p-3 text-sm text-yellow-800 dark:bg-yellow-900/20 dark:text-yellow-200">
+          <div className="flex items-start gap-2.5 rounded-lg border border-orange-200 bg-orange-50 p-3 text-sm text-orange-800 dark:border-orange-900/50 dark:bg-orange-950/30 dark:text-orange-200">
             <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
-            <div>
+            <p className="text-xs leading-relaxed">
               {!queueState.ami_connected
                 ? "AMI connection lost. Outbound disabled for safety."
                 : queueState.global_agents_available === 0
@@ -126,7 +128,7 @@ export function QueueStatusCard({ queueState }: QueueStatusCardProps) {
                 : queueState.stable_polls_count < 3
                 ? `Waiting for stable conditions (${queueState.stable_polls_count}/3 polls).`
                 : "Conditions not met for outbound calls."}
-            </div>
+            </p>
           </div>
         )}
 
@@ -134,16 +136,16 @@ export function QueueStatusCard({ queueState }: QueueStatusCardProps) {
 
         {/* Individual Queues */}
         <div className="space-y-2">
-          <h4 className="text-sm font-medium text-muted-foreground">Individual Queues</h4>
-          <div className="space-y-2">
+          <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Queues</h4>
+          <div className="space-y-1.5">
             {queueState.queues.map((queue) => (
               <div
                 key={queue.queue_name}
-                className="flex items-center justify-between rounded-md bg-muted/50 px-3 py-2 text-sm"
+                className="flex items-center justify-between rounded-md bg-muted/40 px-3 py-2 text-sm"
               >
-                <span className="font-medium">{queue.queue_name}</span>
-                <div className="flex items-center gap-4 text-muted-foreground">
-                  <span>{queue.agents_available} agents</span>
+                <span className="font-medium text-sm">{queue.queue_name}</span>
+                <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                  <span>{queue.agents_available} avail</span>
                   <span>{queue.calls_waiting} waiting</span>
                 </div>
               </div>

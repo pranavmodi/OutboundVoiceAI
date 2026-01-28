@@ -3,6 +3,8 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   QueueStatusCard,
   PatientQueueCard,
@@ -14,7 +16,14 @@ import { SimulationConsole, OperatorConsole } from "@/components/console";
 import { useApi } from "@/hooks/useApi";
 import { useDashboardWS, useVoiceWS } from "@/hooks/useWebSocket";
 import { useAudio } from "@/hooks/useAudio";
-import { Phone, Wifi, LayoutDashboard, Terminal, Settings } from "lucide-react";
+import {
+  Phone,
+  LayoutDashboard,
+  Terminal,
+  Settings,
+  ChevronDown,
+  Circle,
+} from "lucide-react";
 import type { Patient, CallLog, QueueState, SystemSettings } from "@/types";
 
 export default function Dashboard() {
@@ -46,6 +55,9 @@ export default function Dashboard() {
 
   // Call mode: "web" (browser audio) or "twilio" (real phone call)
   const [callMode, setCallMode] = useState<string>("web");
+
+  // Operator section collapsed state
+  const [operatorOpen, setOperatorOpen] = useState(false);
 
   // Load initial data - only once
   useEffect(() => {
@@ -96,38 +108,30 @@ export default function Dashboard() {
     });
 
     audio.onAudioData((data) => {
-      // Use ref to always get latest sendAudio function
       voiceRef.current.sendAudio(data);
     });
   }, [voice, audio]);
 
-  
-
   // Handle call start
   const handleCallPatient = useCallback(async (patientId: string) => {
-    // Find patient name
     const patient = patients.find(p => p.patient_id === patientId);
     setCallingPatientName(patient?.name || "Patient");
     setCallStartTime(Date.now());
-    setLastCallInfo(null); // Clear last call info when starting new call
+    setLastCallInfo(null);
 
-    // Connect to voice WebSocket if not connected
     if (!voice.connected) {
       voice.connect();
-      // Wait for connection with retry
       for (let i = 0; i < 20; i++) {
         await new Promise((resolve) => setTimeout(resolve, 100));
         if (voiceRef.current.connected) break;
       }
     }
 
-    // In web mode, start recording (browser audio); in twilio mode, audio goes through the phone
     if (callMode === "web") {
       await audio.startRecording();
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
 
-    // Start the call with mode
     voice.startCall(patientId, callMode);
   }, [voice, audio, patients, callMode]);
 
@@ -156,7 +160,6 @@ export default function Dashboard() {
 
   // Handle call end
   const handleEndCall = useCallback(() => {
-    // Save last call info before ending
     const duration = callStartTime ? Math.floor((Date.now() - callStartTime) / 1000) : 0;
     setLastCallInfo({
       patientName: callingPatientName,
@@ -168,7 +171,6 @@ export default function Dashboard() {
     setActiveCall(null);
     setCallStartTime(null);
 
-    // Refresh data
     api.getCalls().then(setCalls);
     api.getOutboundQueue().then(setPatients);
   }, [voice, audio, api, callStartTime, callingPatientName]);
@@ -188,7 +190,6 @@ export default function Dashboard() {
     const result = await api.applySimulation(config);
     if (result) {
       if (result.queue_state) setQueueState(result.queue_state);
-      // Refresh patients and calls after reset
       const patientList = await api.getOutboundQueue();
       setPatients(patientList);
       const callList = await api.getCalls();
@@ -226,24 +227,49 @@ export default function Dashboard() {
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
-      <header className="border-b">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-                <Phone className="h-5 w-5" />
-              </div>
-              <div>
-                <h1 className="text-xl font-semibold">AI Outbound Voice Orchestrator</h1>
-                <p className="text-sm text-muted-foreground">
-                  Precise Imaging Scheduling Assistant
-                </p>
-              </div>
+      <header className="sticky top-0 z-50 border-b bg-card/80 backdrop-blur-lg">
+        <div className="container mx-auto px-6 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm">
+              <Phone className="h-4 w-4" />
             </div>
+            <div className="leading-tight">
+              <h1 className="text-base font-semibold tracking-tight">Outbound Voice AI</h1>
+              <p className="text-xs text-muted-foreground">Precise Imaging</p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            {/* Connection indicator */}
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              {dashboard.connected ? (
+                <>
+                  <Circle className="h-2 w-2 fill-emerald-500 text-emerald-500 status-dot" />
+                  <span className="hidden sm:inline">Connected</span>
+                </>
+              ) : (
+                <>
+                  <Circle className="h-2 w-2 fill-red-500 text-red-500" />
+                  <span className="hidden sm:inline">Disconnected</span>
+                </>
+              )}
+            </div>
+
+            {/* Call active badge */}
             {voice.isCallActive && (
-              <Badge variant="success" className="flex items-center gap-1">
-                <Wifi className="h-3 w-3" />
+              <Badge variant="success" className="flex items-center gap-1.5 shadow-sm">
+                <span className="h-1.5 w-1.5 rounded-full bg-white animate-pulse" />
                 Call Active
+              </Badge>
+            )}
+
+            {/* System status */}
+            {settings && (
+              <Badge
+                variant={settings.system_enabled ? "default" : "outline"}
+                className="hidden sm:flex"
+              >
+                {settings.system_enabled ? "System On" : "System Off"}
               </Badge>
             )}
           </div>
@@ -251,32 +277,28 @@ export default function Dashboard() {
       </header>
 
       {/* Main Content */}
-      <main className="container mx-auto px-4 py-6">
+      <main className="container mx-auto px-6 py-8">
         {/* Error Display */}
         {(api.error || voice.error || audio.error) && (
-          <div className="mb-4 rounded-md bg-destructive/10 p-4 text-destructive">
+          <div className="mb-6 rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive animate-in">
             {api.error || voice.error || audio.error}
           </div>
         )}
 
-        <Tabs defaultValue="dashboard" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-3 lg:w-auto lg:inline-flex">
-            <TabsTrigger value="dashboard" className="flex items-center gap-2">
+        <Tabs defaultValue="dashboard" className="space-y-8">
+          <TabsList className="inline-flex h-10 rounded-lg bg-muted p-1">
+            <TabsTrigger value="dashboard" className="flex items-center gap-2 rounded-md px-4 text-sm">
               <LayoutDashboard className="h-4 w-4" />
               Dashboard
             </TabsTrigger>
-            <TabsTrigger value="simulation" className="flex items-center gap-2">
+            <TabsTrigger value="simulation" className="flex items-center gap-2 rounded-md px-4 text-sm">
               <Terminal className="h-4 w-4" />
               Simulation
-            </TabsTrigger>
-            <TabsTrigger value="operator" className="flex items-center gap-2">
-              <Settings className="h-4 w-4" />
-              Operator
             </TabsTrigger>
           </TabsList>
 
           {/* Dashboard Tab */}
-          <TabsContent value="dashboard" className="space-y-6">
+          <TabsContent value="dashboard" className="space-y-8 animate-in">
             <div className="grid gap-6 lg:grid-cols-2">
               {/* Left Column */}
               <div className="space-y-6">
@@ -324,39 +346,59 @@ export default function Dashboard() {
                 <CallHistoryCard calls={calls} onRefresh={handleRefreshCalls} />
               </div>
             </div>
+
+            {/* Dispatcher Events - full width */}
             <DispatcherEventsCard events={dashboard.dispatcherEvents} />
+
+            {/* Operator Settings - collapsible */}
+            <Collapsible open={operatorOpen} onOpenChange={setOperatorOpen}>
+              <Card>
+                <CollapsibleTrigger asChild>
+                  <CardHeader className="cursor-pointer select-none hover:bg-muted/50 transition-colors rounded-t-lg">
+                    <div className="flex items-center justify-between">
+                      <CardTitle className="flex items-center gap-2 text-lg">
+                        <Settings className="h-5 w-5" />
+                        System Settings
+                      </CardTitle>
+                      <div className="flex items-center gap-3">
+                        {settings && (
+                          <Badge
+                            variant={settings.system_enabled ? "success" : "outline"}
+                            className="text-xs"
+                          >
+                            {settings.system_enabled ? "Enabled" : "Disabled"}
+                          </Badge>
+                        )}
+                        <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${operatorOpen ? "rotate-180" : ""}`} />
+                      </div>
+                    </div>
+                  </CardHeader>
+                </CollapsibleTrigger>
+                <CollapsibleContent>
+                  <CardContent className="pt-0">
+                    <OperatorConsole
+                      settings={settings}
+                      timezones={timezones}
+                      onSetSystemEnabled={handleSetSystemEnabled}
+                      onUpdateBusinessHours={handleUpdateBusinessHours}
+                      onUpdateQueueThresholds={handleUpdateQueueThresholds}
+                    />
+                  </CardContent>
+                </CollapsibleContent>
+              </Card>
+            </Collapsible>
           </TabsContent>
 
           {/* Simulation Tab */}
-          <TabsContent value="simulation">
+          <TabsContent value="simulation" className="animate-in">
             <SimulationConsole
               onApplySimulation={handleApplySimulation}
               callMode={callMode}
               onCallModeChange={setCallMode}
             />
           </TabsContent>
-
-          {/* Operator Tab */}
-          <TabsContent value="operator">
-            <OperatorConsole
-              settings={settings}
-              timezones={timezones}
-              onSetSystemEnabled={handleSetSystemEnabled}
-              onUpdateBusinessHours={handleUpdateBusinessHours}
-              onUpdateQueueThresholds={handleUpdateQueueThresholds}
-            />
-          </TabsContent>
         </Tabs>
       </main>
-
-      {/* Footer */}
-      <footer className="border-t mt-8">
-        <div className="container mx-auto px-4 py-4">
-          <p className="text-center text-sm text-muted-foreground">
-            AI Outbound Voice Orchestrator - Mock Mode
-          </p>
-        </div>
-      </footer>
     </div>
   );
 }

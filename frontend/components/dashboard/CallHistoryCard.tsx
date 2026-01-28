@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Separator } from "@/components/ui/separator";
 import {
   Dialog,
   DialogContent,
@@ -57,18 +58,27 @@ export function CallHistoryCard({ calls, onRefresh }: CallHistoryCardProps) {
               <History className="h-5 w-5" />
               Call History
             </CardTitle>
-            <Button variant="ghost" size="icon" onClick={onRefresh}>
-              <RefreshCw className="h-4 w-4" />
-            </Button>
+            <div className="flex items-center gap-2">
+              {calls.length > 0 && (
+                <span className="text-xs text-muted-foreground tabular-nums">
+                  {calls.length} call{calls.length !== 1 ? "s" : ""}
+                </span>
+              )}
+              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onRefresh}>
+                <RefreshCw className="h-3.5 w-3.5" />
+              </Button>
+            </div>
           </div>
         </CardHeader>
         <CardContent className="flex-1 p-0">
           <ScrollArea className="h-[300px]">
-            <div className="space-y-1 p-4 pt-0">
+            <div className="space-y-1.5 px-6 pb-6">
               {calls.length === 0 ? (
-                <p className="text-center text-muted-foreground py-8">
-                  No calls yet
-                </p>
+                <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+                  <History className="h-10 w-10 mb-3 opacity-15" />
+                  <p className="text-sm font-medium">No calls yet</p>
+                  <p className="text-xs mt-1">Completed calls will appear here</p>
+                </div>
               ) : (
                 calls.map((call) => {
                   const config = outcomeConfig[call.outcome] || outcomeConfig.completed;
@@ -78,24 +88,26 @@ export function CallHistoryCard({ calls, onRefresh }: CallHistoryCardProps) {
                     <button
                       key={call.call_id}
                       onClick={() => setSelectedCall(call)}
-                      className="w-full flex items-center justify-between rounded-md border p-3 hover:bg-muted/50 transition-colors text-left"
+                      className="w-full flex items-center justify-between rounded-lg bg-muted/40 px-3 py-2.5 hover:bg-muted/70 transition-colors text-left"
                     >
-                      <div className="flex items-center gap-3">
-                        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-muted">
-                          <Icon className="h-4 w-4" />
+                      <div className="flex items-center gap-2.5">
+                        <div className="flex h-7 w-7 items-center justify-center rounded-full bg-background">
+                          <Icon className="h-3.5 w-3.5 text-muted-foreground" />
                         </div>
                         <div>
-                          <p className="font-medium">{call.patient_name}</p>
-                          <p className="text-sm text-muted-foreground">
+                          <p className="text-sm font-medium">{call.patient_name}</p>
+                          <p className="text-xs text-muted-foreground tabular-nums">
                             {call.started_at ? formatTime(call.started_at) : "—"}
                           </p>
                         </div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm text-muted-foreground">
+                      <div className="flex items-center gap-2.5">
+                        <span className="text-xs text-muted-foreground tabular-nums">
                           {formatDuration(call.duration_seconds)}
                         </span>
-                        <Badge variant={config.variant}>{config.label}</Badge>
+                        <Badge variant={config.variant} className="text-[10px] px-1.5 py-0">
+                          {config.label}
+                        </Badge>
                       </div>
                     </button>
                   );
@@ -110,60 +122,66 @@ export function CallHistoryCard({ calls, onRefresh }: CallHistoryCardProps) {
       <Dialog open={!!selectedCall} onOpenChange={() => setSelectedCall(null)}>
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-hidden flex flex-col">
           <DialogHeader>
-            <DialogTitle>Call Details</DialogTitle>
+            <DialogTitle className="text-lg">Call Details</DialogTitle>
           </DialogHeader>
           {selectedCall && (
             <div className="flex-1 overflow-auto space-y-4">
               {/* Call Info */}
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <p className="text-sm text-muted-foreground">Patient</p>
-                  <p className="font-medium">{selectedCall.patient_name}</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-lg bg-muted/50 p-3">
+                  <p className="text-xs text-muted-foreground">Patient</p>
+                  <p className="text-sm font-medium mt-0.5">{selectedCall.patient_name}</p>
                 </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Phone</p>
-                  <p className="font-medium">{selectedCall.phone}</p>
+                <div className="rounded-lg bg-muted/50 p-3">
+                  <p className="text-xs text-muted-foreground">Phone</p>
+                  <p className="text-sm font-medium mt-0.5 tabular-nums">{selectedCall.phone}</p>
                 </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Duration</p>
-                  <p className="font-medium">{formatDuration(selectedCall.duration_seconds)}</p>
+                <div className="rounded-lg bg-muted/50 p-3">
+                  <p className="text-xs text-muted-foreground">Duration</p>
+                  <p className="text-sm font-medium mt-0.5 tabular-nums">{formatDuration(selectedCall.duration_seconds)}</p>
                 </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Outcome</p>
-                  <Badge variant={outcomeConfig[selectedCall.outcome]?.variant || "default"}>
-                    {outcomeConfig[selectedCall.outcome]?.label || selectedCall.outcome}
-                  </Badge>
+                <div className="rounded-lg bg-muted/50 p-3">
+                  <p className="text-xs text-muted-foreground">Outcome</p>
+                  <div className="mt-1">
+                    <Badge variant={outcomeConfig[selectedCall.outcome]?.variant || "default"} className="text-xs">
+                      {outcomeConfig[selectedCall.outcome]?.label || selectedCall.outcome}
+                    </Badge>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Started</p>
-                  <p className="font-medium">
+                <div className="rounded-lg bg-muted/50 p-3">
+                  <p className="text-xs text-muted-foreground">Started</p>
+                  <p className="text-sm font-medium mt-0.5 tabular-nums">
                     {selectedCall.started_at ? formatTime(selectedCall.started_at) : "—"}
                   </p>
                 </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Priority</p>
-                  <p className="font-medium">Bucket {selectedCall.priority_bucket}</p>
+                <div className="rounded-lg bg-muted/50 p-3">
+                  <p className="text-xs text-muted-foreground">Priority</p>
+                  <p className="text-sm font-medium mt-0.5">Bucket {selectedCall.priority_bucket}</p>
                 </div>
               </div>
 
               {/* Actions Taken */}
-              <div className="flex gap-2">
-                {selectedCall.transfer_attempted && (
-                  <Badge variant={selectedCall.transfer_success ? "success" : "warning"}>
-                    Transfer {selectedCall.transfer_success ? "Success" : "Attempted"}
-                  </Badge>
-                )}
-                {selectedCall.voicemail_left && <Badge variant="secondary">VM Left</Badge>}
-                {selectedCall.sms_sent && <Badge variant="secondary">SMS Sent</Badge>}
-              </div>
+              {(selectedCall.transfer_attempted || selectedCall.voicemail_left || selectedCall.sms_sent) && (
+                <div className="flex gap-2">
+                  {selectedCall.transfer_attempted && (
+                    <Badge variant={selectedCall.transfer_success ? "success" : "warning"} className="text-xs">
+                      Transfer {selectedCall.transfer_success ? "Success" : "Attempted"}
+                    </Badge>
+                  )}
+                  {selectedCall.voicemail_left && <Badge variant="secondary" className="text-xs">VM Left</Badge>}
+                  {selectedCall.sms_sent && <Badge variant="secondary" className="text-xs">SMS Sent</Badge>}
+                </div>
+              )}
+
+              <Separator />
 
               {/* Transcript */}
               <div>
-                <p className="text-sm font-medium mb-2">Transcript</p>
-                <ScrollArea className="h-[250px] rounded-md border p-3">
-                  <div className="space-y-3">
+                <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Transcript</h4>
+                <ScrollArea className="h-[250px] rounded-lg border bg-muted/20 p-3">
+                  <div className="space-y-2.5">
                     {selectedCall.transcript.length === 0 ? (
-                      <p className="text-sm text-muted-foreground text-center py-4">
+                      <p className="text-xs text-muted-foreground text-center py-6">
                         No transcript available
                       </p>
                     ) : (
@@ -175,12 +193,12 @@ export function CallHistoryCard({ calls, onRefresh }: CallHistoryCardProps) {
                           }`}
                         >
                           {entry.speaker === "ai" && (
-                            <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                            <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
                               <Bot className="h-3 w-3" />
                             </div>
                           )}
                           <div
-                            className={`rounded-lg px-3 py-2 text-sm max-w-[80%] ${
+                            className={`rounded-lg px-3 py-1.5 text-sm max-w-[80%] ${
                               entry.speaker === "ai"
                                 ? "bg-muted"
                                 : "bg-primary text-primary-foreground"
