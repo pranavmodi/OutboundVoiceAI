@@ -1,10 +1,12 @@
 """REST API endpoints for dashboard."""
 import os
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 from typing import Optional
 
 from app.providers import get_queue_provider, get_patient_provider, get_call_log_provider
 from app.models import CallOutcome
+from app.services.dispatcher import get_dispatcher
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
 
@@ -164,6 +166,82 @@ async def get_statistics():
     """Get call statistics."""
     call_log_provider = get_call_log_provider()
     return call_log_provider.get_statistics()
+
+
+class QueueConfigItem(BaseModel):
+    queue_name: str
+    calls_waiting: int = 0
+    oldest_wait_seconds: int = 0
+    agents_available: int = 1
+    agents_logged_in: int = 1
+
+
+class QueueConfig(BaseModel):
+    ami_connected: bool = True
+    queues: list[QueueConfigItem] = []
+
+
+class PatientConfigItem(BaseModel):
+    name: str
+    phone: str
+    language: str = "en"
+    has_abandoned_before: bool = False
+    has_called_in_before: bool = False
+    ai_called_before: bool = False
+    attempt_count: int = 0
+
+
+class DispatcherConfig(BaseModel):
+    poll_interval: int = 10
+    dispatch_timeout: int = 30
+    max_attempts: int = 3
+    min_hours_between: int = 6
+
+
+class SimulationApplyRequest(BaseModel):
+    queue: QueueConfig = QueueConfig()
+    patients: list[PatientConfigItem] = []
+    dispatcher: DispatcherConfig = DispatcherConfig()
+
+
+@router.post("/simulation/apply")
+async def apply_simulation(request: SimulationApplyRequest):
+    """Apply simulation configuration and restart dispatcher."""
+    queue_provider = get_queue_provider()
+    patient_provider = get_patient_provider()
+    call_log_provider = get_call_log_provider()
+    dispatcher = get_dispatcher()
+
+    # 1. Reset queue provider
+    queue_provider.reset_with_config(
+        queues_config=[q.model_dump() for q in request.queue.queues],
+        ami_connected=request.queue.ami_connected,
+    )
+
+    # 2. Reset patient provider
+    patient_provider.reset_with_patients(
+        patient_dicts=[p.model_dump() for p in request.patients]
+    )
+
+    # 3. Clear call log history
+    call_log_provider.reset()
+
+    # 4. Update dispatcher config and restart
+    dispatcher.update_config(
+        poll_interval=request.dispatcher.poll_interval,
+        dispatch_timeout=request.dispatcher.dispatch_timeout,
+        max_attempts=request.dispatcher.max_attempts,
+        min_hours_between=request.dispatcher.min_hours_between,
+    )
+    dispatcher.restart()
+
+    # 5. Return new state
+    return {
+        "status": "ok",
+        "queue_state": queue_provider.get_state().to_dict(),
+        "patient_count": len(patient_provider.get_all_patients()),
+        "dispatcher_status": dispatcher.get_status(),
+    }
 
 
 @router.get("/config/check")

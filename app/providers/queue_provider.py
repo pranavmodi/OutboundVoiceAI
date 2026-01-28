@@ -120,6 +120,22 @@ class MockQueueProvider:
         self._ami_connected = True
         self.poll()
 
+    def reset_with_config(self, queues_config: list[dict], ami_connected: bool):
+        """Reset queue state from simulation config."""
+        self._state.queues = [
+            QueueInfo(
+                queue_name=q["queue_name"],
+                calls_waiting=q.get("calls_waiting", 0),
+                oldest_wait_seconds=q.get("oldest_wait_seconds", 0),
+                agents_available=q.get("agents_available", 1),
+                agents_logged_in=q.get("agents_logged_in", 1),
+            )
+            for q in queues_config
+        ]
+        self._ami_connected = ami_connected
+        self._stable_polls = 0
+        self.poll()
+
     def add_queue(self, queue_name: str, agents_available: int = 1, agents_logged_in: int = 1):
         """Add a new queue."""
         self._state.queues.append(

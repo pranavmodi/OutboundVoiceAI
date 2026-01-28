@@ -175,6 +175,31 @@ class MockPatientProvider:
         """Remove a patient from the queue."""
         self._patients.pop(patient_id, None)
 
+    def reset_with_patients(self, patient_dicts: list[dict]):
+        """Reset patients from simulation config."""
+        self._patients.clear()
+        now = datetime.now()
+        for i, pd in enumerate(patient_dicts, start=1):
+            lang_str = pd.get("language", "en")
+            try:
+                lang = Language(lang_str)
+            except ValueError:
+                lang = Language.ENGLISH
+            patient = Patient(
+                patient_id=f"SIM{i:03d}",
+                name=pd["name"],
+                phone=pd["phone"],
+                language=lang,
+                order_id=f"ORD-SIM{i:03d}",
+                order_created=now - timedelta(days=1),
+                has_abandoned_before=pd.get("has_abandoned_before", False),
+                has_called_in_before=pd.get("has_called_in_before", False),
+                ai_called_before=pd.get("ai_called_before", False),
+                attempt_count=pd.get("attempt_count", 0),
+                due_by=now + timedelta(days=2),
+            )
+            self._patients[patient.patient_id] = patient
+
     def reset_to_sample_data(self):
         """Reset to initial sample data."""
         self._patients.clear()

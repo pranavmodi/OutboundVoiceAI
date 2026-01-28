@@ -20,8 +20,10 @@ from app.providers import (
 
 logger = logging.getLogger(__name__)
 
-POLL_INTERVAL_SECONDS = 10
-DISPATCH_TIMEOUT_SECONDS = 30
+DEFAULT_POLL_INTERVAL_SECONDS = 10
+DEFAULT_DISPATCH_TIMEOUT_SECONDS = 30
+DEFAULT_MAX_ATTEMPTS = 3
+DEFAULT_MIN_HOURS_BETWEEN = 6
 DECISION_LOG_MAX = 100
 
 
@@ -42,6 +44,11 @@ class AutoCallDispatcher:
         self._dispatched_at: Optional[float] = None
         self._dispatched_patient_id: Optional[str] = None
         self._decision_log: deque = deque(maxlen=DECISION_LOG_MAX)
+        # Configurable parameters
+        self.poll_interval: int = DEFAULT_POLL_INTERVAL_SECONDS
+        self.dispatch_timeout: int = DEFAULT_DISPATCH_TIMEOUT_SECONDS
+        self.max_attempts: int = DEFAULT_MAX_ATTEMPTS
+        self.min_hours_between: int = DEFAULT_MIN_HOURS_BETWEEN
 
     @property
     def state(self) -> DispatcherState:
@@ -67,12 +74,28 @@ class AutoCallDispatcher:
         logger.info("Dispatcher stopped")
         self._log_decision("stopped", "Dispatcher stopped")
 
+    def update_config(self, poll_interval: int, dispatch_timeout: int,
+                       max_attempts: int, min_hours_between: int):
+        """Update dispatcher configuration."""
+        self.poll_interval = poll_interval
+        self.dispatch_timeout = dispatch_timeout
+        self.max_attempts = max_attempts
+        self.min_hours_between = min_hours_between
+        self._log_decision("config_updated",
+                           f"Config updated: poll={poll_interval}s, timeout={dispatch_timeout}s, "
+                           f"max_attempts={max_attempts}, min_hours={min_hours_between}")
+
+    def restart(self):
+        """Restart the dispatcher (stop + start)."""
+        self.stop()
+        self.start()
+
     async def _run_loop(self):
-        """Main polling loop — runs every POLL_INTERVAL_SECONDS."""
+        """Main polling loop — runs every poll_interval seconds."""
         try:
             while True:
                 await self._tick()
-                await asyncio.sleep(POLL_INTERVAL_SECONDS)
+                await asyncio.sleep(self.poll_interval)
         except asyncio.CancelledError:
             logger.info("Dispatcher loop cancelled")
         except Exception as e:
@@ -94,10 +117,10 @@ class AutoCallDispatcher:
         if self._state == DispatcherState.DISPATCHED:
             if self._dispatched_at is not None:
                 elapsed = asyncio.get_event_loop().time() - self._dispatched_at
-                if elapsed > DISPATCH_TIMEOUT_SECONDS:
+                if elapsed > self.dispatch_timeout:
                     tick_decision = self._log_decision(
                         "dispatch_timeout",
-                        f"Dispatch timed out after {DISPATCH_TIMEOUT_SECONDS}s "
+                        f"Dispatch timed out after {self.dispatch_timeout}s "
                         f"for patient {self._dispatched_patient_id}")
                     self._state = DispatcherState.IDLE
                     self._dispatched_at = None
@@ -142,7 +165,9 @@ class AutoCallDispatcher:
             else:
                 # 7. Get next candidate patient
                 patient_provider = get_patient_provider()
-                candidate = patient_provider.get_next_candidate(max_attempts=3, min_hours_between=6)
+                candidate = patient_provider.get_next_candidate(
+                    max_attempts=self.max_attempts,
+                    min_hours_between=self.min_hours_between)
 
                 if candidate is None:
                     tick_decision = self._log_decision("no_candidate", "No eligible patients in queue")
@@ -216,6 +241,12 @@ class AutoCallDispatcher:
             "dispatched_patient_id": self._dispatched_patient_id,
             "running": self._task is not None and not self._task.done(),
             "recent_decisions": list(self._decision_log)[-5:],
+            "config": {
+                "poll_interval": self.poll_interval,
+                "dispatch_timeout": self.dispatch_timeout,
+                "max_attempts": self.max_attempts,
+                "min_hours_between": self.min_hours_between,
+            },
         }
 
     def get_decision_log(self) -> list:

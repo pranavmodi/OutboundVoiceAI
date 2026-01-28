@@ -98,6 +98,11 @@ class CallLogProvider:
         """Clear the active call reference."""
         self._active_call = None
 
+    def reset(self):
+        """Clear all call logs and active call."""
+        self._logs.clear()
+        self._active_call = None
+
     def has_active_call(self) -> bool:
         """Check if there's an active call."""
         return self._active_call is not None

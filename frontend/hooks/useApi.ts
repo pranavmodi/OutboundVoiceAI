@@ -142,6 +142,23 @@ export function useApi() {
     }
   }, []);
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const applySimulation = useCallback(async (config: any): Promise<any> => {
+    setLoading(true);
+    setError(null);
+    try {
+      return await fetchApi("/api/simulation/apply", {
+        method: "POST",
+        body: JSON.stringify(config),
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   // Settings API methods
   const getSettings = useCallback(async (): Promise<SystemSettings | null> => {
     try {
@@ -223,6 +240,7 @@ export function useApi() {
     simulateAmiFailure,
     simulateAmiRecovery,
     resetPatients,
+    applySimulation,
     getSettings,
     updateSettings,
     setSystemEnabled,
@@ -243,6 +261,7 @@ export function useApi() {
     simulateAmiFailure,
     simulateAmiRecovery,
     resetPatients,
+    applySimulation,
     getSettings,
     updateSettings,
     setSystemEnabled,

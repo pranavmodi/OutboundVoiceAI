@@ -179,31 +179,18 @@ export default function Dashboard() {
     }
   }, [audio]);
 
-  // Queue simulation handlers
-  const handleSimulateBusy = useCallback(async () => {
-    const state = await api.simulateBusyQueue();
-    if (state) setQueueState(state);
-  }, [api]);
-
-  const handleSimulateQuiet = useCallback(async () => {
-    const state = await api.simulateQuietQueue();
-    if (state) setQueueState(state);
-  }, [api]);
-
-  const handleSimulateAmiFailure = useCallback(async () => {
-    const state = await api.simulateAmiFailure();
-    if (state) setQueueState(state);
-  }, [api]);
-
-  const handleSimulateAmiRecovery = useCallback(async () => {
-    const state = await api.simulateAmiRecovery();
-    if (state) setQueueState(state);
-  }, [api]);
-
-  const handleResetPatients = useCallback(async () => {
-    await api.resetPatients();
-    const patientList = await api.getOutboundQueue();
-    setPatients(patientList);
+  // Simulation apply handler
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const handleApplySimulation = useCallback(async (config: any) => {
+    const result = await api.applySimulation(config);
+    if (result) {
+      if (result.queue_state) setQueueState(result.queue_state);
+      // Refresh patients and calls after reset
+      const patientList = await api.getOutboundQueue();
+      setPatients(patientList);
+      const callList = await api.getCalls();
+      setCalls(callList);
+    }
   }, [api]);
 
   // Settings handlers
@@ -340,13 +327,7 @@ export default function Dashboard() {
           {/* Simulation Tab */}
           <TabsContent value="simulation">
             <SimulationConsole
-              queueState={queueState}
-              patients={patients}
-              onSimulateBusy={handleSimulateBusy}
-              onSimulateQuiet={handleSimulateQuiet}
-              onSimulateAmiFailure={handleSimulateAmiFailure}
-              onSimulateAmiRecovery={handleSimulateAmiRecovery}
-              onResetPatients={handleResetPatients}
+              onApplySimulation={handleApplySimulation}
             />
           </TabsContent>
 
