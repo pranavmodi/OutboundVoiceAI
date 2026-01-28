@@ -1,4 +1,5 @@
 import os
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Query, HTTPException, Form
 from fastapi.responses import PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -11,9 +12,20 @@ from twilio.base.exceptions import TwilioRestException
 from .tts import generate_tts_mp3, generate_ai_audio, generate_ai_response_audio
 from .llm import generate_ai_reply
 from .twilio_call import place_outbound_call
-from .api import dashboard_router, websocket_router, settings_router
+from .api import dashboard_router, websocket_router, settings_router, dispatcher_router
+from .services.dispatcher import get_dispatcher
 
-app = FastAPI(title="AI Outbound Voice Orchestrator", version="0.2.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: start the dispatcher
+    get_dispatcher().start()
+    yield
+    # Shutdown: stop the dispatcher
+    get_dispatcher().stop()
+
+
+app = FastAPI(title="AI Outbound Voice Orchestrator", version="0.2.0", lifespan=lifespan)
 
 # CORS middleware for frontend
 # - Configure CORS_ORIGINS env var (comma-separated) to specify explicit origins
@@ -37,24 +49,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Fallback OPTIONS handler to ensure permissive preflight responses
-@app.options("/{rest_of_path:path}")
-def options_fallback(rest_of_path: str, request: Request):
-    origin = request.headers.get("origin")
-    acr_headers = request.headers.get("access-control-request-headers")
-    response = Response(status_code=204)
-    if origin:
-        response.headers["Access-Control-Allow-Origin"] = origin
-        response.headers["Vary"] = "Origin"
-    response.headers["Access-Control-Allow-Methods"] = "*"
-    response.headers["Access-Control-Allow-Headers"] = acr_headers or "*"
-    response.headers["Access-Control-Max-Age"] = "600"
-    return response
-
 # Include API routers
 app.include_router(dashboard_router)
 app.include_router(websocket_router)
 app.include_router(settings_router)
+app.include_router(dispatcher_router)
 
 # Legacy static (kept for compatibility)
 STATIC_DIR = Path("static")

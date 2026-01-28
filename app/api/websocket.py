@@ -6,6 +6,7 @@ from typing import Set
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.services.call_orchestrator import get_orchestrator
+from app.services.dispatcher import get_dispatcher
 from app.providers import get_queue_provider, get_call_log_provider
 from app.models import CallOutcome
 
@@ -90,6 +91,7 @@ async def voice_websocket(websocket: WebSocket):
             "type": "call_started",
             "call": call.to_dict(),
         })
+        get_dispatcher().notify_call_started(call.patient_id)
 
     async def on_call_ended(call):
         await websocket.send_json({
@@ -100,6 +102,7 @@ async def voice_websocket(websocket: WebSocket):
             "type": "call_ended",
             "call": call.to_dict(),
         })
+        get_dispatcher().notify_call_ended()
 
     async def on_transcript_update(speaker, text):
         await websocket.send_json({

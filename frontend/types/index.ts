@@ -89,7 +89,10 @@ export type WSMessageType =
   | "status_update"
   | "error"
   | "ping"
-  | "pong";
+  | "pong"
+  | "queue_update"
+  | "dispatch_call"
+  | "dispatch_ack";
 
 export interface WSMessage {
   type: WSMessageType;

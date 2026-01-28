@@ -6,12 +6,19 @@ import type { WSMessage, QueueState, CallLog, Statistics } from "@/types";
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const WS_BASE = API_BASE.replace(/^http/, "ws");
 
+interface DispatchedPatient {
+  patient_id: string;
+  patient_name: string;
+}
+
 interface UseDashboardWSReturn {
   connected: boolean;
   queueState: QueueState | null;
   activeCall: CallLog | null;
   statistics: Statistics | null;
   lastStatus: string | null;
+  dispatchedPatient: DispatchedPatient | null;
+  clearDispatch: () => void;
 }
 
 export function useDashboardWS(): UseDashboardWSReturn {
@@ -20,8 +27,13 @@ export function useDashboardWS(): UseDashboardWSReturn {
   const [activeCall, setActiveCall] = useState<CallLog | null>(null);
   const [statistics, setStatistics] = useState<Statistics | null>(null);
   const [lastStatus, setLastStatus] = useState<string | null>(null);
+  const [dispatchedPatient, setDispatchedPatient] = useState<DispatchedPatient | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const clearDispatch = useCallback(() => {
+    setDispatchedPatient(null);
+  }, []);
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
@@ -88,6 +100,20 @@ export function useDashboardWS(): UseDashboardWSReturn {
             }
             break;
 
+          case "queue_update":
+            setQueueState(message.queue_state as QueueState);
+            break;
+
+          case "dispatch_call":
+            console.log("Received dispatch_call:", message.patient_id, message.patient_name);
+            setDispatchedPatient({
+              patient_id: message.patient_id as string,
+              patient_name: message.patient_name as string,
+            });
+            // Send ack back
+            ws.send(JSON.stringify({ type: "dispatch_ack", patient_id: message.patient_id }));
+            break;
+
           case "ping":
             ws.send(JSON.stringify({ type: "pong" }));
             break;
@@ -111,7 +137,7 @@ export function useDashboardWS(): UseDashboardWSReturn {
     };
   }, [connect]);
 
-  return { connected, queueState, activeCall, statistics, lastStatus };
+  return { connected, queueState, activeCall, statistics, lastStatus, dispatchedPatient, clearDispatch };
 }
 
 interface UseVoiceWSReturn {

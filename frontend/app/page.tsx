@@ -11,7 +11,7 @@ import {
 } from "@/components/dashboard";
 import { SimulationConsole, OperatorConsole } from "@/components/console";
 import { useApi } from "@/hooks/useApi";
-import { useVoiceWS } from "@/hooks/useWebSocket";
+import { useDashboardWS, useVoiceWS } from "@/hooks/useWebSocket";
 import { useAudio } from "@/hooks/useAudio";
 import { Phone, Wifi, LayoutDashboard, Terminal, Settings } from "lucide-react";
 import type { Patient, CallLog, QueueState, SystemSettings } from "@/types";
@@ -19,6 +19,9 @@ import type { Patient, CallLog, QueueState, SystemSettings } from "@/types";
 export default function Dashboard() {
   // API hooks
   const api = useApi();
+
+  // Dashboard WebSocket (receives queue_update + dispatch_call from backend)
+  const dashboard = useDashboardWS();
 
   // Voice WebSocket
   const voice = useVoiceWS();
@@ -67,15 +70,10 @@ export default function Dashboard() {
     loadData();
   }, [isLoaded, api]);
 
-  // Poll queue state every 10 seconds
+  // Sync queue state from dashboard WebSocket (replaces REST polling)
   useEffect(() => {
-    const interval = setInterval(async () => {
-      const state = await api.getQueueState();
-      if (state) setQueueState(state);
-    }, 10000);
-
-    return () => clearInterval(interval);
-  }, []);
+    if (dashboard.queueState) setQueueState(dashboard.queueState);
+  }, [dashboard.queueState]);
 
   // Store refs to always have latest functions
   const voiceRef = useRef(voice);
@@ -129,55 +127,28 @@ export default function Dashboard() {
     voice.startCall(patientId);
   }, [voice, audio, patients]);
 
-  // Chain next call automatically when the current call ends
+  // Stop recording when call ends
   const prevActiveRef = useRef(false);
-  const chainingRef = useRef(false);
   useEffect(() => {
     const wasActive = prevActiveRef.current;
     const nowActive = voice.isCallActive;
     prevActiveRef.current = nowActive;
     if (wasActive && !nowActive) {
-      // Call ended -> stop recording and consider dialing next patient
       audio.stopRecording();
-      if (chainingRef.current) return;
-      chainingRef.current = true;
-      (async () => {
-        // Refresh queue, status, and settings before deciding
-        const [queue, status, newSettings] = await Promise.all([
-          api.getOutboundQueue(),
-          api.getStatus(),
-          api.getSettings(),
-        ]);
-        if (queue) setPatients(queue);
-        if (status) setQueueState(status.queue_state);
-        if (newSettings) setSettings(newSettings);
-
-        const outboundAllowed =
-          (status?.queue_state?.outbound_allowed) ?? (queueState?.outbound_allowed ?? false);
-        const canMakeCalls =
-          (newSettings?.can_make_calls) ?? (settings?.can_make_calls ?? true);
-
-        if (canMakeCalls && outboundAllowed && (queue?.length ?? 0) > 0) {
-          // Short pause between calls
-          await new Promise((r) => setTimeout(r, 300));
-          handleCallPatient(queue![0].patient_id);
-        }
-        chainingRef.current = false;
-      })();
     }
-  }, [voice.isCallActive, api, audio, handleCallPatient, queueState, settings]);
+  }, [voice.isCallActive, audio]);
 
-  // Auto-start first call on load if allowed
-  const autoCallRef = useRef(false);
+  // React to backend dispatch_call commands
   useEffect(() => {
-    if (!isLoaded || autoCallRef.current) return;
-    const outboundAllowed = queueState?.outbound_allowed ?? false;
-    if (settings?.can_make_calls && outboundAllowed && patients.length > 0) {
-      autoCallRef.current = true;
-      // Start call with the top-priority patient
-      handleCallPatient(patients[0].patient_id);
+    if (!dashboard.dispatchedPatient) return;
+    if (voice.isCallActive) {
+      dashboard.clearDispatch();
+      return;
     }
-  }, [isLoaded, settings, queueState, patients, handleCallPatient]);
+    const { patient_id } = dashboard.dispatchedPatient;
+    dashboard.clearDispatch();
+    handleCallPatient(patient_id);
+  }, [dashboard.dispatchedPatient, dashboard.clearDispatch, voice.isCallActive, handleCallPatient]);
 
   // Handle call end
   const handleEndCall = useCallback(() => {
