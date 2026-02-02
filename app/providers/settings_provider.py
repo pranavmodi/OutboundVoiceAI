@@ -37,11 +37,12 @@ def _row_to_settings(row: SystemSettingsRow) -> SystemSettings:
     )
     settings.queue_thresholds = QueueThresholds(
         calls_waiting_threshold=qt.get("calls_waiting_threshold", 1),
-        oldest_wait_threshold_seconds=qt.get("oldest_wait_threshold_seconds", 30),
+        holdtime_threshold_seconds=qt.get("holdtime_threshold_seconds", 30),
         stable_polls_required=qt.get("stable_polls_required", 3),
     )
     settings.allow_live_calls = row.allow_live_calls if row.allow_live_calls is not None else False
     settings.allowed_phones = row.allowed_phones if row.allowed_phones is not None else []
+    settings.queue_source = row.queue_source if row.queue_source is not None else "simulation"
     return settings
 
 
@@ -72,11 +73,12 @@ class SettingsProvider:
             }
             row.queue_thresholds = {
                 "calls_waiting_threshold": settings.queue_thresholds.calls_waiting_threshold,
-                "oldest_wait_threshold_seconds": settings.queue_thresholds.oldest_wait_threshold_seconds,
+                "holdtime_threshold_seconds": settings.queue_thresholds.holdtime_threshold_seconds,
                 "stable_polls_required": settings.queue_thresholds.stable_polls_required,
             }
             row.allow_live_calls = settings.allow_live_calls
             row.allowed_phones = settings.allowed_phones
+            row.queue_source = settings.queue_source
             await session.commit()
             return settings
 
@@ -101,7 +103,7 @@ class SettingsProvider:
                     business_hours={},
                     queue_thresholds={
                         "calls_waiting_threshold": 1,
-                        "oldest_wait_threshold_seconds": 30,
+                        "holdtime_threshold_seconds": 30,
                         "stable_polls_required": 3,
                     },
                 )
@@ -133,7 +135,7 @@ class SettingsProvider:
                 session.add(row)
             row.queue_thresholds = {
                 "calls_waiting_threshold": thresholds.calls_waiting_threshold,
-                "oldest_wait_threshold_seconds": thresholds.oldest_wait_threshold_seconds,
+                "holdtime_threshold_seconds": thresholds.holdtime_threshold_seconds,
                 "stable_polls_required": thresholds.stable_polls_required,
             }
             await session.commit()
@@ -188,6 +190,17 @@ class SettingsProvider:
         if not await self.is_within_business_hours():
             return False
         return True
+
+    async def set_queue_source(self, source: str) -> SystemSettings:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(SystemSettingsRow).where(SystemSettingsRow.id == 1))
+            row = result.scalar_one_or_none()
+            if row is None:
+                row = SystemSettingsRow(id=1, business_hours={}, queue_thresholds={})
+                session.add(row)
+            row.queue_source = source
+            await session.commit()
+            return _row_to_settings(row)
 
     async def get_thresholds(self) -> QueueThresholds:
         settings = await self.get_settings()

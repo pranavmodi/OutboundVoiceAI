@@ -72,7 +72,7 @@ export function QueueStatusCard({ queueState }: QueueStatusCardProps) {
             </div>
             <p className="text-2xl font-semibold tabular-nums">{queueState.global_agents_available}</p>
             <p className="text-xs text-muted-foreground">
-              of {queueState.global_agents_logged_in} logged in
+              across all queues
             </p>
           </div>
           <div className="rounded-lg bg-muted/50 p-3 space-y-1">
@@ -85,9 +85,9 @@ export function QueueStatusCard({ queueState }: QueueStatusCardProps) {
           <div className="rounded-lg bg-muted/50 p-3 space-y-1">
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <Clock className="h-3.5 w-3.5" />
-              Oldest Wait
+              Max Holdtime
             </div>
-            <p className="text-2xl font-semibold tabular-nums">{queueState.global_oldest_wait_seconds}s</p>
+            <p className="text-2xl font-semibold tabular-nums">{queueState.global_max_holdtime}s</p>
           </div>
           <div className="rounded-lg bg-muted/50 p-3 space-y-1">
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -140,13 +140,13 @@ export function QueueStatusCard({ queueState }: QueueStatusCardProps) {
           <div className="space-y-1.5">
             {queueState.queues.map((queue) => (
               <div
-                key={queue.queue_name}
+                key={queue.Queue}
                 className="flex items-center justify-between rounded-md bg-muted/40 px-3 py-2 text-sm"
               >
-                <span className="font-medium text-sm">{queue.queue_name}</span>
+                <span className="font-medium text-sm">{queue.Queue}</span>
                 <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                  <span>{queue.agents_available} avail</span>
-                  <span>{queue.calls_waiting} waiting</span>
+                  <span>{queue.AvailableAgents} avail</span>
+                  <span>{queue.Calls} waiting</span>
                 </div>
               </div>
             ))}

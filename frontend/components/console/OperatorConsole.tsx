@@ -27,6 +27,7 @@ import {
   Monitor,
   Plus,
   Trash2,
+  Radio,
 } from "lucide-react";
 import type { SystemSettings, BusinessHours, QueueThresholds } from "@/types";
 
@@ -40,6 +41,7 @@ interface OperatorConsoleProps {
   onUpdateQueueThresholds: (thresholds: QueueThresholds) => Promise<void>;
   onSetAllowLiveCalls: (allowed: boolean) => Promise<void>;
   onUpdateAllowedPhones: (phones: string[]) => Promise<void>;
+  onSetQueueSource: (source: string) => Promise<void>;
 }
 
 export function OperatorConsole({
@@ -52,6 +54,7 @@ export function OperatorConsole({
   onUpdateQueueThresholds,
   onSetAllowLiveCalls,
   onUpdateAllowedPhones,
+  onSetQueueSource,
 }: OperatorConsoleProps) {
   const [businessHoursForm, setBusinessHoursForm] = useState<BusinessHours>({
     start_time: "08:00",
@@ -62,7 +65,7 @@ export function OperatorConsole({
 
   const [thresholdsForm, setThresholdsForm] = useState<QueueThresholds>({
     calls_waiting_threshold: 1,
-    oldest_wait_threshold_seconds: 30,
+    holdtime_threshold_seconds: 30,
     stable_polls_required: 3,
   });
 
@@ -185,6 +188,45 @@ export function OperatorConsole({
             ? "Audio streams between your browser and OpenAI. You speak as the patient through your microphone."
             : "Twilio dials the patient's phone number. Audio streams between the phone line and OpenAI. The browser still shows transcripts and controls."}
         </p>
+      </div>
+
+      <Separator />
+
+      {/* Queue Source */}
+      <div className="space-y-3">
+        <div className="flex items-center gap-2">
+          <Radio className="h-4 w-4 text-muted-foreground" />
+          <h4 className="text-sm font-medium">Queue Source</h4>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Choose where queue data comes from. Simulation uses a mock provider you can control manually. Live connects to the FreePBX queue status endpoint for real-time data.
+        </p>
+        <div className="flex items-center gap-4">
+          <Select value={settings.queue_source} onValueChange={onSetQueueSource}>
+            <SelectTrigger className="w-48">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="simulation">
+                <span className="flex items-center gap-2">
+                  <Monitor className="h-4 w-4" />
+                  Simulation
+                </span>
+              </SelectItem>
+              <SelectItem value="live">
+                <span className="flex items-center gap-2">
+                  <Radio className="h-4 w-4" />
+                  Live FreePBX
+                </span>
+              </SelectItem>
+            </SelectContent>
+          </Select>
+          {settings.queue_source === "live" && (
+            <Badge variant="outline" className="text-blue-600 border-blue-600">
+              Live data
+            </Badge>
+          )}
+        </div>
       </div>
 
       <Separator />
@@ -377,11 +419,11 @@ export function OperatorConsole({
                 id="oldest-wait"
                 type="number"
                 min="0"
-                value={thresholdsForm.oldest_wait_threshold_seconds}
+                value={thresholdsForm.holdtime_threshold_seconds}
                 onChange={(e) =>
                   setThresholdsForm({
                     ...thresholdsForm,
-                    oldest_wait_threshold_seconds: parseInt(e.target.value) || 0,
+                    holdtime_threshold_seconds: parseInt(e.target.value) || 0,
                   })
                 }
                 className="h-9"

@@ -22,8 +22,12 @@ class BusinessHoursRequest(BaseModel):
 
 class QueueThresholdsRequest(BaseModel):
     calls_waiting_threshold: int
-    oldest_wait_threshold_seconds: int
+    holdtime_threshold_seconds: int
     stable_polls_required: int
+
+
+class QueueSourceRequest(BaseModel):
+    source: str
 
 
 class SystemSettingsRequest(BaseModel):
@@ -32,6 +36,7 @@ class SystemSettingsRequest(BaseModel):
     queue_thresholds: QueueThresholdsRequest
     allow_live_calls: bool = False
     allowed_phones: List[str] = []
+    queue_source: str = "simulation"
 
 
 class SystemEnabledRequest(BaseModel):
@@ -52,6 +57,7 @@ class SystemSettingsResponse(BaseModel):
     queue_thresholds: QueueThresholdsRequest
     allow_live_calls: bool
     allowed_phones: List[str]
+    queue_source: str
     can_make_calls: bool
     is_within_business_hours: bool
 
@@ -69,11 +75,12 @@ async def settings_to_response(provider) -> SystemSettingsResponse:
         ),
         queue_thresholds=QueueThresholdsRequest(
             calls_waiting_threshold=settings.queue_thresholds.calls_waiting_threshold,
-            oldest_wait_threshold_seconds=settings.queue_thresholds.oldest_wait_threshold_seconds,
+            holdtime_threshold_seconds=settings.queue_thresholds.holdtime_threshold_seconds,
             stable_polls_required=settings.queue_thresholds.stable_polls_required,
         ),
         allow_live_calls=settings.allow_live_calls,
         allowed_phones=settings.allowed_phones,
+        queue_source=settings.queue_source,
         can_make_calls=await provider.can_make_outbound_call(),
         is_within_business_hours=await provider.is_within_business_hours(),
     )
@@ -101,11 +108,12 @@ async def update_settings(request: SystemSettingsRequest):
         ),
         queue_thresholds=QueueThresholds(
             calls_waiting_threshold=request.queue_thresholds.calls_waiting_threshold,
-            oldest_wait_threshold_seconds=request.queue_thresholds.oldest_wait_threshold_seconds,
+            holdtime_threshold_seconds=request.queue_thresholds.holdtime_threshold_seconds,
             stable_polls_required=request.queue_thresholds.stable_polls_required,
         ),
         allow_live_calls=request.allow_live_calls,
         allowed_phones=request.allowed_phones,
+        queue_source=request.queue_source,
     )
 
     await provider.update_settings(settings)
@@ -143,7 +151,7 @@ async def update_queue_thresholds(request: QueueThresholdsRequest):
 
     thresholds = QueueThresholds(
         calls_waiting_threshold=request.calls_waiting_threshold,
-        oldest_wait_threshold_seconds=request.oldest_wait_threshold_seconds,
+        holdtime_threshold_seconds=request.holdtime_threshold_seconds,
         stable_polls_required=request.stable_polls_required,
     )
 
@@ -164,6 +172,20 @@ async def update_allowed_phones(request: AllowedPhonesRequest):
     """Update the phone number allowlist for live calls."""
     provider = get_settings_provider()
     await provider.update_allowed_phones(request.phones)
+    return await settings_to_response(provider)
+
+
+@router.put("/queue-source", response_model=SystemSettingsResponse)
+async def set_queue_source(request: QueueSourceRequest):
+    """Switch queue data source between simulation and live FreePBX."""
+    from app.providers import set_queue_source as _set_queue_source
+
+    if request.source not in ("simulation", "live"):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="source must be 'simulation' or 'live'")
+    provider = get_settings_provider()
+    await provider.set_queue_source(request.source)
+    _set_queue_source(request.source)
     return await settings_to_response(provider)
 
 

@@ -79,6 +79,7 @@ class SystemSettingsRow(Base):
     queue_thresholds: Mapped[dict] = mapped_column(JSONB, nullable=False)
     allow_live_calls: Mapped[bool] = mapped_column(Boolean, default=False)
     allowed_phones: Mapped[list] = mapped_column(JSONB, default=list)
+    queue_source: Mapped[str] = mapped_column(String(20), default="simulation")
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=_utcnow, onupdate=_utcnow)
 
     __table_args__ = (
@@ -107,9 +108,8 @@ class QueueStateSnapshotRow(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     timestamp: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=_utcnow)
     global_calls_waiting: Mapped[int] = mapped_column(Integer, default=0)
-    global_oldest_wait_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    global_max_holdtime: Mapped[int] = mapped_column(Integer, default=0)
     global_agents_available: Mapped[int] = mapped_column(Integer, default=0)
-    global_agents_logged_in: Mapped[int] = mapped_column(Integer, default=0)
     outbound_allowed: Mapped[bool] = mapped_column(Boolean, default=False)
     stable_polls_count: Mapped[int] = mapped_column(Integer, default=0)
     ami_connected: Mapped[bool] = mapped_column(Boolean, default=True)

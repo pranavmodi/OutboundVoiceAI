@@ -25,11 +25,12 @@ async def seed_default_settings(session: AsyncSession):
         },
         queue_thresholds={
             "calls_waiting_threshold": 1,
-            "oldest_wait_threshold_seconds": 30,
+            "holdtime_threshold_seconds": 30,
             "stable_polls_required": 3,
         },
         allow_live_calls=False,
         allowed_phones=[],
+        queue_source="simulation",
     )
     session.add(row)
     logger.info("Seeded default system settings")
@@ -115,10 +116,10 @@ async def seed_builtin_scenarios(session: AsyncSession):
             is_builtin=True,
             ami_connected=True,
             queues=[
-                {"queue_name": "scheduling_en", "calls_waiting": 0, "oldest_wait_seconds": 0,
-                 "agents_available": 2, "agents_logged_in": 3},
-                {"queue_name": "scheduling_es", "calls_waiting": 0, "oldest_wait_seconds": 0,
-                 "agents_available": 1, "agents_logged_in": 1},
+                {"Queue": "scheduling_en", "Calls": 0, "Holdtime": 0,
+                 "AvailableAgents": 2},
+                {"Queue": "scheduling_es", "Calls": 0, "Holdtime": 0,
+                 "AvailableAgents": 1},
             ],
             patients=[
                 {"name": "Jane Doe", "phone": "555-1001", "language": "en",
@@ -135,10 +136,10 @@ async def seed_builtin_scenarios(session: AsyncSession):
             is_builtin=True,
             ami_connected=True,
             queues=[
-                {"queue_name": "scheduling_en", "calls_waiting": 5, "oldest_wait_seconds": 120,
-                 "agents_available": 0, "agents_logged_in": 3},
-                {"queue_name": "intake", "calls_waiting": 3, "oldest_wait_seconds": 60,
-                 "agents_available": 0, "agents_logged_in": 2},
+                {"Queue": "scheduling_en", "Calls": 5, "Holdtime": 120,
+                 "AvailableAgents": 0},
+                {"Queue": "intake", "Calls": 3, "Holdtime": 60,
+                 "AvailableAgents": 0},
             ],
             patients=[
                 {"name": "Test Patient", "phone": "555-2001", "language": "en"},
@@ -153,8 +154,8 @@ async def seed_builtin_scenarios(session: AsyncSession):
             is_builtin=True,
             ami_connected=False,
             queues=[
-                {"queue_name": "scheduling_en", "calls_waiting": 0, "oldest_wait_seconds": 0,
-                 "agents_available": 0, "agents_logged_in": 0},
+                {"Queue": "scheduling_en", "Calls": 0, "Holdtime": 0,
+                 "AvailableAgents": 0},
             ],
             patients=[
                 {"name": "Test Patient", "phone": "555-3001", "language": "en"},

@@ -16,7 +16,7 @@ class BusinessHours:
 class QueueThresholds:
     """Queue gating thresholds for outbound calls."""
     calls_waiting_threshold: int = 1
-    oldest_wait_threshold_seconds: int = 30
+    holdtime_threshold_seconds: int = 30
     stable_polls_required: int = 3
 
 
@@ -28,3 +28,4 @@ class SystemSettings:
     queue_thresholds: QueueThresholds = field(default_factory=QueueThresholds)
     allow_live_calls: bool = False
     allowed_phones: List[str] = field(default_factory=list)
+    queue_source: str = "simulation"

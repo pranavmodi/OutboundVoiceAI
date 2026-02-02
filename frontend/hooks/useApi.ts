@@ -241,6 +241,18 @@ export function useApi() {
     }
   }, []);
 
+  const setQueueSource = useCallback(async (source: string): Promise<SystemSettings | null> => {
+    try {
+      return await fetchApi<SystemSettings>("/api/settings/queue-source", {
+        method: "PUT",
+        body: JSON.stringify({ source }),
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
   const deleteAllCalls = useCallback(async (): Promise<boolean> => {
     try {
       await fetchApi("/api/calls", { method: "DELETE" });
@@ -292,6 +304,7 @@ export function useApi() {
     updateQueueThresholds,
     setAllowLiveCalls,
     updateAllowedPhones,
+    setQueueSource,
     getTimezones,
     deleteAllCalls,
     deleteCustomScenarios,
@@ -317,6 +330,7 @@ export function useApi() {
     updateQueueThresholds,
     setAllowLiveCalls,
     updateAllowedPhones,
+    setQueueSource,
     getTimezones,
     deleteAllCalls,
     deleteCustomScenarios,

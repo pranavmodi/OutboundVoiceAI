@@ -26,11 +26,20 @@ import {
 // ---------- Types ----------
 
 interface QueueRow {
-  queue_name: string;
-  calls_waiting: number;
-  oldest_wait_seconds: number;
-  agents_available: number;
-  agents_logged_in: number;
+  Event: string;
+  Queue: string;
+  Max: number;
+  Strategy: string;
+  Calls: number;
+  Holdtime: number;
+  TalkTime: number;
+  Completed: number;
+  Abandoned: number;
+  ServiceLevel: number;
+  ServicelevelPerf: number;
+  ServicelevelPerf2: number;
+  Weight: number;
+  AvailableAgents: number;
 }
 
 interface PatientRow {
@@ -69,6 +78,17 @@ interface Scenario {
   dispatcher: DispatcherSettings;
 }
 
+// ---------- Helpers ----------
+
+function mkQueue(Queue: string, overrides: Partial<QueueRow> = {}): QueueRow {
+  return {
+    Event: "QueueParams", Queue, Max: 0, Strategy: "ringall",
+    Calls: 0, Holdtime: 0, TalkTime: 0, Completed: 0, Abandoned: 0,
+    ServiceLevel: 135, ServicelevelPerf: 0.0, ServicelevelPerf2: 0.0,
+    Weight: 0, AvailableAgents: 0, ...overrides,
+  };
+}
+
 // ---------- Scenarios ----------
 
 const SCENARIOS: Scenario[] = [
@@ -78,7 +98,7 @@ const SCENARIOS: Scenario[] = [
     description: "One patient waiting, one agent available. Simplest scenario to trigger a single outbound call immediately.",
     amiConnected: true,
     queues: [
-      { queue_name: "scheduling_en", calls_waiting: 0, oldest_wait_seconds: 0, agents_available: 1, agents_logged_in: 1 },
+      mkQueue("scheduling_en", { AvailableAgents: 1 }),
     ],
     patients: [
       { name: "Pranav Modi", phone: "+918287149638", language: "en", has_abandoned_before: true, has_called_in_before: false, ai_called_before: false, attempt_count: 0 },
@@ -91,9 +111,9 @@ const SCENARIOS: Scenario[] = [
     description: "3 queues with agents available, 7 patients across all priority buckets. Standard dispatcher settings.",
     amiConnected: true,
     queues: [
-      { queue_name: "scheduling_en", calls_waiting: 0, oldest_wait_seconds: 0, agents_available: 2, agents_logged_in: 3 },
-      { queue_name: "scheduling_es", calls_waiting: 0, oldest_wait_seconds: 0, agents_available: 1, agents_logged_in: 1 },
-      { queue_name: "intake", calls_waiting: 0, oldest_wait_seconds: 0, agents_available: 1, agents_logged_in: 2 },
+      mkQueue("scheduling_en", { AvailableAgents: 2 }),
+      mkQueue("scheduling_es", { AvailableAgents: 1 }),
+      mkQueue("intake", { AvailableAgents: 1 }),
     ],
     patients: [
       { name: "John Smith", phone: "555-0101", language: "en", has_abandoned_before: true, has_called_in_before: false, ai_called_before: false, attempt_count: 0 },
@@ -112,9 +132,9 @@ const SCENARIOS: Scenario[] = [
     description: "All queues are overloaded with calls waiting and no agents free. Outbound should be blocked by gating conditions.",
     amiConnected: true,
     queues: [
-      { queue_name: "scheduling_en", calls_waiting: 5, oldest_wait_seconds: 120, agents_available: 0, agents_logged_in: 3 },
-      { queue_name: "scheduling_es", calls_waiting: 3, oldest_wait_seconds: 90, agents_available: 0, agents_logged_in: 1 },
-      { queue_name: "intake", calls_waiting: 4, oldest_wait_seconds: 60, agents_available: 0, agents_logged_in: 2 },
+      mkQueue("scheduling_en", { Calls: 5, Holdtime: 120, AvailableAgents: 0 }),
+      mkQueue("scheduling_es", { Calls: 3, Holdtime: 90, AvailableAgents: 0 }),
+      mkQueue("intake", { Calls: 4, Holdtime: 60, AvailableAgents: 0 }),
     ],
     patients: [
       { name: "John Smith", phone: "555-0101", language: "en", has_abandoned_before: true, has_called_in_before: false, ai_called_before: false, attempt_count: 0 },
@@ -128,7 +148,7 @@ const SCENARIOS: Scenario[] = [
     description: "AMI connection is down. Dispatcher will block all outbound calls regardless of queue or patient state.",
     amiConnected: false,
     queues: [
-      { queue_name: "scheduling_en", calls_waiting: 0, oldest_wait_seconds: 0, agents_available: 2, agents_logged_in: 3 },
+      mkQueue("scheduling_en", { AvailableAgents: 2 }),
     ],
     patients: [
       { name: "John Smith", phone: "555-0101", language: "en", has_abandoned_before: true, has_called_in_before: false, ai_called_before: false, attempt_count: 0 },
@@ -141,8 +161,8 @@ const SCENARIOS: Scenario[] = [
     description: "Three patients in different languages (EN, ES, ZH), one agent available. Tests language routing.",
     amiConnected: true,
     queues: [
-      { queue_name: "scheduling_en", calls_waiting: 0, oldest_wait_seconds: 0, agents_available: 1, agents_logged_in: 1 },
-      { queue_name: "scheduling_es", calls_waiting: 0, oldest_wait_seconds: 0, agents_available: 1, agents_logged_in: 1 },
+      mkQueue("scheduling_en", { AvailableAgents: 1 }),
+      mkQueue("scheduling_es", { AvailableAgents: 1 }),
     ],
     patients: [
       { name: "John Smith", phone: "555-0101", language: "en", has_abandoned_before: true, has_called_in_before: false, ai_called_before: false, attempt_count: 0 },
@@ -157,7 +177,7 @@ const SCENARIOS: Scenario[] = [
     description: "Two patients near their max attempt limit. One has 2/3 attempts used, the other has 3/3 (exhausted). Only the first should be eligible.",
     amiConnected: true,
     queues: [
-      { queue_name: "scheduling_en", calls_waiting: 0, oldest_wait_seconds: 0, agents_available: 1, agents_logged_in: 1 },
+      mkQueue("scheduling_en", { AvailableAgents: 1 }),
     ],
     patients: [
       { name: "Robert Johnson", phone: "555-0103", language: "en", has_abandoned_before: true, has_called_in_before: false, ai_called_before: true, attempt_count: 2 },
@@ -171,7 +191,7 @@ const SCENARIOS: Scenario[] = [
     description: "Agents available but no patients in the outbound queue. Dispatcher should tick but find no candidate.",
     amiConnected: true,
     queues: [
-      { queue_name: "scheduling_en", calls_waiting: 0, oldest_wait_seconds: 0, agents_available: 2, agents_logged_in: 3 },
+      mkQueue("scheduling_en", { AvailableAgents: 2 }),
     ],
     patients: [],
     dispatcher: { poll_interval: 5, dispatch_timeout: 30, max_attempts: 3, min_hours_between: 6 },
@@ -214,7 +234,7 @@ export function SimulationConsole({ onApplySimulation }: SimulationConsoleProps)
   };
 
   const addQueue = () => {
-    setQueues(prev => [...prev, { queue_name: "", calls_waiting: 0, oldest_wait_seconds: 0, agents_available: 1, agents_logged_in: 1 }]);
+    setQueues(prev => [...prev, mkQueue("")]);
   };
 
   const removeQueue = (index: number) => {
@@ -326,24 +346,20 @@ export function SimulationConsole({ onApplySimulation }: SimulationConsoleProps)
               <thead>
                 <tr className="border-b text-left text-muted-foreground">
                   <th className="pb-1 pr-2">
-                    <div>Queue Name</div>
-                    <div className="font-normal text-xs">Identifier for this call queue</div>
+                    <div>Queue</div>
+                    <div className="font-normal text-xs">Queue ID</div>
                   </th>
                   <th className="pb-1 pr-2">
-                    <div>Calls Waiting</div>
+                    <div>Calls</div>
                     <div className="font-normal text-xs">Inbound calls in queue</div>
                   </th>
                   <th className="pb-1 pr-2">
-                    <div>Oldest Wait (s)</div>
-                    <div className="font-normal text-xs">Longest caller wait time</div>
+                    <div>Holdtime (s)</div>
+                    <div className="font-normal text-xs">Avg hold time</div>
                   </th>
                   <th className="pb-1 pr-2">
-                    <div>Agents Avail</div>
+                    <div>Avail Agents</div>
                     <div className="font-normal text-xs">Agents ready to take calls</div>
-                  </th>
-                  <th className="pb-1 pr-2">
-                    <div>Agents In</div>
-                    <div className="font-normal text-xs">Agents logged into queue</div>
                   </th>
                   <th className="pb-1"></th>
                 </tr>
@@ -353,8 +369,8 @@ export function SimulationConsole({ onApplySimulation }: SimulationConsoleProps)
                   <tr key={i} className="border-b">
                     <td className="py-2 pr-2">
                       <Input
-                        value={q.queue_name}
-                        onChange={e => updateQueue(i, "queue_name", e.target.value)}
+                        value={q.Queue}
+                        onChange={e => updateQueue(i, "Queue", e.target.value)}
                         className="h-8"
                       />
                     </td>
@@ -362,8 +378,8 @@ export function SimulationConsole({ onApplySimulation }: SimulationConsoleProps)
                       <Input
                         type="number"
                         min={0}
-                        value={q.calls_waiting}
-                        onChange={e => updateQueue(i, "calls_waiting", parseInt(e.target.value) || 0)}
+                        value={q.Calls}
+                        onChange={e => updateQueue(i, "Calls", parseInt(e.target.value) || 0)}
                         className="h-8 w-20"
                       />
                     </td>
@@ -371,8 +387,8 @@ export function SimulationConsole({ onApplySimulation }: SimulationConsoleProps)
                       <Input
                         type="number"
                         min={0}
-                        value={q.oldest_wait_seconds}
-                        onChange={e => updateQueue(i, "oldest_wait_seconds", parseInt(e.target.value) || 0)}
+                        value={q.Holdtime}
+                        onChange={e => updateQueue(i, "Holdtime", parseInt(e.target.value) || 0)}
                         className="h-8 w-20"
                       />
                     </td>
@@ -380,17 +396,8 @@ export function SimulationConsole({ onApplySimulation }: SimulationConsoleProps)
                       <Input
                         type="number"
                         min={0}
-                        value={q.agents_available}
-                        onChange={e => updateQueue(i, "agents_available", parseInt(e.target.value) || 0)}
-                        className="h-8 w-20"
-                      />
-                    </td>
-                    <td className="py-2 pr-2">
-                      <Input
-                        type="number"
-                        min={0}
-                        value={q.agents_logged_in}
-                        onChange={e => updateQueue(i, "agents_logged_in", parseInt(e.target.value) || 0)}
+                        value={q.AvailableAgents}
+                        onChange={e => updateQueue(i, "AvailableAgents", parseInt(e.target.value) || 0)}
                         className="h-8 w-20"
                       />
                     </td>

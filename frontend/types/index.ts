@@ -1,16 +1,24 @@
 export interface QueueInfo {
-  queue_name: string;
-  calls_waiting: number;
-  oldest_wait_seconds: number;
-  agents_available: number;
-  agents_logged_in: number;
+  Event: string;
+  Queue: string;
+  Max: number;
+  Strategy: string;
+  Calls: number;
+  Holdtime: number;
+  TalkTime: number;
+  Completed: number;
+  Abandoned: number;
+  ServiceLevel: number;
+  ServicelevelPerf: number;
+  ServicelevelPerf2: number;
+  Weight: number;
+  AvailableAgents: number;
 }
 
 export interface QueueState {
   global_calls_waiting: number;
-  global_oldest_wait_seconds: number;
+  global_max_holdtime: number;
   global_agents_available: number;
-  global_agents_logged_in: number;
   outbound_allowed: boolean;
   stable_polls_count: number;
   last_poll_time: string | null;
@@ -147,7 +155,7 @@ export interface BusinessHours {
 
 export interface QueueThresholds {
   calls_waiting_threshold: number;
-  oldest_wait_threshold_seconds: number;
+  holdtime_threshold_seconds: number;
   stable_polls_required: number;
 }
 
@@ -157,6 +165,7 @@ export interface SystemSettings {
   queue_thresholds: QueueThresholds;
   allow_live_calls: boolean;
   allowed_phones: string[];
+  queue_source: string;
   can_make_calls: boolean;
   is_within_business_hours: boolean;
 }

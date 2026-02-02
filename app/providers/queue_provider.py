@@ -1,61 +1,56 @@
-"""Mock queue provider simulating FreePBX/Asterisk — with DB snapshot persistence."""
+"""Queue providers — Base, Mock (simulation), and Live (FreePBX HTTP)."""
 import asyncio
 import logging
+import os
+from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Optional
+
+import httpx
+
 from app.models import QueueInfo, GlobalQueueState
 
 logger = logging.getLogger(__name__)
 
+FREEPBX_QUEUE_URL = os.getenv(
+    "FREEPBX_QUEUE_URL", "http://10.254.99.40:2001/queuestatus.php"
+)
 
-class MockQueueProvider:
-    """Simulates FreePBX/Asterisk queue monitoring via AMI."""
+
+class BaseQueueProvider(ABC):
+    """Shared gating, aggregation, and snapshot persistence."""
 
     def __init__(self):
-        self._state = GlobalQueueState(
-            queues=[
-                QueueInfo(queue_name="scheduling_en", agents_available=2, agents_logged_in=3),
-                QueueInfo(queue_name="scheduling_es", agents_available=1, agents_logged_in=1),
-                QueueInfo(queue_name="intake", agents_available=1, agents_logged_in=2),
-            ]
-        )
-        self._ami_connected = True
+        self._state = GlobalQueueState()
         self._stable_polls = 0
 
     def get_state(self) -> GlobalQueueState:
-        """Get current queue state."""
         return self._state
 
+    @abstractmethod
     async def poll(self) -> GlobalQueueState:
-        """Poll queues and update state (called every 10 seconds)."""
+        ...
+
+    async def _evaluate_gating(self):
         from app.providers.settings_provider import get_settings_provider
 
-        if not self._ami_connected:
-            self._state.ami_connected = False
-            self._state.outbound_allowed = False
-            self._stable_polls = 0
-            self._persist_snapshot_bg()
-            return self._state
+        thresholds = await get_settings_provider().get_thresholds()
 
-        # Get dynamic thresholds from settings
-        settings_provider = get_settings_provider()
-        thresholds = await settings_provider.get_thresholds()
-
-        # Aggregate metrics
-        self._state.global_calls_waiting = sum(q.calls_waiting for q in self._state.queues)
-        self._state.global_oldest_wait_seconds = max(
-            (q.oldest_wait_seconds for q in self._state.queues), default=0
+        self._state.global_calls_waiting = sum(q.Calls for q in self._state.queues)
+        self._state.global_max_holdtime = max(
+            (q.Holdtime for q in self._state.queues), default=0
         )
-        self._state.global_agents_available = sum(q.agents_available for q in self._state.queues)
-        self._state.global_agents_logged_in = sum(q.agents_logged_in for q in self._state.queues)
+        self._state.global_agents_available = sum(
+            q.AvailableAgents for q in self._state.queues
+        )
         self._state.last_poll_time = datetime.now()
         self._state.ami_connected = True
 
-        # Check gating conditions using dynamic thresholds
         conditions_met = (
             self._state.global_agents_available >= 1
             and self._state.global_calls_waiting <= thresholds.calls_waiting_threshold
-            and self._state.global_oldest_wait_seconds <= thresholds.oldest_wait_threshold_seconds
+            and self._state.global_max_holdtime
+            <= thresholds.holdtime_threshold_seconds
         )
 
         if conditions_met:
@@ -64,10 +59,11 @@ class MockQueueProvider:
             self._stable_polls = 0
 
         self._state.stable_polls_count = self._stable_polls
-        self._state.outbound_allowed = self._stable_polls >= thresholds.stable_polls_required
+        self._state.outbound_allowed = (
+            self._stable_polls >= thresholds.stable_polls_required
+        )
 
         self._persist_snapshot_bg()
-        return self._state
 
     def _persist_snapshot_bg(self):
         """Fire-and-forget persist of current state to queue_state_snapshots."""
@@ -86,19 +82,27 @@ class MockQueueProvider:
             async with AsyncSessionLocal() as session:
                 row = QueueStateSnapshotRow(
                     global_calls_waiting=self._state.global_calls_waiting,
-                    global_oldest_wait_seconds=self._state.global_oldest_wait_seconds,
+                    global_max_holdtime=self._state.global_max_holdtime,
                     global_agents_available=self._state.global_agents_available,
-                    global_agents_logged_in=self._state.global_agents_logged_in,
                     outbound_allowed=self._state.outbound_allowed,
                     stable_polls_count=self._state.stable_polls_count,
                     ami_connected=self._state.ami_connected,
                     queues=[
                         {
-                            "queue_name": q.queue_name,
-                            "calls_waiting": q.calls_waiting,
-                            "oldest_wait_seconds": q.oldest_wait_seconds,
-                            "agents_available": q.agents_available,
-                            "agents_logged_in": q.agents_logged_in,
+                            "Event": q.Event,
+                            "Queue": q.Queue,
+                            "Max": q.Max,
+                            "Strategy": q.Strategy,
+                            "Calls": q.Calls,
+                            "Holdtime": q.Holdtime,
+                            "TalkTime": q.TalkTime,
+                            "Completed": q.Completed,
+                            "Abandoned": q.Abandoned,
+                            "ServiceLevel": q.ServiceLevel,
+                            "ServicelevelPerf": q.ServicelevelPerf,
+                            "ServicelevelPerf2": q.ServicelevelPerf2,
+                            "Weight": q.Weight,
+                            "AvailableAgents": q.AvailableAgents,
                         }
                         for q in self._state.queues
                     ],
@@ -108,85 +112,177 @@ class MockQueueProvider:
         except Exception as e:
             logger.warning("Failed to persist queue snapshot: %s", e)
 
+
+class MockQueueProvider(BaseQueueProvider):
+    """Simulates FreePBX/Asterisk queue monitoring via AMI."""
+
+    def __init__(self):
+        super().__init__()
+        self._state.queues = [
+            QueueInfo(Queue="scheduling_en", AvailableAgents=2),
+            QueueInfo(Queue="scheduling_es", AvailableAgents=1),
+            QueueInfo(Queue="intake", AvailableAgents=1),
+        ]
+        self._ami_connected = True
+
+    async def poll(self) -> GlobalQueueState:
+        if not self._ami_connected:
+            self._state.ami_connected = False
+            self._state.outbound_allowed = False
+            self._stable_polls = 0
+            self._persist_snapshot_bg()
+            return self._state
+
+        await self._evaluate_gating()
+        return self._state
+
     def set_queue_state(
         self,
         queue_name: str,
-        calls_waiting: Optional[int] = None,
-        oldest_wait_seconds: Optional[int] = None,
-        agents_available: Optional[int] = None,
-        agents_logged_in: Optional[int] = None,
+        Calls: Optional[int] = None,
+        Holdtime: Optional[int] = None,
+        AvailableAgents: Optional[int] = None,
     ):
         """Manually set queue state for testing."""
         for queue in self._state.queues:
-            if queue.queue_name == queue_name:
-                if calls_waiting is not None:
-                    queue.calls_waiting = calls_waiting
-                if oldest_wait_seconds is not None:
-                    queue.oldest_wait_seconds = oldest_wait_seconds
-                if agents_available is not None:
-                    queue.agents_available = agents_available
-                if agents_logged_in is not None:
-                    queue.agents_logged_in = agents_logged_in
+            if queue.Queue == queue_name:
+                if Calls is not None:
+                    queue.Calls = Calls
+                if Holdtime is not None:
+                    queue.Holdtime = Holdtime
+                if AvailableAgents is not None:
+                    queue.AvailableAgents = AvailableAgents
                 break
 
     def simulate_busy_queue(self):
-        """Simulate a busy queue scenario."""
         for queue in self._state.queues:
-            queue.calls_waiting = 5
-            queue.oldest_wait_seconds = 60
-            queue.agents_available = 0
+            queue.Calls = 5
+            queue.Holdtime = 60
+            queue.AvailableAgents = 0
         self._stable_polls = 0
 
     def simulate_quiet_queue(self):
-        """Simulate a quiet queue scenario (outbound allowed)."""
         for queue in self._state.queues:
-            queue.calls_waiting = 0
-            queue.oldest_wait_seconds = 0
-            queue.agents_available = 2
-        # Force stable polls — use default threshold
+            queue.Calls = 0
+            queue.Holdtime = 0
+            queue.AvailableAgents = 2
         self._stable_polls = 3
 
     def simulate_ami_failure(self):
-        """Simulate AMI connection failure."""
         self._ami_connected = False
 
     def simulate_ami_recovery(self):
-        """Simulate AMI connection recovery."""
         self._ami_connected = True
 
     def reset_with_config(self, queues_config: list[dict], ami_connected: bool):
-        """Reset queue state from simulation config."""
         self._state.queues = [
             QueueInfo(
-                queue_name=q["queue_name"],
-                calls_waiting=q.get("calls_waiting", 0),
-                oldest_wait_seconds=q.get("oldest_wait_seconds", 0),
-                agents_available=q.get("agents_available", 1),
-                agents_logged_in=q.get("agents_logged_in", 1),
+                Event=q.get("Event", "QueueParams"),
+                Queue=q.get("Queue", ""),
+                Max=q.get("Max", 0),
+                Strategy=q.get("Strategy", "ringall"),
+                Calls=q.get("Calls", 0),
+                Holdtime=q.get("Holdtime", 0),
+                TalkTime=q.get("TalkTime", 0),
+                Completed=q.get("Completed", 0),
+                Abandoned=q.get("Abandoned", 0),
+                ServiceLevel=q.get("ServiceLevel", 135),
+                ServicelevelPerf=q.get("ServicelevelPerf", 0.0),
+                ServicelevelPerf2=q.get("ServicelevelPerf2", 0.0),
+                Weight=q.get("Weight", 0),
+                AvailableAgents=q.get("AvailableAgents", 0),
             )
             for q in queues_config
         ]
         self._ami_connected = ami_connected
         self._stable_polls = 0
 
-    def add_queue(self, queue_name: str, agents_available: int = 1, agents_logged_in: int = 1):
-        """Add a new queue."""
+    def add_queue(self, queue_name: str, available_agents: int = 1):
         self._state.queues.append(
-            QueueInfo(
-                queue_name=queue_name,
-                agents_available=agents_available,
-                agents_logged_in=agents_logged_in,
-            )
+            QueueInfo(Queue=queue_name, AvailableAgents=available_agents)
         )
 
 
-# Global instance
-_queue_provider: Optional[MockQueueProvider] = None
+class LiveQueueProvider(BaseQueueProvider):
+    """Fetches real queue data from FreePBX queuestatus.php."""
+
+    def __init__(self, url: str = FREEPBX_QUEUE_URL):
+        super().__init__()
+        self._url = url
+        self._client = httpx.AsyncClient(timeout=5.0)
+
+    async def poll(self) -> GlobalQueueState:
+        try:
+            resp = await self._client.get(self._url)
+            resp.raise_for_status()
+            data = resp.json()  # {"9006": {...}, "9007": {...}}
+            self._state.queues = [
+                QueueInfo(
+                    Event=v.get("Event", "QueueParams"),
+                    Queue=v.get("Queue", qid),
+                    Max=int(v.get("Max", 0)),
+                    Strategy=v.get("Strategy", "ringall"),
+                    Calls=int(v.get("Calls", 0)),
+                    Holdtime=int(v.get("Holdtime", 0)),
+                    TalkTime=int(v.get("TalkTime", 0)),
+                    Completed=int(v.get("Completed", 0)),
+                    Abandoned=int(v.get("Abandoned", 0)),
+                    ServiceLevel=int(v.get("ServiceLevel", 135)),
+                    ServicelevelPerf=float(v.get("ServicelevelPerf", 0.0)),
+                    ServicelevelPerf2=float(v.get("ServicelevelPerf2", 0.0)),
+                    Weight=int(v.get("Weight", 0)),
+                    AvailableAgents=int(v.get("AvailableAgents", 0)),
+                )
+                for qid, v in data.items()
+            ]
+            await self._evaluate_gating()
+        except Exception as e:
+            logger.warning("FreePBX poll failed: %s", e)
+            self._state.ami_connected = False
+            self._state.outbound_allowed = False
+            self._stable_polls = 0
+            self._persist_snapshot_bg()
+        return self._state
 
 
-def get_queue_provider() -> MockQueueProvider:
-    """Get the global queue provider instance."""
-    global _queue_provider
-    if _queue_provider is None:
-        _queue_provider = MockQueueProvider()
-    return _queue_provider
+# ---------------------------------------------------------------------------
+# Singleton management
+# ---------------------------------------------------------------------------
+_mock_provider: Optional[MockQueueProvider] = None
+_live_provider: Optional[LiveQueueProvider] = None
+_active_source: str = "simulation"
+
+
+def _get_mock_provider() -> MockQueueProvider:
+    global _mock_provider
+    if _mock_provider is None:
+        _mock_provider = MockQueueProvider()
+    return _mock_provider
+
+
+def _get_live_provider() -> LiveQueueProvider:
+    global _live_provider
+    if _live_provider is None:
+        _live_provider = LiveQueueProvider()
+    return _live_provider
+
+
+def get_queue_provider() -> BaseQueueProvider:
+    """Get the active queue provider based on queue_source setting."""
+    if _active_source == "live":
+        return _get_live_provider()
+    return _get_mock_provider()
+
+
+def get_mock_queue_provider() -> MockQueueProvider:
+    """Always returns the mock provider (for simulation endpoints)."""
+    return _get_mock_provider()
+
+
+def set_queue_source(source: str):
+    """Switch the active queue source ('simulation' or 'live')."""
+    global _active_source
+    if source not in ("simulation", "live"):
+        raise ValueError(f"Invalid queue source: {source!r}")
+    _active_source = source
+    logger.info("Queue source set to: %s", source)

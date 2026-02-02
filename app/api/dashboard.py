@@ -5,7 +5,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 from typing import Optional
 
-from app.providers import get_queue_provider, get_patient_provider, get_call_log_provider
+from app.providers import get_queue_provider, get_mock_queue_provider, get_patient_provider, get_call_log_provider
 from app.models import CallOutcome
 from app.services.dispatcher import get_dispatcher
 
@@ -43,7 +43,7 @@ async def get_queue_state():
 @router.post("/queue/simulate/busy")
 async def simulate_busy_queue():
     """Simulate a busy queue scenario."""
-    queue_provider = get_queue_provider()
+    queue_provider = get_mock_queue_provider()
     queue_provider.simulate_busy_queue()
     return {"status": "ok", "queue_state": queue_provider.get_state().to_dict()}
 
@@ -51,7 +51,7 @@ async def simulate_busy_queue():
 @router.post("/queue/simulate/quiet")
 async def simulate_quiet_queue():
     """Simulate a quiet queue scenario."""
-    queue_provider = get_queue_provider()
+    queue_provider = get_mock_queue_provider()
     queue_provider.simulate_quiet_queue()
     return {"status": "ok", "queue_state": queue_provider.get_state().to_dict()}
 
@@ -59,7 +59,7 @@ async def simulate_quiet_queue():
 @router.post("/queue/simulate/ami-failure")
 async def simulate_ami_failure():
     """Simulate AMI connection failure."""
-    queue_provider = get_queue_provider()
+    queue_provider = get_mock_queue_provider()
     queue_provider.simulate_ami_failure()
     return {"status": "ok", "queue_state": queue_provider.get_state().to_dict()}
 
@@ -67,7 +67,7 @@ async def simulate_ami_failure():
 @router.post("/queue/simulate/ami-recovery")
 async def simulate_ami_recovery():
     """Simulate AMI connection recovery."""
-    queue_provider = get_queue_provider()
+    queue_provider = get_mock_queue_provider()
     queue_provider.simulate_ami_recovery()
     return {"status": "ok", "queue_state": queue_provider.get_state().to_dict()}
 
@@ -75,19 +75,17 @@ async def simulate_ami_recovery():
 @router.post("/queue/{queue_name}")
 async def update_queue(
     queue_name: str,
-    calls_waiting: Optional[int] = None,
-    oldest_wait_seconds: Optional[int] = None,
-    agents_available: Optional[int] = None,
-    agents_logged_in: Optional[int] = None,
+    Calls: Optional[int] = None,
+    Holdtime: Optional[int] = None,
+    AvailableAgents: Optional[int] = None,
 ):
-    """Update a specific queue's state."""
-    queue_provider = get_queue_provider()
+    """Update a specific queue's state (simulation only)."""
+    queue_provider = get_mock_queue_provider()
     queue_provider.set_queue_state(
         queue_name=queue_name,
-        calls_waiting=calls_waiting,
-        oldest_wait_seconds=oldest_wait_seconds,
-        agents_available=agents_available,
-        agents_logged_in=agents_logged_in,
+        Calls=Calls,
+        Holdtime=Holdtime,
+        AvailableAgents=AvailableAgents,
     )
     return {"status": "ok", "queue_state": queue_provider.get_state().to_dict()}
 
@@ -171,11 +169,20 @@ async def get_statistics():
 
 
 class QueueConfigItem(BaseModel):
-    queue_name: str
-    calls_waiting: int = 0
-    oldest_wait_seconds: int = 0
-    agents_available: int = 1
-    agents_logged_in: int = 1
+    Event: str = "QueueParams"
+    Queue: str = ""
+    Max: int = 0
+    Strategy: str = "ringall"
+    Calls: int = 0
+    Holdtime: int = 0
+    TalkTime: int = 0
+    Completed: int = 0
+    Abandoned: int = 0
+    ServiceLevel: int = 135
+    ServicelevelPerf: float = 0.0
+    ServicelevelPerf2: float = 0.0
+    Weight: int = 0
+    AvailableAgents: int = 0
 
 
 class QueueConfig(BaseModel):
@@ -209,12 +216,12 @@ class SimulationApplyRequest(BaseModel):
 @router.post("/simulation/apply")
 async def apply_simulation(request: SimulationApplyRequest):
     """Apply simulation configuration and restart dispatcher."""
-    queue_provider = get_queue_provider()
+    queue_provider = get_mock_queue_provider()
     patient_provider = get_patient_provider()
     call_log_provider = get_call_log_provider()
     dispatcher = get_dispatcher()
 
-    # 1. Reset queue provider
+    # 1. Reset queue provider (simulation only)
     queue_provider.reset_with_config(
         queues_config=[q.model_dump() for q in request.queue.queues],
         ami_connected=request.queue.ami_connected,
