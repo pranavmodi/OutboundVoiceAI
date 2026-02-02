@@ -6,7 +6,8 @@ from pydantic import BaseModel
 from typing import Optional
 
 from app.providers import get_queue_provider, get_mock_queue_provider, get_patient_provider, get_simulation_patient_provider, get_call_log_provider
-from app.models import CallOutcome
+from app.models import CallOutcome, DispatcherSettings
+from app.providers.settings_provider import get_settings_provider
 from app.services.dispatcher import get_dispatcher
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
@@ -242,6 +243,17 @@ async def apply_simulation(request: SimulationApplyRequest):
         max_attempts=request.dispatcher.max_attempts,
         min_hours_between=request.dispatcher.min_hours_between,
     )
+
+    # 4b. Persist dispatcher settings to DB so they survive restart
+    await get_settings_provider().update_dispatcher_settings(
+        DispatcherSettings(
+            poll_interval=request.dispatcher.poll_interval,
+            dispatch_timeout=request.dispatcher.dispatch_timeout,
+            max_attempts=request.dispatcher.max_attempts,
+            min_hours_between=request.dispatcher.min_hours_between,
+        )
+    )
+
     dispatcher.restart()
 
     # 5. Return new state

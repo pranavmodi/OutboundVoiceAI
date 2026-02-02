@@ -26,6 +26,14 @@ async def lifespan(app: FastAPI):
     settings = await get_settings_provider().get_settings()
     set_queue_source(settings.queue_source)
     set_patient_source(settings.patient_source)
+    # Apply persisted dispatcher settings before starting
+    ds = settings.dispatcher_settings
+    get_dispatcher().update_config(
+        poll_interval=ds.poll_interval,
+        dispatch_timeout=ds.dispatch_timeout,
+        max_attempts=ds.max_attempts,
+        min_hours_between=ds.min_hours_between,
+    )
     get_dispatcher().start()
     yield
     # Shutdown: stop the dispatcher and dispose engine

@@ -5,8 +5,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -17,7 +15,6 @@ import {
 import {
   Phone,
   Users,
-  Settings,
   Plus,
   Trash2,
   RotateCcw,
@@ -52,20 +49,12 @@ interface PatientRow {
   attempt_count: number;
 }
 
-interface DispatcherSettings {
-  poll_interval: number;
-  dispatch_timeout: number;
-  max_attempts: number;
-  min_hours_between: number;
-}
-
 interface SimulationConfig {
   queue: {
     ami_connected: boolean;
     queues: QueueRow[];
   };
   patients: PatientRow[];
-  dispatcher: DispatcherSettings;
 }
 
 interface Scenario {
@@ -75,7 +64,6 @@ interface Scenario {
   amiConnected: boolean;
   queues: QueueRow[];
   patients: PatientRow[];
-  dispatcher: DispatcherSettings;
 }
 
 // ---------- Helpers ----------
@@ -103,7 +91,7 @@ const SCENARIOS: Scenario[] = [
     patients: [
       { name: "Pranav Modi", phone: "+918287149638", language: "en", has_abandoned_before: true, has_called_in_before: false, ai_called_before: false, attempt_count: 0 },
     ],
-    dispatcher: { poll_interval: 5, dispatch_timeout: 30, max_attempts: 3, min_hours_between: 6 },
+
   },
   {
     id: "default",
@@ -124,7 +112,7 @@ const SCENARIOS: Scenario[] = [
       { name: "Sarah Brown", phone: "555-0106", language: "en", has_abandoned_before: false, has_called_in_before: false, ai_called_before: false, attempt_count: 0 },
       { name: "Wei Zhang", phone: "555-0107", language: "zh", has_abandoned_before: false, has_called_in_before: true, ai_called_before: false, attempt_count: 0 },
     ],
-    dispatcher: { poll_interval: 10, dispatch_timeout: 30, max_attempts: 3, min_hours_between: 6 },
+
   },
   {
     id: "busy_queues",
@@ -140,7 +128,7 @@ const SCENARIOS: Scenario[] = [
       { name: "John Smith", phone: "555-0101", language: "en", has_abandoned_before: true, has_called_in_before: false, ai_called_before: false, attempt_count: 0 },
       { name: "Maria Garcia", phone: "555-0102", language: "es", has_abandoned_before: true, has_called_in_before: false, ai_called_before: false, attempt_count: 0 },
     ],
-    dispatcher: { poll_interval: 10, dispatch_timeout: 30, max_attempts: 3, min_hours_between: 6 },
+
   },
   {
     id: "ami_down",
@@ -153,7 +141,7 @@ const SCENARIOS: Scenario[] = [
     patients: [
       { name: "John Smith", phone: "555-0101", language: "en", has_abandoned_before: true, has_called_in_before: false, ai_called_before: false, attempt_count: 0 },
     ],
-    dispatcher: { poll_interval: 10, dispatch_timeout: 30, max_attempts: 3, min_hours_between: 6 },
+
   },
   {
     id: "multilingual",
@@ -169,7 +157,7 @@ const SCENARIOS: Scenario[] = [
       { name: "Maria Garcia", phone: "555-0102", language: "es", has_abandoned_before: true, has_called_in_before: false, ai_called_before: false, attempt_count: 0 },
       { name: "Wei Zhang", phone: "555-0107", language: "zh", has_abandoned_before: false, has_called_in_before: true, ai_called_before: false, attempt_count: 0 },
     ],
-    dispatcher: { poll_interval: 10, dispatch_timeout: 30, max_attempts: 3, min_hours_between: 6 },
+
   },
   {
     id: "retry_scenario",
@@ -183,7 +171,7 @@ const SCENARIOS: Scenario[] = [
       { name: "Robert Johnson", phone: "555-0103", language: "en", has_abandoned_before: true, has_called_in_before: false, ai_called_before: true, attempt_count: 2 },
       { name: "Emily Davis", phone: "555-0104", language: "en", has_abandoned_before: false, has_called_in_before: true, ai_called_before: true, attempt_count: 3 },
     ],
-    dispatcher: { poll_interval: 5, dispatch_timeout: 30, max_attempts: 3, min_hours_between: 0 },
+
   },
   {
     id: "empty_queue",
@@ -194,7 +182,7 @@ const SCENARIOS: Scenario[] = [
       mkQueue("scheduling_en", { AvailableAgents: 2 }),
     ],
     patients: [],
-    dispatcher: { poll_interval: 5, dispatch_timeout: 30, max_attempts: 3, min_hours_between: 6 },
+
   },
 ];
 
@@ -212,7 +200,6 @@ export function SimulationConsole({ onApplySimulation }: SimulationConsoleProps)
   const [queues, setQueues] = useState<QueueRow[]>(() => defaultScenario.queues.map(q => ({ ...q })));
   const [amiConnected, setAmiConnected] = useState(defaultScenario.amiConnected);
   const [patients, setPatients] = useState<PatientRow[]>(() => defaultScenario.patients.map(p => ({ ...p })));
-  const [dispatcher, setDispatcher] = useState<DispatcherSettings>({ ...defaultScenario.dispatcher });
   const [applying, setApplying] = useState(false);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
 
@@ -224,7 +211,6 @@ export function SimulationConsole({ onApplySimulation }: SimulationConsoleProps)
     setQueues(scenario.queues.map(q => ({ ...q })));
     setAmiConnected(scenario.amiConnected);
     setPatients(scenario.patients.map(p => ({ ...p })));
-    setDispatcher({ ...scenario.dispatcher });
     setFeedback(null);
   };
 
@@ -254,11 +240,6 @@ export function SimulationConsole({ onApplySimulation }: SimulationConsoleProps)
     setPatients(prev => prev.filter((_, i) => i !== index));
   };
 
-  // Dispatcher handlers
-  const updateDispatcher = (field: keyof DispatcherSettings, value: number) => {
-    setDispatcher(prev => ({ ...prev, [field]: value }));
-  };
-
   // Apply
   const handleApply = async () => {
     setApplying(true);
@@ -267,7 +248,6 @@ export function SimulationConsole({ onApplySimulation }: SimulationConsoleProps)
       await onApplySimulation({
         queue: { ami_connected: amiConnected, queues },
         patients,
-        dispatcher,
       });
       setFeedback({ type: "success", message: "Simulation applied and dispatcher restarted." });
     } catch {
@@ -331,15 +311,6 @@ export function SimulationConsole({ onApplySimulation }: SimulationConsoleProps)
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* AMI Toggle */}
-          <div className="flex items-center gap-3">
-            <Switch checked={amiConnected} onCheckedChange={setAmiConnected} id="ami-toggle" />
-            <Label htmlFor="ami-toggle">AMI Connected</Label>
-            <span className="text-xs text-muted-foreground">
-              Asterisk Manager Interface link. When off, all outbound calls are blocked.
-            </span>
-          </div>
-
           {/* Queue Table */}
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -546,71 +517,6 @@ export function SimulationConsole({ onApplySimulation }: SimulationConsoleProps)
             <Plus className="h-4 w-4 mr-1" />
             Add Patient
           </Button>
-        </CardContent>
-      </Card>
-
-      {/* Section 3: Dispatcher Settings */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Settings className="h-5 w-5" />
-            Dispatcher Settings
-          </CardTitle>
-          <CardDescription>
-            Controls how the auto-call dispatcher evaluates gating conditions and selects patients. The dispatcher runs a polling loop that checks queue state, picks the next candidate, and signals the frontend to start a call.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <div className="space-y-2">
-              <Label>Poll Interval (s)</Label>
-              <Input
-                type="number"
-                min={1}
-                value={dispatcher.poll_interval}
-                onChange={e => updateDispatcher("poll_interval", parseInt(e.target.value) || 10)}
-              />
-              <p className="text-xs text-muted-foreground">
-                Seconds between each dispatcher tick. Lower values make the dispatcher react faster.
-              </p>
-            </div>
-            <div className="space-y-2">
-              <Label>Dispatch Timeout (s)</Label>
-              <Input
-                type="number"
-                min={1}
-                value={dispatcher.dispatch_timeout}
-                onChange={e => updateDispatcher("dispatch_timeout", parseInt(e.target.value) || 30)}
-              />
-              <p className="text-xs text-muted-foreground">
-                Max seconds to wait for the frontend to acknowledge a dispatched call before timing out.
-              </p>
-            </div>
-            <div className="space-y-2">
-              <Label>Max Attempts</Label>
-              <Input
-                type="number"
-                min={1}
-                value={dispatcher.max_attempts}
-                onChange={e => updateDispatcher("max_attempts", parseInt(e.target.value) || 3)}
-              />
-              <p className="text-xs text-muted-foreground">
-                Maximum call attempts per patient. Patients at this limit are skipped.
-              </p>
-            </div>
-            <div className="space-y-2">
-              <Label>Min Hours Between</Label>
-              <Input
-                type="number"
-                min={0}
-                value={dispatcher.min_hours_between}
-                onChange={e => updateDispatcher("min_hours_between", parseInt(e.target.value) || 6)}
-              />
-              <p className="text-xs text-muted-foreground">
-                Minimum hours between call attempts to the same patient. Prevents calling too frequently.
-              </p>
-            </div>
-          </div>
         </CardContent>
       </Card>
 

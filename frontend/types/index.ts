@@ -159,10 +159,18 @@ export interface QueueThresholds {
   stable_polls_required: number;
 }
 
+export interface DispatcherSettings {
+  poll_interval: number;
+  dispatch_timeout: number;
+  max_attempts: number;
+  min_hours_between: number;
+}
+
 export interface SystemSettings {
   system_enabled: boolean;
   business_hours: BusinessHours;
   queue_thresholds: QueueThresholds;
+  dispatcher_settings: DispatcherSettings;
   allow_live_calls: boolean;
   allowed_phones: string[];
   queue_source: string;

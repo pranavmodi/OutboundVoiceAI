@@ -214,6 +214,11 @@ export default function Dashboard() {
     if (newSettings) setSettings(newSettings);
   }, [api]);
 
+  const handleUpdateDispatcherSettings = useCallback(async (dispatcherSettings: SystemSettings["dispatcher_settings"]) => {
+    const newSettings = await api.updateDispatcherSettings(dispatcherSettings);
+    if (newSettings) setSettings(newSettings);
+  }, [api]);
+
   const handleSetAllowLiveCalls = useCallback(async (allowed: boolean) => {
     const newSettings = await api.setAllowLiveCalls(allowed);
     if (newSettings) setSettings(newSettings);
@@ -408,6 +413,7 @@ export default function Dashboard() {
                       onSetSystemEnabled={handleSetSystemEnabled}
                       onUpdateBusinessHours={handleUpdateBusinessHours}
                       onUpdateQueueThresholds={handleUpdateQueueThresholds}
+                      onUpdateDispatcherSettings={handleUpdateDispatcherSettings}
                       onSetAllowLiveCalls={handleSetAllowLiveCalls}
                       onUpdateAllowedPhones={handleUpdateAllowedPhones}
                       onSetQueueSource={handleSetQueueSource}

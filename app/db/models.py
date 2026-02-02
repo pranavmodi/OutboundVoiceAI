@@ -77,6 +77,7 @@ class SystemSettingsRow(Base):
     system_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     business_hours: Mapped[dict] = mapped_column(JSONB, nullable=False)
     queue_thresholds: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    dispatcher_settings: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     allow_live_calls: Mapped[bool] = mapped_column(Boolean, default=False)
     allowed_phones: Mapped[list] = mapped_column(JSONB, default=list)
     queue_source: Mapped[str] = mapped_column(String(20), default="simulation")

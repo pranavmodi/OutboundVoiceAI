@@ -28,6 +28,12 @@ async def seed_default_settings(session: AsyncSession):
             "holdtime_threshold_seconds": 30,
             "stable_polls_required": 3,
         },
+        dispatcher_settings={
+            "poll_interval": 10,
+            "dispatch_timeout": 30,
+            "max_attempts": 3,
+            "min_hours_between": 6,
+        },
         allow_live_calls=False,
         allowed_phones=[],
         queue_source="simulation",

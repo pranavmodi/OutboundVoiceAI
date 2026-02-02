@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useMemo } from "react";
-import type { SystemStatus, Patient, CallLog, QueueState, SystemSettings, BusinessHours, QueueThresholds } from "@/types";
+import type { SystemStatus, Patient, CallLog, QueueState, SystemSettings, BusinessHours, QueueThresholds, DispatcherSettings } from "@/types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -217,6 +217,18 @@ export function useApi() {
     }
   }, []);
 
+  const updateDispatcherSettings = useCallback(async (dispatcherSettings: DispatcherSettings): Promise<SystemSettings | null> => {
+    try {
+      return await fetchApi<SystemSettings>("/api/settings/dispatcher", {
+        method: "PUT",
+        body: JSON.stringify(dispatcherSettings),
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
   const setAllowLiveCalls = useCallback(async (allowed: boolean): Promise<SystemSettings | null> => {
     try {
       return await fetchApi<SystemSettings>("/api/settings/allow-live-calls", {
@@ -314,6 +326,7 @@ export function useApi() {
     setSystemEnabled,
     updateBusinessHours,
     updateQueueThresholds,
+    updateDispatcherSettings,
     setAllowLiveCalls,
     updateAllowedPhones,
     setQueueSource,
@@ -341,6 +354,7 @@ export function useApi() {
     setSystemEnabled,
     updateBusinessHours,
     updateQueueThresholds,
+    updateDispatcherSettings,
     setAllowLiveCalls,
     updateAllowedPhones,
     setQueueSource,

@@ -30,7 +30,7 @@ import {
   Radio,
   Users,
 } from "lucide-react";
-import type { SystemSettings, BusinessHours, QueueThresholds } from "@/types";
+import type { SystemSettings, BusinessHours, QueueThresholds, DispatcherSettings } from "@/types";
 
 interface OperatorConsoleProps {
   settings: SystemSettings | null;
@@ -40,6 +40,7 @@ interface OperatorConsoleProps {
   onSetSystemEnabled: (enabled: boolean) => Promise<void>;
   onUpdateBusinessHours: (businessHours: BusinessHours) => Promise<void>;
   onUpdateQueueThresholds: (thresholds: QueueThresholds) => Promise<void>;
+  onUpdateDispatcherSettings: (dispatcherSettings: DispatcherSettings) => Promise<void>;
   onSetAllowLiveCalls: (allowed: boolean) => Promise<void>;
   onUpdateAllowedPhones: (phones: string[]) => Promise<void>;
   onSetQueueSource: (source: string) => Promise<void>;
@@ -54,6 +55,7 @@ export function OperatorConsole({
   onSetSystemEnabled,
   onUpdateBusinessHours,
   onUpdateQueueThresholds,
+  onUpdateDispatcherSettings,
   onSetAllowLiveCalls,
   onUpdateAllowedPhones,
   onSetQueueSource,
@@ -72,12 +74,20 @@ export function OperatorConsole({
     stable_polls_required: 3,
   });
 
+  const [dispatcherForm, setDispatcherForm] = useState<DispatcherSettings>({
+    poll_interval: 10,
+    dispatch_timeout: 30,
+    max_attempts: 3,
+    min_hours_between: 6,
+  });
+
   const [newPhone, setNewPhone] = useState("");
 
   useEffect(() => {
     if (settings) {
       setBusinessHoursForm(settings.business_hours);
       setThresholdsForm(settings.queue_thresholds);
+      setDispatcherForm(settings.dispatcher_settings);
     }
   }, [settings]);
 
@@ -103,6 +113,10 @@ export function OperatorConsole({
 
   const handleThresholdsSubmit = async () => {
     await onUpdateQueueThresholds(thresholdsForm);
+  };
+
+  const handleDispatcherSubmit = async () => {
+    await onUpdateDispatcherSettings(dispatcherForm);
   };
 
   if (!settings) {
@@ -498,6 +512,101 @@ export function OperatorConsole({
               Save
             </Button>
           </div>
+        </div>
+      </div>
+
+      <Separator />
+
+      {/* Dispatcher Settings */}
+      <div className="space-y-4">
+        <div className="flex items-center gap-2">
+          <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
+          <h4 className="text-sm font-medium">Dispatcher Settings</h4>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="poll-interval" className="text-xs text-muted-foreground">
+              Poll interval (seconds)
+            </Label>
+            <Input
+              id="poll-interval"
+              type="number"
+              min="1"
+              value={dispatcherForm.poll_interval}
+              onChange={(e) =>
+                setDispatcherForm({
+                  ...dispatcherForm,
+                  poll_interval: parseInt(e.target.value) || 1,
+                })
+              }
+              className="h-9"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="dispatch-timeout" className="text-xs text-muted-foreground">
+              Dispatch timeout (seconds)
+            </Label>
+            <Input
+              id="dispatch-timeout"
+              type="number"
+              min="1"
+              value={dispatcherForm.dispatch_timeout}
+              onChange={(e) =>
+                setDispatcherForm({
+                  ...dispatcherForm,
+                  dispatch_timeout: parseInt(e.target.value) || 1,
+                })
+              }
+              className="h-9"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="max-attempts" className="text-xs text-muted-foreground">
+              Max attempts per patient
+            </Label>
+            <Input
+              id="max-attempts"
+              type="number"
+              min="1"
+              value={dispatcherForm.max_attempts}
+              onChange={(e) =>
+                setDispatcherForm({
+                  ...dispatcherForm,
+                  max_attempts: parseInt(e.target.value) || 1,
+                })
+              }
+              className="h-9"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="min-hours-between" className="text-xs text-muted-foreground">
+              Min hours between attempts
+            </Label>
+            <Input
+              id="min-hours-between"
+              type="number"
+              min="0"
+              value={dispatcherForm.min_hours_between}
+              onChange={(e) =>
+                setDispatcherForm({
+                  ...dispatcherForm,
+                  min_hours_between: parseInt(e.target.value) || 0,
+                })
+              }
+              className="h-9"
+            />
+          </div>
+        </div>
+
+        <div className="flex justify-end">
+          <Button size="sm" variant="outline" onClick={handleDispatcherSubmit}>
+            <Save className="h-3 w-3 mr-1.5" />
+            Save
+          </Button>
         </div>
       </div>
     </div>

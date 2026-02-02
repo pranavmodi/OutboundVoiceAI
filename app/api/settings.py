@@ -4,7 +4,7 @@ from typing import List
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from app.models import BusinessHours, QueueThresholds, SystemSettings
+from app.models import BusinessHours, QueueThresholds, DispatcherSettings, SystemSettings
 from app.providers import get_settings_provider
 from app.providers.settings_provider import COMMON_TIMEZONES
 
@@ -24,6 +24,13 @@ class QueueThresholdsRequest(BaseModel):
     calls_waiting_threshold: int
     holdtime_threshold_seconds: int
     stable_polls_required: int
+
+
+class DispatcherSettingsRequest(BaseModel):
+    poll_interval: int = 10
+    dispatch_timeout: int = 30
+    max_attempts: int = 3
+    min_hours_between: int = 6
 
 
 class SourceRequest(BaseModel):
@@ -56,6 +63,7 @@ class SystemSettingsResponse(BaseModel):
     system_enabled: bool
     business_hours: BusinessHoursRequest
     queue_thresholds: QueueThresholdsRequest
+    dispatcher_settings: DispatcherSettingsRequest
     allow_live_calls: bool
     allowed_phones: List[str]
     queue_source: str
@@ -79,6 +87,12 @@ async def settings_to_response(provider) -> SystemSettingsResponse:
             calls_waiting_threshold=settings.queue_thresholds.calls_waiting_threshold,
             holdtime_threshold_seconds=settings.queue_thresholds.holdtime_threshold_seconds,
             stable_polls_required=settings.queue_thresholds.stable_polls_required,
+        ),
+        dispatcher_settings=DispatcherSettingsRequest(
+            poll_interval=settings.dispatcher_settings.poll_interval,
+            dispatch_timeout=settings.dispatcher_settings.dispatch_timeout,
+            max_attempts=settings.dispatcher_settings.max_attempts,
+            min_hours_between=settings.dispatcher_settings.min_hours_between,
         ),
         allow_live_calls=settings.allow_live_calls,
         allowed_phones=settings.allowed_phones,
@@ -160,6 +174,33 @@ async def update_queue_thresholds(request: QueueThresholdsRequest):
     )
 
     await provider.update_queue_thresholds(thresholds)
+    return await settings_to_response(provider)
+
+
+@router.put("/dispatcher", response_model=SystemSettingsResponse)
+async def update_dispatcher_settings(request: DispatcherSettingsRequest):
+    """Update dispatcher settings and apply immediately."""
+    from app.services.dispatcher import get_dispatcher
+
+    provider = get_settings_provider()
+
+    dispatcher_settings = DispatcherSettings(
+        poll_interval=request.poll_interval,
+        dispatch_timeout=request.dispatch_timeout,
+        max_attempts=request.max_attempts,
+        min_hours_between=request.min_hours_between,
+    )
+
+    await provider.update_dispatcher_settings(dispatcher_settings)
+
+    # Apply to running dispatcher immediately
+    get_dispatcher().update_config(
+        poll_interval=request.poll_interval,
+        dispatch_timeout=request.dispatch_timeout,
+        max_attempts=request.max_attempts,
+        min_hours_between=request.min_hours_between,
+    )
+
     return await settings_to_response(provider)
 
 

@@ -21,11 +21,21 @@ class QueueThresholds:
 
 
 @dataclass
+class DispatcherSettings:
+    """Dispatcher configuration parameters."""
+    poll_interval: int = 10
+    dispatch_timeout: int = 30
+    max_attempts: int = 3
+    min_hours_between: int = 6
+
+
+@dataclass
 class SystemSettings:
     """Main system settings."""
     system_enabled: bool = True
     business_hours: BusinessHours = field(default_factory=BusinessHours)
     queue_thresholds: QueueThresholds = field(default_factory=QueueThresholds)
+    dispatcher_settings: DispatcherSettings = field(default_factory=DispatcherSettings)
     allow_live_calls: bool = False
     allowed_phones: List[str] = field(default_factory=list)
     queue_source: str = "simulation"

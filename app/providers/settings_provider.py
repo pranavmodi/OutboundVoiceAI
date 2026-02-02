@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from app.db import AsyncSessionLocal
 from app.db.models import SystemSettingsRow
-from app.models import BusinessHours, QueueThresholds, SystemSettings
+from app.models import BusinessHours, QueueThresholds, DispatcherSettings, SystemSettings
 from typing import List
 
 
@@ -39,6 +39,13 @@ def _row_to_settings(row: SystemSettingsRow) -> SystemSettings:
         calls_waiting_threshold=qt.get("calls_waiting_threshold", 1),
         holdtime_threshold_seconds=qt.get("holdtime_threshold_seconds", 30),
         stable_polls_required=qt.get("stable_polls_required", 3),
+    )
+    ds = row.dispatcher_settings if row.dispatcher_settings else {}
+    settings.dispatcher_settings = DispatcherSettings(
+        poll_interval=ds.get("poll_interval", 10),
+        dispatch_timeout=ds.get("dispatch_timeout", 30),
+        max_attempts=ds.get("max_attempts", 3),
+        min_hours_between=ds.get("min_hours_between", 6),
     )
     settings.allow_live_calls = row.allow_live_calls if row.allow_live_calls is not None else False
     settings.allowed_phones = row.allowed_phones if row.allowed_phones is not None else []
@@ -76,6 +83,12 @@ class SettingsProvider:
                 "calls_waiting_threshold": settings.queue_thresholds.calls_waiting_threshold,
                 "holdtime_threshold_seconds": settings.queue_thresholds.holdtime_threshold_seconds,
                 "stable_polls_required": settings.queue_thresholds.stable_polls_required,
+            }
+            row.dispatcher_settings = {
+                "poll_interval": settings.dispatcher_settings.poll_interval,
+                "dispatch_timeout": settings.dispatcher_settings.dispatch_timeout,
+                "max_attempts": settings.dispatcher_settings.max_attempts,
+                "min_hours_between": settings.dispatcher_settings.min_hours_between,
             }
             row.allow_live_calls = settings.allow_live_calls
             row.allowed_phones = settings.allowed_phones
@@ -139,6 +152,36 @@ class SettingsProvider:
                 "calls_waiting_threshold": thresholds.calls_waiting_threshold,
                 "holdtime_threshold_seconds": thresholds.holdtime_threshold_seconds,
                 "stable_polls_required": thresholds.stable_polls_required,
+            }
+            await session.commit()
+            return _row_to_settings(row)
+
+    async def update_dispatcher_settings(self, dispatcher_settings: DispatcherSettings) -> SystemSettings:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(SystemSettingsRow).where(SystemSettingsRow.id == 1))
+            row = result.scalar_one_or_none()
+            if row is None:
+                row = SystemSettingsRow(
+                    id=1,
+                    business_hours={
+                        "start_time": "08:00",
+                        "end_time": "17:00",
+                        "enabled": False,
+                        "timezone": "America/New_York",
+                    },
+                    queue_thresholds={
+                        "calls_waiting_threshold": 1,
+                        "holdtime_threshold_seconds": 30,
+                        "stable_polls_required": 3,
+                    },
+                    dispatcher_settings={},
+                )
+                session.add(row)
+            row.dispatcher_settings = {
+                "poll_interval": dispatcher_settings.poll_interval,
+                "dispatch_timeout": dispatcher_settings.dispatch_timeout,
+                "max_attempts": dispatcher_settings.max_attempts,
+                "min_hours_between": dispatcher_settings.min_hours_between,
             }
             await session.commit()
             return _row_to_settings(row)
