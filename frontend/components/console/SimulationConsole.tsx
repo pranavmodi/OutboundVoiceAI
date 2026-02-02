@@ -75,6 +75,19 @@ interface Scenario {
 
 const SCENARIOS: Scenario[] = [
   {
+    id: "single_patient_ready",
+    label: "Single Patient Ready",
+    description: "One patient waiting, one agent available. Simplest scenario to trigger a single outbound call immediately.",
+    amiConnected: true,
+    queues: [
+      { queue_name: "scheduling_en", calls_waiting: 0, oldest_wait_seconds: 0, agents_available: 1, agents_logged_in: 1 },
+    ],
+    patients: [
+      { name: "Pranav Modi", phone: "+918287149638", language: "en", has_abandoned_before: true, has_called_in_before: false, ai_called_before: false, attempt_count: 0 },
+    ],
+    dispatcher: { poll_interval: 5, dispatch_timeout: 30, max_attempts: 3, min_hours_between: 6 },
+  },
+  {
     id: "default",
     label: "Default (Full Queue)",
     description: "3 queues with agents available, 7 patients across all priority buckets. Standard dispatcher settings.",
@@ -94,19 +107,6 @@ const SCENARIOS: Scenario[] = [
       { name: "Wei Zhang", phone: "555-0107", language: "zh", has_abandoned_before: false, has_called_in_before: true, ai_called_before: false, attempt_count: 0 },
     ],
     dispatcher: { poll_interval: 10, dispatch_timeout: 30, max_attempts: 3, min_hours_between: 6 },
-  },
-  {
-    id: "single_patient_ready",
-    label: "Single Patient Ready",
-    description: "One patient waiting, one agent available. Simplest scenario to trigger a single outbound call immediately.",
-    amiConnected: true,
-    queues: [
-      { queue_name: "scheduling_en", calls_waiting: 0, oldest_wait_seconds: 0, agents_available: 1, agents_logged_in: 1 },
-    ],
-    patients: [
-      { name: "Alice Taylor", phone: "555-0201", language: "en", has_abandoned_before: true, has_called_in_before: false, ai_called_before: false, attempt_count: 0 },
-    ],
-    dispatcher: { poll_interval: 5, dispatch_timeout: 30, max_attempts: 3, min_hours_between: 6 },
   },
   {
     id: "busy_queues",

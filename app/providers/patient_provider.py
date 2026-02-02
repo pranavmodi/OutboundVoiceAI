@@ -6,7 +6,7 @@ from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import AsyncSessionLocal
-from app.db.models import PatientRow
+from app.db.models import PatientRow, CallLogRow
 from app.models import Patient, Language, IntakeStatus
 
 
@@ -162,6 +162,9 @@ class PatientProvider:
     async def remove_patient(self, patient_id: str):
         async with AsyncSessionLocal() as session:
             await session.execute(
+                delete(CallLogRow).where(CallLogRow.patient_id == patient_id)
+            )
+            await session.execute(
                 delete(PatientRow).where(PatientRow.patient_id == patient_id)
             )
             await session.commit()
@@ -169,6 +172,7 @@ class PatientProvider:
     async def reset_with_patients(self, patient_dicts: list[dict]):
         now = datetime.now(timezone.utc)
         async with AsyncSessionLocal() as session:
+            await session.execute(delete(CallLogRow))
             await session.execute(delete(PatientRow))
             for i, pd in enumerate(patient_dicts, start=1):
                 lang_str = pd.get("language", "en")
@@ -202,6 +206,7 @@ class PatientProvider:
         """Reset to initial sample data by re-running seed."""
         from app.db.seed import seed_sample_patients
         async with AsyncSessionLocal() as session:
+            await session.execute(delete(CallLogRow))
             await session.execute(delete(PatientRow))
             await session.commit()
         async with AsyncSessionLocal() as session:
