@@ -270,6 +270,31 @@ async def twilio_twiml(stream_id: str):
     return Response(content=twiml, media_type="application/xml")
 
 
+@router.delete("/calls")
+async def delete_all_calls():
+    """Delete all call logs and transcripts."""
+    call_log_provider = get_call_log_provider()
+    await call_log_provider.reset()
+    return {"status": "ok"}
+
+
+@router.delete("/scenarios")
+async def delete_custom_scenarios():
+    """Delete all custom (non-builtin) simulation scenarios."""
+    from sqlalchemy import delete
+    from app.db.session import AsyncSessionLocal
+    from app.db.models import SimulationScenarioRow
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            delete(SimulationScenarioRow).where(
+                SimulationScenarioRow.is_builtin == False  # noqa: E712
+            )
+        )
+        await session.commit()
+    return {"status": "ok", "deleted": result.rowcount}
+
+
 @router.get("/config/check")
 async def check_configuration():
     """Check system configuration status (for diagnostics)."""

@@ -241,6 +241,26 @@ export function useApi() {
     }
   }, []);
 
+  const deleteAllCalls = useCallback(async (): Promise<boolean> => {
+    try {
+      await fetchApi("/api/calls", { method: "DELETE" });
+      return true;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return false;
+    }
+  }, []);
+
+  const deleteCustomScenarios = useCallback(async (): Promise<boolean> => {
+    try {
+      await fetchApi("/api/scenarios", { method: "DELETE" });
+      return true;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return false;
+    }
+  }, []);
+
   const getTimezones = useCallback(async (): Promise<string[]> => {
     try {
       return await fetchApi<string[]>("/api/settings/timezones");
@@ -273,6 +293,8 @@ export function useApi() {
     setAllowLiveCalls,
     updateAllowedPhones,
     getTimezones,
+    deleteAllCalls,
+    deleteCustomScenarios,
   }), [
     loading,
     error,
@@ -296,5 +318,7 @@ export function useApi() {
     setAllowLiveCalls,
     updateAllowedPhones,
     getTimezones,
+    deleteAllCalls,
+    deleteCustomScenarios,
   ]);
 }

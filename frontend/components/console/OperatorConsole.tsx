@@ -23,6 +23,8 @@ import {
   Save,
   ShieldAlert,
   Phone,
+  PhoneCall,
+  Monitor,
   Plus,
   Trash2,
 } from "lucide-react";
@@ -31,6 +33,8 @@ import type { SystemSettings, BusinessHours, QueueThresholds } from "@/types";
 interface OperatorConsoleProps {
   settings: SystemSettings | null;
   timezones: string[];
+  callMode: string;
+  onCallModeChange: (mode: string) => void;
   onSetSystemEnabled: (enabled: boolean) => Promise<void>;
   onUpdateBusinessHours: (businessHours: BusinessHours) => Promise<void>;
   onUpdateQueueThresholds: (thresholds: QueueThresholds) => Promise<void>;
@@ -41,6 +45,8 @@ interface OperatorConsoleProps {
 export function OperatorConsole({
   settings,
   timezones,
+  callMode,
+  onCallModeChange,
   onSetSystemEnabled,
   onUpdateBusinessHours,
   onUpdateQueueThresholds,
@@ -135,6 +141,50 @@ export function OperatorConsole({
             onCheckedChange={onSetSystemEnabled}
           />
         </div>
+      </div>
+
+      <Separator />
+
+      {/* Call Mode */}
+      <div className="space-y-3">
+        <div className="flex items-center gap-2">
+          <PhoneCall className="h-4 w-4 text-muted-foreground" />
+          <h4 className="text-sm font-medium">Call Mode</h4>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Choose how outbound calls are placed. Web mode uses the browser microphone to simulate the patient. Twilio mode dials a real phone number via Twilio and streams audio between the phone and the AI.
+        </p>
+        <div className="flex items-center gap-4">
+          <Select value={callMode} onValueChange={onCallModeChange}>
+            <SelectTrigger className="w-48">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="web">
+                <span className="flex items-center gap-2">
+                  <Monitor className="h-4 w-4" />
+                  Web (Browser Audio)
+                </span>
+              </SelectItem>
+              <SelectItem value="twilio">
+                <span className="flex items-center gap-2">
+                  <PhoneCall className="h-4 w-4" />
+                  Twilio (Real Phone Call)
+                </span>
+              </SelectItem>
+            </SelectContent>
+          </Select>
+          {callMode === "twilio" && (
+            <Badge variant="outline" className="text-orange-600 border-orange-600">
+              Real calls — charges apply
+            </Badge>
+          )}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {callMode === "web"
+            ? "Audio streams between your browser and OpenAI. You speak as the patient through your microphone."
+            : "Twilio dials the patient's phone number. Audio streams between the phone line and OpenAI. The browser still shows transcripts and controls."}
+        </p>
       </div>
 
       <Separator />

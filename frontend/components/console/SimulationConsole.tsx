@@ -16,8 +16,6 @@ import {
 } from "@/components/ui/select";
 import {
   Phone,
-  PhoneCall,
-  Monitor,
   Users,
   Settings,
   Plus,
@@ -184,13 +182,11 @@ const SCENARIOS: Scenario[] = [
 
 interface SimulationConsoleProps {
   onApplySimulation: (config: SimulationConfig) => Promise<void>;
-  callMode: string;
-  onCallModeChange: (mode: string) => void;
 }
 
 // ---------- Component ----------
 
-export function SimulationConsole({ onApplySimulation, callMode, onCallModeChange }: SimulationConsoleProps) {
+export function SimulationConsole({ onApplySimulation }: SimulationConsoleProps) {
   const defaultScenario = SCENARIOS[0];
   const [selectedScenarioId, setSelectedScenarioId] = useState(defaultScenario.id);
   const [queues, setQueues] = useState<QueueRow[]>(() => defaultScenario.queues.map(q => ({ ...q })));
@@ -294,52 +290,6 @@ export function SimulationConsole({ onApplySimulation, callMode, onCallModeChang
           </Select>
           <p className="text-sm text-muted-foreground">
             {SCENARIOS.find(s => s.id === selectedScenarioId)?.description}
-          </p>
-        </CardContent>
-      </Card>
-
-      {/* Call Mode Toggle */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <PhoneCall className="h-5 w-5" />
-            Call Mode
-          </CardTitle>
-          <CardDescription>
-            Choose how outbound calls are placed. Web mode uses the browser microphone to simulate the patient. Twilio mode dials a real phone number via Twilio and streams audio between the phone and the AI.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex items-center gap-4">
-            <Select value={callMode} onValueChange={onCallModeChange}>
-              <SelectTrigger className="w-48">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="web">
-                  <span className="flex items-center gap-2">
-                    <Monitor className="h-4 w-4" />
-                    Web (Browser Audio)
-                  </span>
-                </SelectItem>
-                <SelectItem value="twilio">
-                  <span className="flex items-center gap-2">
-                    <PhoneCall className="h-4 w-4" />
-                    Twilio (Real Phone Call)
-                  </span>
-                </SelectItem>
-              </SelectContent>
-            </Select>
-            {callMode === "twilio" && (
-              <Badge variant="outline" className="text-orange-600 border-orange-600">
-                Real calls — charges apply
-              </Badge>
-            )}
-          </div>
-          <p className="text-xs text-muted-foreground mt-2">
-            {callMode === "web"
-              ? "Audio streams between your browser and OpenAI. You speak as the patient through your microphone."
-              : "Twilio dials the patient's phone number. Audio streams between the phone line and OpenAI. The browser still shows transcripts and controls."}
           </p>
         </CardContent>
       </Card>

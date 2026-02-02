@@ -11,6 +11,7 @@ import {
   ActiveCallCard,
   CallHistoryCard,
   DispatcherEventsCard,
+  TranscriptBrowserCard,
 } from "@/components/dashboard";
 import { SimulationConsole, OperatorConsole } from "@/components/console";
 import { useApi } from "@/hooks/useApi";
@@ -360,6 +361,9 @@ export default function Dashboard() {
             {/* Dispatcher Events - full width */}
             <DispatcherEventsCard events={dashboard.dispatcherEvents} />
 
+            {/* Transcript Browser - full width */}
+            <TranscriptBrowserCard calls={calls} onRefresh={handleRefreshCalls} />
+
             {/* Operator Settings - collapsible */}
             <Collapsible open={operatorOpen} onOpenChange={setOperatorOpen}>
               <Card>
@@ -389,6 +393,8 @@ export default function Dashboard() {
                     <OperatorConsole
                       settings={settings}
                       timezones={timezones}
+                      callMode={callMode}
+                      onCallModeChange={setCallMode}
                       onSetSystemEnabled={handleSetSystemEnabled}
                       onUpdateBusinessHours={handleUpdateBusinessHours}
                       onUpdateQueueThresholds={handleUpdateQueueThresholds}
@@ -405,8 +411,6 @@ export default function Dashboard() {
           <TabsContent value="simulation" className="animate-in">
             <SimulationConsole
               onApplySimulation={handleApplySimulation}
-              callMode={callMode}
-              onCallModeChange={setCallMode}
             />
           </TabsContent>
         </Tabs>
