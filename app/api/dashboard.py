@@ -5,7 +5,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 from typing import Optional
 
-from app.providers import get_queue_provider, get_mock_queue_provider, get_patient_provider, get_call_log_provider
+from app.providers import get_queue_provider, get_mock_queue_provider, get_patient_provider, get_simulation_patient_provider, get_call_log_provider
 from app.models import CallOutcome
 from app.services.dispatcher import get_dispatcher
 
@@ -118,8 +118,8 @@ async def get_patient(patient_id: str):
 
 @router.post("/patients/reset")
 async def reset_patients():
-    """Reset patients to sample data."""
-    patient_provider = get_patient_provider()
+    """Reset patients to sample data (simulation only)."""
+    patient_provider = get_simulation_patient_provider()
     await patient_provider.reset_to_sample_data()
     patients = await patient_provider.get_all_patients()
     return {"status": "ok", "count": len(patients)}
@@ -217,7 +217,7 @@ class SimulationApplyRequest(BaseModel):
 async def apply_simulation(request: SimulationApplyRequest):
     """Apply simulation configuration and restart dispatcher."""
     queue_provider = get_mock_queue_provider()
-    patient_provider = get_patient_provider()
+    patient_provider = get_simulation_patient_provider()
     call_log_provider = get_call_log_provider()
     dispatcher = get_dispatcher()
 
@@ -227,7 +227,7 @@ async def apply_simulation(request: SimulationApplyRequest):
         ami_connected=request.queue.ami_connected,
     )
 
-    # 2. Reset patient provider
+    # 2. Reset patient provider (simulation only)
     await patient_provider.reset_with_patients(
         patient_dicts=[p.model_dump() for p in request.patients]
     )

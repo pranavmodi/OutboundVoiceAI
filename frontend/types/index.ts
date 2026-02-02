@@ -166,6 +166,7 @@ export interface SystemSettings {
   allow_live_calls: boolean;
   allowed_phones: string[];
   queue_source: string;
+  patient_source: string;
   can_make_calls: boolean;
   is_within_business_hours: boolean;
 }

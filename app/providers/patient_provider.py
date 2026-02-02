@@ -1,6 +1,12 @@
-"""Patient provider — DB-backed."""
+"""Patient providers — Simulation (DB-backed) and Live (RadFlow CallListData API)."""
+import json
+import logging
+import os
+from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+
+import httpx
 
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,6 +14,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import AsyncSessionLocal
 from app.db.models import PatientRow, CallLogRow
 from app.models import Patient, Language, IntakeStatus
+
+logger = logging.getLogger(__name__)
+
+CALLLIST_API_URL = os.getenv(
+    "CALLLIST_API_URL",
+    "https://app.radflow360.com/chatbotapi/Patient/CallListData",
+)
+CALLLIST_API_USER = os.getenv("CALLLIST_API_USER", "")
+CALLLIST_API_PASSWORD = os.getenv("CALLLIST_API_PASSWORD", "")
 
 
 def _row_to_patient(row: PatientRow) -> Patient:
@@ -51,8 +66,79 @@ def _compute_priority(has_abandoned_before: bool, ai_called_before: bool,
         return 4
 
 
-class PatientProvider:
-    """Manages patient records with PostgreSQL storage."""
+def _map_language(lang_str: str) -> Language:
+    """Map RadFlow LANGUAGE string to Language enum."""
+    mapping = {
+        "english": Language.ENGLISH,
+        "spanish": Language.SPANISH,
+        "chinese": Language.CHINESE,
+    }
+    return mapping.get(lang_str.lower().strip(), Language.ENGLISH) if lang_str else Language.ENGLISH
+
+
+def _api_record_to_patient(rec: dict) -> Patient:
+    """Convert a CallListData record to a Patient object."""
+    lang = _map_language(rec.get("LANGUAGE", "english"))
+    intake = IntakeStatus.COMPLETE if rec.get("IntakeCompleted", True) else IntakeStatus.INCOMPLETE
+
+    p = Patient.__new__(Patient)
+    p.patient_id = rec.get("PatientId", "")
+    p.name = f"{rec.get('GivenName', '')} {rec.get('FamilyName', '')}".strip()
+    p.phone = rec.get("CELLPHONE", "") or ""
+    p.language = lang
+    p.order_id = rec.get("InternalStudyId")
+    p.order_created = None
+    p.intake_status = intake
+    p.has_called_in_before = (rec.get("CB", 0) or 0) > 0
+    p.has_abandoned_before = (rec.get("status", "") or "").upper() == "NO SHOW"
+    p.ai_called_before = False
+    p.attempt_count = (rec.get("VM", 0) or 0) + (rec.get("CB", 0) or 0)
+    p.last_attempt_at = None
+    p.last_outcome = rec.get("status")
+    p.due_by = None
+    # Parse Studydatetime as due_by if present
+    study_dt = rec.get("Studydatetime", "")
+    if study_dt:
+        try:
+            p.due_by = datetime.strptime(study_dt, "%m-%d-%Y %I:%M %p").replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            pass
+    p.priority_bucket = _compute_priority(p.has_abandoned_before, p.ai_called_before, p.has_called_in_before)
+    return p
+
+
+# ---------------------------------------------------------------------------
+# Base class
+# ---------------------------------------------------------------------------
+class BasePatientProvider(ABC):
+    """Interface for patient data access."""
+
+    @abstractmethod
+    async def get_all_patients(self) -> list[Patient]:
+        ...
+
+    @abstractmethod
+    async def get_patient(self, patient_id: str) -> Optional[Patient]:
+        ...
+
+    @abstractmethod
+    async def get_outbound_queue(self, max_attempts: int = 3, min_hours_between: int = 6) -> list[Patient]:
+        ...
+
+    @abstractmethod
+    async def get_next_candidate(self, max_attempts: int = 3, min_hours_between: int = 6) -> Optional[Patient]:
+        ...
+
+    @abstractmethod
+    async def update_patient_after_call(self, patient_id: str, outcome: str, increment_attempt: bool = True):
+        ...
+
+
+# ---------------------------------------------------------------------------
+# Simulation (DB-backed) provider
+# ---------------------------------------------------------------------------
+class SimulationPatientProvider(BasePatientProvider):
+    """Manages patient records with PostgreSQL storage (simulation mode)."""
 
     async def get_all_patients(self) -> list[Patient]:
         async with AsyncSessionLocal() as session:
@@ -137,6 +223,8 @@ class PatientProvider:
                 )
                 await session.commit()
 
+    # -- Simulation-only methods --
+
     async def add_patient(self, patient: Patient):
         async with AsyncSessionLocal() as session:
             row = PatientRow(
@@ -214,13 +302,135 @@ class PatientProvider:
             await session.commit()
 
 
-# Global instance
-_patient_provider: Optional[PatientProvider] = None
+# ---------------------------------------------------------------------------
+# Live (RadFlow CallListData API) provider
+# ---------------------------------------------------------------------------
+class LivePatientProvider(BasePatientProvider):
+    """Fetches patient call list from RadFlow CallListData API."""
+
+    def __init__(
+        self,
+        url: str = CALLLIST_API_URL,
+        user: str = CALLLIST_API_USER,
+        password: str = CALLLIST_API_PASSWORD,
+    ):
+        self._url = url
+        self._auth = (user, password) if user else None
+        self._client = httpx.AsyncClient(verify=False, timeout=30.0)
+        self._cache: list[Patient] = []
+        self._cache_time: Optional[datetime] = None
+        self._cache_ttl = timedelta(seconds=60)
+
+    async def _fetch(self, patient_id: Optional[str] = None) -> list[Patient]:
+        """Fetch from API, with a 60-second cache."""
+        now = datetime.now(timezone.utc)
+        if (
+            patient_id is None
+            and self._cache
+            and self._cache_time
+            and (now - self._cache_time) < self._cache_ttl
+        ):
+            return self._cache
+
+        url = self._url
+        if patient_id:
+            url = f"{self._url}?patientId={patient_id}"
+
+        try:
+            resp = await self._client.get(
+                url,
+                headers={"Accept": "application/json"},
+                auth=self._auth,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            raw = data.get("result", "")
+            if not raw:
+                return []
+            records = json.loads(raw) if isinstance(raw, str) else raw
+            patients = [_api_record_to_patient(r) for r in records]
+            # Deduplicate by PatientId (API may return multiple rows per study)
+            seen: dict[str, Patient] = {}
+            for p in patients:
+                if p.patient_id not in seen:
+                    seen[p.patient_id] = p
+            deduped = list(seen.values())
+            if patient_id is None:
+                self._cache = deduped
+                self._cache_time = now
+            return deduped
+        except Exception as e:
+            logger.warning("CallListData fetch failed: %s", e)
+            return self._cache  # return stale cache on error
+
+    async def get_all_patients(self) -> list[Patient]:
+        return await self._fetch()
+
+    async def get_patient(self, patient_id: str) -> Optional[Patient]:
+        patients = await self._fetch(patient_id=patient_id)
+        return patients[0] if patients else None
+
+    async def get_outbound_queue(self, max_attempts: int = 3, min_hours_between: int = 6) -> list[Patient]:
+        patients = await self._fetch()
+        # The API already returns the call list; sort by priority
+        return sorted(patients, key=lambda p: (p.priority_bucket, p.due_by or datetime.max.replace(tzinfo=timezone.utc)))
+
+    async def get_next_candidate(self, max_attempts: int = 3, min_hours_between: int = 6) -> Optional[Patient]:
+        queue = await self.get_outbound_queue(max_attempts, min_hours_between)
+        return queue[0] if queue else None
+
+    async def update_patient_after_call(
+        self,
+        patient_id: str,
+        outcome: str,
+        increment_attempt: bool = True,
+    ):
+        # Live mode: no local persistence for patient state
+        logger.info("Live mode: call outcome for %s = %s (not persisted to API)", patient_id, outcome)
 
 
-def get_patient_provider() -> PatientProvider:
-    """Get the global patient provider instance."""
-    global _patient_provider
-    if _patient_provider is None:
-        _patient_provider = PatientProvider()
-    return _patient_provider
+# ---------------------------------------------------------------------------
+# Singleton management
+# ---------------------------------------------------------------------------
+_sim_provider: Optional[SimulationPatientProvider] = None
+_live_provider: Optional[LivePatientProvider] = None
+_active_source: str = "simulation"
+
+
+def _get_sim_provider() -> SimulationPatientProvider:
+    global _sim_provider
+    if _sim_provider is None:
+        _sim_provider = SimulationPatientProvider()
+    return _sim_provider
+
+
+def _get_live_provider() -> LivePatientProvider:
+    global _live_provider
+    if _live_provider is None:
+        _live_provider = LivePatientProvider()
+    return _live_provider
+
+
+def get_patient_provider() -> BasePatientProvider:
+    """Get the active patient provider based on patient_source setting."""
+    if _active_source == "live":
+        return _get_live_provider()
+    return _get_sim_provider()
+
+
+def get_simulation_patient_provider() -> SimulationPatientProvider:
+    """Always returns the simulation provider (for sim endpoints)."""
+    return _get_sim_provider()
+
+
+def set_patient_source(source: str):
+    """Switch the active patient source ('simulation' or 'live')."""
+    global _active_source
+    if source not in ("simulation", "live"):
+        raise ValueError(f"Invalid patient source: {source!r}")
+    _active_source = source
+    logger.info("Patient source set to: %s", source)
+
+
+# Backwards-compatible alias
+PatientProvider = SimulationPatientProvider

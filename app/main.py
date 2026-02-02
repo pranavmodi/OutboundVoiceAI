@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .api import dashboard_router, websocket_router, settings_router, dispatcher_router
 from .services.dispatcher import get_dispatcher
-from .providers import set_queue_source
+from .providers import set_queue_source, set_patient_source
 from .providers.settings_provider import get_settings_provider
 from .db import AsyncSessionLocal, async_engine
 from .db.seed import seed_default_settings, seed_builtin_scenarios, seed_sample_patients
@@ -22,9 +22,10 @@ async def lifespan(app: FastAPI):
         await seed_builtin_scenarios(session)
         await seed_sample_patients(session)
         await session.commit()
-    # Apply persisted queue_source setting
+    # Apply persisted source settings
     settings = await get_settings_provider().get_settings()
     set_queue_source(settings.queue_source)
+    set_patient_source(settings.patient_source)
     get_dispatcher().start()
     yield
     # Shutdown: stop the dispatcher and dispose engine

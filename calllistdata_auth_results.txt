@@ -1,0 +1,107 @@
+================================================================================
+CallListData Auth Test — 2026-02-02 09:50:14
+Target: https://app.radflow360.com/chatbotapi/Patient/CallListData?patientId=PRE1068792
+================================================================================
+
+================================================================================
+METHOD 1: No Authentication (plain GET)
+================================================================================
+Status: 401
+Response Headers: {'transfer-encoding': 'chunked', 'server': '', 'x-frame-options': 'SAMEORIGIN', 'date': 'Mon, 02 Feb 2026 09:49:17 GMT'}
+Body: (empty)
+
+================================================================================
+METHOD 2: Basic Auth (CHATBOT_API_USER / CHATBOT_API_PASSWORD)
+================================================================================
+Status: 200
+Response Headers: {'transfer-encoding': 'chunked', 'content-type': 'application/json; charset=utf-8', 'server': '', 'x-frame-options': 'SAMEORIGIN', 'date': 'Mon, 02 Feb 2026 09:49:25 GMT'}
+Body: {"result":"","status":1,"responseStatus":"Success","exception":null}
+
+================================================================================
+METHOD 3: API Key as query param (partnerApiKey=PARTNER_API_KEY)
+================================================================================
+Status: 401
+Response Headers: {'transfer-encoding': 'chunked', 'server': '', 'x-frame-options': 'SAMEORIGIN', 'date': 'Mon, 02 Feb 2026 09:49:25 GMT'}
+Body: (empty)
+
+================================================================================
+METHOD 4: API Key as query param (partnerApiKey=CHATBOT_PARTNER_API_KEY)
+================================================================================
+Status: 401
+Response Headers: {'transfer-encoding': 'chunked', 'server': '', 'x-frame-options': 'SAMEORIGIN', 'date': 'Mon, 02 Feb 2026 09:49:25 GMT'}
+Body: (empty)
+
+================================================================================
+METHOD: Bearer JWT from [staging_patientportal] with PARTNER_API_KEY
+Token URL: https://staging-app.radflow360.com/patientportalapi/Partner/GetRefreshToken
+================================================================================
+Got JWT (len=257)
+Status: 401
+Body: (empty)
+
+================================================================================
+METHOD: Bearer JWT from [prod_patientportal] with PARTNER_API_KEY
+Token URL: https://app.radflow360.com/patientportalapi/Partner/GetRefreshToken
+================================================================================
+Got JWT (len=257)
+Status: 401
+Body: (empty)
+
+================================================================================
+METHOD: Bearer JWT from [pbx] with PARTNER_API_KEY
+Token URL: https://app.radflow360.com/pbxcallAPI/Partner/GetRefreshToken
+================================================================================
+Got JWT (len=175)
+Status: 401
+Body: (empty)
+
+================================================================================
+METHOD: Bearer JWT from [chatbot] with PARTNER_API_KEY
+Token URL: https://app.radflow360.com/chatbotapi/Partner/GetRefreshToken
+================================================================================
+Token fetch failed: No jwtToken in response: {"result": {"partnerId": 0, "email": null, "phoneNumber": null, "firstName": null, "lastName": null, "middleName": null, "street": null, "city": null, "state": null, "country": null, "jwtToken": null}, "status": 1, "responseStatus": "Success", "exception": null}
+
+================================================================================
+METHOD: Bearer JWT from [staging_patientportal] with CHATBOT_PARTNER_API_KEY
+Token URL: https://staging-app.radflow360.com/patientportalapi/Partner/GetRefreshToken
+================================================================================
+Token fetch failed: No jwtToken in response: {"result": {"partnerId": null, "email": null, "phoneNumber": null, "firstName": null, "lastName": null, "middleName": null, "street": null, "city": null, "state": null, "country": null, "jwtToken": null}, "status": 0, "responseStatus": "Success", "exception": null}
+
+================================================================================
+METHOD: Bearer JWT from [prod_patientportal] with CHATBOT_PARTNER_API_KEY
+Token URL: https://app.radflow360.com/patientportalapi/Partner/GetRefreshToken
+================================================================================
+Token fetch failed: No jwtToken in response: {"result": {"partnerId": null, "email": null, "phoneNumber": null, "firstName": null, "lastName": null, "middleName": null, "street": null, "city": null, "state": null, "country": null, "jwtToken": null}, "status": 0, "responseStatus": "Success", "exception": null}
+
+================================================================================
+METHOD: Bearer JWT from [pbx] with CHATBOT_PARTNER_API_KEY
+Token URL: https://app.radflow360.com/pbxcallAPI/Partner/GetRefreshToken
+================================================================================
+Token fetch failed: No jwtToken in response: {"result": {"partnerId": 0, "email": null, "phoneNumber": null, "firstName": null, "lastName": null, "middleName": null, "street": null, "city": null, "state": null, "country": null, "jwtToken": null}, "status": 1, "responseStatus": "Success", "exception": null}
+
+================================================================================
+METHOD: Bearer JWT from [chatbot] with CHATBOT_PARTNER_API_KEY
+Token URL: https://app.radflow360.com/chatbotapi/Partner/GetRefreshToken
+================================================================================
+Got JWT (len=175)
+Status: 401
+Body: (empty)
+
+================================================================================
+METHOD: Basic Auth + Chatbot Bearer JWT combined
+================================================================================
+Got JWT (len=175)
+Status: 200
+Body: {"result":"","status":1,"responseStatus":"Success","exception":null}
+
+================================================================================
+METHOD: API Key as X-Api-Key header (PARTNER_API_KEY)
+================================================================================
+Status: 401
+Body: (empty)
+
+================================================================================
+METHOD: API Key as X-Api-Key header (CHATBOT_PARTNER_API_KEY)
+================================================================================
+Status: 401
+Body: (empty)

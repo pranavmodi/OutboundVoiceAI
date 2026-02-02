@@ -29,3 +29,4 @@ class SystemSettings:
     allow_live_calls: bool = False
     allowed_phones: List[str] = field(default_factory=list)
     queue_source: str = "simulation"
+    patient_source: str = "simulation"

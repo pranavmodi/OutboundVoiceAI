@@ -31,6 +31,7 @@ async def seed_default_settings(session: AsyncSession):
         allow_live_calls=False,
         allowed_phones=[],
         queue_source="simulation",
+        patient_source="simulation",
     )
     session.add(row)
     logger.info("Seeded default system settings")

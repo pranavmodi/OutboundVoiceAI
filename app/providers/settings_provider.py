@@ -43,6 +43,7 @@ def _row_to_settings(row: SystemSettingsRow) -> SystemSettings:
     settings.allow_live_calls = row.allow_live_calls if row.allow_live_calls is not None else False
     settings.allowed_phones = row.allowed_phones if row.allowed_phones is not None else []
     settings.queue_source = row.queue_source if row.queue_source is not None else "simulation"
+    settings.patient_source = row.patient_source if row.patient_source is not None else "simulation"
     return settings
 
 
@@ -79,6 +80,7 @@ class SettingsProvider:
             row.allow_live_calls = settings.allow_live_calls
             row.allowed_phones = settings.allowed_phones
             row.queue_source = settings.queue_source
+            row.patient_source = settings.patient_source
             await session.commit()
             return settings
 
@@ -190,6 +192,17 @@ class SettingsProvider:
         if not await self.is_within_business_hours():
             return False
         return True
+
+    async def set_patient_source(self, source: str) -> SystemSettings:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(SystemSettingsRow).where(SystemSettingsRow.id == 1))
+            row = result.scalar_one_or_none()
+            if row is None:
+                row = SystemSettingsRow(id=1, business_hours={}, queue_thresholds={})
+                session.add(row)
+            row.patient_source = source
+            await session.commit()
+            return _row_to_settings(row)
 
     async def set_queue_source(self, source: str) -> SystemSettings:
         async with AsyncSessionLocal() as session:

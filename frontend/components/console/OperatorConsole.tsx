@@ -28,6 +28,7 @@ import {
   Plus,
   Trash2,
   Radio,
+  Users,
 } from "lucide-react";
 import type { SystemSettings, BusinessHours, QueueThresholds } from "@/types";
 
@@ -42,6 +43,7 @@ interface OperatorConsoleProps {
   onSetAllowLiveCalls: (allowed: boolean) => Promise<void>;
   onUpdateAllowedPhones: (phones: string[]) => Promise<void>;
   onSetQueueSource: (source: string) => Promise<void>;
+  onSetPatientSource: (source: string) => Promise<void>;
 }
 
 export function OperatorConsole({
@@ -55,6 +57,7 @@ export function OperatorConsole({
   onSetAllowLiveCalls,
   onUpdateAllowedPhones,
   onSetQueueSource,
+  onSetPatientSource,
 }: OperatorConsoleProps) {
   const [businessHoursForm, setBusinessHoursForm] = useState<BusinessHours>({
     start_time: "08:00",
@@ -222,6 +225,45 @@ export function OperatorConsole({
             </SelectContent>
           </Select>
           {settings.queue_source === "live" && (
+            <Badge variant="outline" className="text-blue-600 border-blue-600">
+              Live data
+            </Badge>
+          )}
+        </div>
+      </div>
+
+      <Separator />
+
+      {/* Patient Source */}
+      <div className="space-y-3">
+        <div className="flex items-center gap-2">
+          <Users className="h-4 w-4 text-muted-foreground" />
+          <h4 className="text-sm font-medium">Patient Source</h4>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Choose where patient call list data comes from. Simulation uses sample patients you can control manually. Live connects to the RadFlow CallListData API for real patient data.
+        </p>
+        <div className="flex items-center gap-4">
+          <Select value={settings.patient_source} onValueChange={onSetPatientSource}>
+            <SelectTrigger className="w-48">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="simulation">
+                <span className="flex items-center gap-2">
+                  <Monitor className="h-4 w-4" />
+                  Simulation
+                </span>
+              </SelectItem>
+              <SelectItem value="live">
+                <span className="flex items-center gap-2">
+                  <Users className="h-4 w-4" />
+                  Live RadFlow
+                </span>
+              </SelectItem>
+            </SelectContent>
+          </Select>
+          {settings.patient_source === "live" && (
             <Badge variant="outline" className="text-blue-600 border-blue-600">
               Live data
             </Badge>

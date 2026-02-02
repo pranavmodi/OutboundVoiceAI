@@ -229,6 +229,11 @@ export default function Dashboard() {
     if (newSettings) setSettings(newSettings);
   }, [api]);
 
+  const handleSetPatientSource = useCallback(async (source: string) => {
+    const newSettings = await api.setPatientSource(source);
+    if (newSettings) setSettings(newSettings);
+  }, [api]);
+
   // Refresh handlers
   const handleRefreshPatients = useCallback(async () => {
     const patientList = await api.getOutboundQueue();
@@ -406,6 +411,7 @@ export default function Dashboard() {
                       onSetAllowLiveCalls={handleSetAllowLiveCalls}
                       onUpdateAllowedPhones={handleUpdateAllowedPhones}
                       onSetQueueSource={handleSetQueueSource}
+                      onSetPatientSource={handleSetPatientSource}
                     />
                   </CardContent>
                 </CollapsibleContent>

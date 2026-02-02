@@ -26,7 +26,7 @@ class QueueThresholdsRequest(BaseModel):
     stable_polls_required: int
 
 
-class QueueSourceRequest(BaseModel):
+class SourceRequest(BaseModel):
     source: str
 
 
@@ -37,6 +37,7 @@ class SystemSettingsRequest(BaseModel):
     allow_live_calls: bool = False
     allowed_phones: List[str] = []
     queue_source: str = "simulation"
+    patient_source: str = "simulation"
 
 
 class SystemEnabledRequest(BaseModel):
@@ -58,6 +59,7 @@ class SystemSettingsResponse(BaseModel):
     allow_live_calls: bool
     allowed_phones: List[str]
     queue_source: str
+    patient_source: str
     can_make_calls: bool
     is_within_business_hours: bool
 
@@ -81,6 +83,7 @@ async def settings_to_response(provider) -> SystemSettingsResponse:
         allow_live_calls=settings.allow_live_calls,
         allowed_phones=settings.allowed_phones,
         queue_source=settings.queue_source,
+        patient_source=settings.patient_source,
         can_make_calls=await provider.can_make_outbound_call(),
         is_within_business_hours=await provider.is_within_business_hours(),
     )
@@ -114,6 +117,7 @@ async def update_settings(request: SystemSettingsRequest):
         allow_live_calls=request.allow_live_calls,
         allowed_phones=request.allowed_phones,
         queue_source=request.queue_source,
+        patient_source=request.patient_source,
     )
 
     await provider.update_settings(settings)
@@ -176,7 +180,7 @@ async def update_allowed_phones(request: AllowedPhonesRequest):
 
 
 @router.put("/queue-source", response_model=SystemSettingsResponse)
-async def set_queue_source(request: QueueSourceRequest):
+async def set_queue_source(request: SourceRequest):
     """Switch queue data source between simulation and live FreePBX."""
     from app.providers import set_queue_source as _set_queue_source
 
@@ -186,6 +190,20 @@ async def set_queue_source(request: QueueSourceRequest):
     provider = get_settings_provider()
     await provider.set_queue_source(request.source)
     _set_queue_source(request.source)
+    return await settings_to_response(provider)
+
+
+@router.put("/patient-source", response_model=SystemSettingsResponse)
+async def set_patient_source(request: SourceRequest):
+    """Switch patient data source between simulation and live RadFlow."""
+    from app.providers import set_patient_source as _set_patient_source
+
+    if request.source not in ("simulation", "live"):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="source must be 'simulation' or 'live'")
+    provider = get_settings_provider()
+    await provider.set_patient_source(request.source)
+    _set_patient_source(request.source)
     return await settings_to_response(provider)
 
 
