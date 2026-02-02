@@ -213,6 +213,16 @@ export default function Dashboard() {
     if (newSettings) setSettings(newSettings);
   }, [api]);
 
+  const handleSetAllowLiveCalls = useCallback(async (allowed: boolean) => {
+    const newSettings = await api.setAllowLiveCalls(allowed);
+    if (newSettings) setSettings(newSettings);
+  }, [api]);
+
+  const handleUpdateAllowedPhones = useCallback(async (phones: string[]) => {
+    const newSettings = await api.updateAllowedPhones(phones);
+    if (newSettings) setSettings(newSettings);
+  }, [api]);
+
   // Refresh handlers
   const handleRefreshPatients = useCallback(async () => {
     const patientList = await api.getOutboundQueue();
@@ -382,6 +392,8 @@ export default function Dashboard() {
                       onSetSystemEnabled={handleSetSystemEnabled}
                       onUpdateBusinessHours={handleUpdateBusinessHours}
                       onUpdateQueueThresholds={handleUpdateQueueThresholds}
+                      onSetAllowLiveCalls={handleSetAllowLiveCalls}
+                      onUpdateAllowedPhones={handleUpdateAllowedPhones}
                     />
                   </CardContent>
                 </CollapsibleContent>

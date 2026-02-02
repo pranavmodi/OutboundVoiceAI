@@ -1,5 +1,4 @@
 """Settings API endpoints."""
-from dataclasses import asdict
 from typing import List
 
 from fastapi import APIRouter
@@ -31,23 +30,35 @@ class SystemSettingsRequest(BaseModel):
     system_enabled: bool
     business_hours: BusinessHoursRequest
     queue_thresholds: QueueThresholdsRequest
+    allow_live_calls: bool = False
+    allowed_phones: List[str] = []
 
 
 class SystemEnabledRequest(BaseModel):
     enabled: bool
 
 
+class AllowLiveCallsRequest(BaseModel):
+    allowed: bool
+
+
+class AllowedPhonesRequest(BaseModel):
+    phones: List[str]
+
+
 class SystemSettingsResponse(BaseModel):
     system_enabled: bool
     business_hours: BusinessHoursRequest
     queue_thresholds: QueueThresholdsRequest
+    allow_live_calls: bool
+    allowed_phones: List[str]
     can_make_calls: bool
     is_within_business_hours: bool
 
 
-def settings_to_response(provider) -> SystemSettingsResponse:
+async def settings_to_response(provider) -> SystemSettingsResponse:
     """Convert settings to response model."""
-    settings = provider.get_settings()
+    settings = await provider.get_settings()
     return SystemSettingsResponse(
         system_enabled=settings.system_enabled,
         business_hours=BusinessHoursRequest(
@@ -61,20 +72,22 @@ def settings_to_response(provider) -> SystemSettingsResponse:
             oldest_wait_threshold_seconds=settings.queue_thresholds.oldest_wait_threshold_seconds,
             stable_polls_required=settings.queue_thresholds.stable_polls_required,
         ),
-        can_make_calls=provider.can_make_outbound_call(),
-        is_within_business_hours=provider.is_within_business_hours(),
+        allow_live_calls=settings.allow_live_calls,
+        allowed_phones=settings.allowed_phones,
+        can_make_calls=await provider.can_make_outbound_call(),
+        is_within_business_hours=await provider.is_within_business_hours(),
     )
 
 
 @router.get("", response_model=SystemSettingsResponse)
-def get_settings():
+async def get_settings():
     """Get current system settings."""
     provider = get_settings_provider()
-    return settings_to_response(provider)
+    return await settings_to_response(provider)
 
 
 @router.put("", response_model=SystemSettingsResponse)
-def update_settings(request: SystemSettingsRequest):
+async def update_settings(request: SystemSettingsRequest):
     """Update all system settings."""
     provider = get_settings_provider()
 
@@ -91,22 +104,24 @@ def update_settings(request: SystemSettingsRequest):
             oldest_wait_threshold_seconds=request.queue_thresholds.oldest_wait_threshold_seconds,
             stable_polls_required=request.queue_thresholds.stable_polls_required,
         ),
+        allow_live_calls=request.allow_live_calls,
+        allowed_phones=request.allowed_phones,
     )
 
-    provider.update_settings(settings)
-    return settings_to_response(provider)
+    await provider.update_settings(settings)
+    return await settings_to_response(provider)
 
 
 @router.put("/system-enabled", response_model=SystemSettingsResponse)
-def set_system_enabled(request: SystemEnabledRequest):
+async def set_system_enabled(request: SystemEnabledRequest):
     """Toggle system on/off."""
     provider = get_settings_provider()
-    provider.set_system_enabled(request.enabled)
-    return settings_to_response(provider)
+    await provider.set_system_enabled(request.enabled)
+    return await settings_to_response(provider)
 
 
 @router.put("/business-hours", response_model=SystemSettingsResponse)
-def update_business_hours(request: BusinessHoursRequest):
+async def update_business_hours(request: BusinessHoursRequest):
     """Update business hours settings."""
     provider = get_settings_provider()
 
@@ -117,12 +132,12 @@ def update_business_hours(request: BusinessHoursRequest):
         timezone=request.timezone,
     )
 
-    provider.update_business_hours(business_hours)
-    return settings_to_response(provider)
+    await provider.update_business_hours(business_hours)
+    return await settings_to_response(provider)
 
 
 @router.put("/queue-thresholds", response_model=SystemSettingsResponse)
-def update_queue_thresholds(request: QueueThresholdsRequest):
+async def update_queue_thresholds(request: QueueThresholdsRequest):
     """Update queue thresholds."""
     provider = get_settings_provider()
 
@@ -132,11 +147,27 @@ def update_queue_thresholds(request: QueueThresholdsRequest):
         stable_polls_required=request.stable_polls_required,
     )
 
-    provider.update_queue_thresholds(thresholds)
-    return settings_to_response(provider)
+    await provider.update_queue_thresholds(thresholds)
+    return await settings_to_response(provider)
+
+
+@router.put("/allow-live-calls", response_model=SystemSettingsResponse)
+async def set_allow_live_calls(request: AllowLiveCallsRequest):
+    """Toggle live Twilio calls on/off."""
+    provider = get_settings_provider()
+    await provider.set_allow_live_calls(request.allowed)
+    return await settings_to_response(provider)
+
+
+@router.put("/allowed-phones", response_model=SystemSettingsResponse)
+async def update_allowed_phones(request: AllowedPhonesRequest):
+    """Update the phone number allowlist for live calls."""
+    provider = get_settings_provider()
+    await provider.update_allowed_phones(request.phones)
+    return await settings_to_response(provider)
 
 
 @router.get("/timezones", response_model=List[str])
-def get_timezones():
+async def get_timezones():
     """Get list of available timezones."""
     return COMMON_TIMEZONES

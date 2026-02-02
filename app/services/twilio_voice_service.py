@@ -111,7 +111,15 @@ def place_twilio_call(
     to_number: str,
     twiml_url: str,
 ) -> str:
-    """Place an outbound call via Twilio REST API. Returns Call SID."""
+    """Place an outbound call via Twilio REST API. Returns Call SID.
+
+    Raises RuntimeError if ALLOW_TWILIO_CALLS env var is not set to 'true'.
+    """
+    if os.getenv("ALLOW_TWILIO_CALLS", "false").lower() != "true":
+        raise RuntimeError(
+            "Twilio calls are disabled. Set ALLOW_TWILIO_CALLS=true to enable."
+        )
+
     account_sid = os.getenv("TWILIO_ACCOUNT_SID", "")
     auth_token = os.getenv("TWILIO_AUTH_TOKEN", "")
     from_number = os.getenv("TWILIO_FROM_NUMBER", "")

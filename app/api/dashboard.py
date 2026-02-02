@@ -20,9 +20,9 @@ async def get_system_status():
     call_log_provider = get_call_log_provider()
 
     queue_state = queue_provider.get_state()
-    outbound_queue = patient_provider.get_outbound_queue()
-    active_call = call_log_provider.get_active_call()
-    stats = call_log_provider.get_statistics()
+    outbound_queue = await patient_provider.get_outbound_queue()
+    active_call = await call_log_provider.get_active_call()
+    stats = await call_log_provider.get_statistics()
 
     return {
         "queue_state": queue_state.to_dict(),
@@ -96,7 +96,7 @@ async def update_queue(
 async def get_patients():
     """Get all patients in the system."""
     patient_provider = get_patient_provider()
-    patients = patient_provider.get_all_patients()
+    patients = await patient_provider.get_all_patients()
     return {"patients": [p.to_dict() for p in patients]}
 
 
@@ -104,7 +104,7 @@ async def get_patients():
 async def get_outbound_queue():
     """Get patients eligible for outbound calling, sorted by priority."""
     patient_provider = get_patient_provider()
-    queue = patient_provider.get_outbound_queue()
+    queue = await patient_provider.get_outbound_queue()
     return {"queue": [p.to_dict() for p in queue]}
 
 
@@ -112,7 +112,7 @@ async def get_outbound_queue():
 async def get_patient(patient_id: str):
     """Get a specific patient."""
     patient_provider = get_patient_provider()
-    patient = patient_provider.get_patient(patient_id)
+    patient = await patient_provider.get_patient(patient_id)
     if not patient:
         raise HTTPException(status_code=404, detail="Patient not found")
     return patient.to_dict()
@@ -122,15 +122,16 @@ async def get_patient(patient_id: str):
 async def reset_patients():
     """Reset patients to sample data."""
     patient_provider = get_patient_provider()
-    patient_provider.reset_to_sample_data()
-    return {"status": "ok", "count": len(patient_provider.get_all_patients())}
+    await patient_provider.reset_to_sample_data()
+    patients = await patient_provider.get_all_patients()
+    return {"status": "ok", "count": len(patients)}
 
 
 @router.get("/calls")
 async def get_calls(limit: int = 50):
     """Get call history."""
     call_log_provider = get_call_log_provider()
-    calls = call_log_provider.get_all_calls(limit=limit)
+    calls = await call_log_provider.get_all_calls(limit=limit)
     return {"calls": [c.to_dict() for c in calls]}
 
 
@@ -138,7 +139,7 @@ async def get_calls(limit: int = 50):
 async def get_active_call():
     """Get the currently active call."""
     call_log_provider = get_call_log_provider()
-    active = call_log_provider.get_active_call()
+    active = await call_log_provider.get_active_call()
     if not active:
         return {"active": False, "call": None}
     return {"active": True, "call": active.to_dict()}
@@ -148,7 +149,7 @@ async def get_active_call():
 async def get_call(call_id: str):
     """Get a specific call by ID."""
     call_log_provider = get_call_log_provider()
-    call = call_log_provider.get_call(call_id)
+    call = await call_log_provider.get_call(call_id)
     if not call:
         raise HTTPException(status_code=404, detail="Call not found")
     return call.to_dict()
@@ -158,7 +159,7 @@ async def get_call(call_id: str):
 async def get_patient_calls(patient_id: str):
     """Get all calls for a specific patient."""
     call_log_provider = get_call_log_provider()
-    calls = call_log_provider.get_calls_by_patient(patient_id)
+    calls = await call_log_provider.get_calls_by_patient(patient_id)
     return {"calls": [c.to_dict() for c in calls]}
 
 
@@ -166,7 +167,7 @@ async def get_patient_calls(patient_id: str):
 async def get_statistics():
     """Get call statistics."""
     call_log_provider = get_call_log_provider()
-    return call_log_provider.get_statistics()
+    return await call_log_provider.get_statistics()
 
 
 class QueueConfigItem(BaseModel):
@@ -220,12 +221,12 @@ async def apply_simulation(request: SimulationApplyRequest):
     )
 
     # 2. Reset patient provider
-    patient_provider.reset_with_patients(
+    await patient_provider.reset_with_patients(
         patient_dicts=[p.model_dump() for p in request.patients]
     )
 
     # 3. Clear call log history
-    call_log_provider.reset()
+    await call_log_provider.reset()
 
     # 4. Update dispatcher config and restart
     dispatcher.update_config(
@@ -237,10 +238,11 @@ async def apply_simulation(request: SimulationApplyRequest):
     dispatcher.restart()
 
     # 5. Return new state
+    patients = await patient_provider.get_all_patients()
     return {
         "status": "ok",
         "queue_state": queue_provider.get_state().to_dict(),
-        "patient_count": len(patient_provider.get_all_patients()),
+        "patient_count": len(patients),
         "dispatcher_status": dispatcher.get_status(),
     }
 

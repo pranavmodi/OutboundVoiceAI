@@ -1,6 +1,6 @@
 """System settings models."""
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import List, Optional
 
 
 @dataclass
@@ -26,3 +26,5 @@ class SystemSettings:
     system_enabled: bool = True
     business_hours: BusinessHours = field(default_factory=BusinessHours)
     queue_thresholds: QueueThresholds = field(default_factory=QueueThresholds)
+    allow_live_calls: bool = False
+    allowed_phones: List[str] = field(default_factory=list)

@@ -49,11 +49,14 @@ async def dashboard_websocket(websocket: WebSocket):
         queue_provider = get_queue_provider()
         call_log_provider = get_call_log_provider()
 
+        active_call = await call_log_provider.get_active_call()
+        statistics = await call_log_provider.get_statistics()
+
         await websocket.send_json({
             "type": "initial_state",
             "queue_state": queue_provider.get_state().to_dict(),
-            "active_call": call_log_provider.get_active_call().to_dict() if call_log_provider.get_active_call() else None,
-            "statistics": call_log_provider.get_statistics(),
+            "active_call": active_call.to_dict() if active_call else None,
+            "statistics": statistics,
         })
 
         # Keep connection alive and handle any incoming messages

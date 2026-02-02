@@ -217,6 +217,30 @@ export function useApi() {
     }
   }, []);
 
+  const setAllowLiveCalls = useCallback(async (allowed: boolean): Promise<SystemSettings | null> => {
+    try {
+      return await fetchApi<SystemSettings>("/api/settings/allow-live-calls", {
+        method: "PUT",
+        body: JSON.stringify({ allowed }),
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
+  const updateAllowedPhones = useCallback(async (phones: string[]): Promise<SystemSettings | null> => {
+    try {
+      return await fetchApi<SystemSettings>("/api/settings/allowed-phones", {
+        method: "PUT",
+        body: JSON.stringify({ phones }),
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
   const getTimezones = useCallback(async (): Promise<string[]> => {
     try {
       return await fetchApi<string[]>("/api/settings/timezones");
@@ -246,6 +270,8 @@ export function useApi() {
     setSystemEnabled,
     updateBusinessHours,
     updateQueueThresholds,
+    setAllowLiveCalls,
+    updateAllowedPhones,
     getTimezones,
   }), [
     loading,
@@ -267,6 +293,8 @@ export function useApi() {
     setSystemEnabled,
     updateBusinessHours,
     updateQueueThresholds,
+    setAllowLiveCalls,
+    updateAllowedPhones,
     getTimezones,
   ]);
 }

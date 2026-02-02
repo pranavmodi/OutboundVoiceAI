@@ -108,7 +108,7 @@ class AutoCallDispatcher:
 
         # 1. Poll queue state
         queue_provider = get_queue_provider()
-        queue_state = queue_provider.poll()
+        queue_state = await queue_provider.poll()
 
         # Track the decision made this tick (broadcast at end)
         tick_decision = None
@@ -139,7 +139,7 @@ class AutoCallDispatcher:
         else:
             # 6. Evaluate all gating conditions
             settings_provider = get_settings_provider()
-            settings = settings_provider.get_settings()
+            settings = await settings_provider.get_settings()
             call_log_provider = get_call_log_provider()
 
             # system_enabled
@@ -147,7 +147,7 @@ class AutoCallDispatcher:
                 tick_decision = self._log_decision("blocked", "system_enabled is false")
 
             # is_within_business_hours
-            elif not settings_provider.is_within_business_hours():
+            elif not await settings_provider.is_within_business_hours():
                 tick_decision = self._log_decision("blocked", "Outside business hours")
 
             # ami_connected (reflected in queue state)
@@ -165,7 +165,7 @@ class AutoCallDispatcher:
             else:
                 # 7. Get next candidate patient
                 patient_provider = get_patient_provider()
-                candidate = patient_provider.get_next_candidate(
+                candidate = await patient_provider.get_next_candidate(
                     max_attempts=self.max_attempts,
                     min_hours_between=self.min_hours_between)
 
@@ -223,7 +223,7 @@ class AutoCallDispatcher:
             self._log_decision("call_ended", "Call ended, returning to idle")
 
     def _log_decision(self, decision: str, detail: str) -> dict:
-        """Append to the circular decision buffer and return the entry."""
+        """Append to the circular decision buffer, persist to DB, and return the entry."""
         entry = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "decision": decision,
@@ -232,7 +232,33 @@ class AutoCallDispatcher:
         }
         self._decision_log.append(entry)
         logger.info(f"[Dispatcher] {decision}: {detail}")
+
+        # Fire-and-forget DB persistence
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(self._persist_event(decision, detail))
+        except RuntimeError:
+            pass
+
         return entry
+
+    async def _persist_event(self, decision: str, detail: str):
+        """Persist a dispatcher event to the database."""
+        try:
+            from app.db import AsyncSessionLocal
+            from app.db.models import DispatcherEventRow
+
+            async with AsyncSessionLocal() as session:
+                row = DispatcherEventRow(
+                    decision=decision,
+                    detail=detail,
+                    state=self._state.value,
+                )
+                session.add(row)
+                await session.commit()
+        except Exception as e:
+            logger.warning("Failed to persist dispatcher event: %s", e)
 
     def get_status(self) -> dict:
         """Return current dispatcher status for API."""

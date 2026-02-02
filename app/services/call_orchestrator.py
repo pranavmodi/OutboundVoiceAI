@@ -6,7 +6,7 @@ from typing import Optional, Callable, Any
 from datetime import datetime
 
 from app.models import CallLog, CallOutcome, Patient
-from app.providers import get_queue_provider, get_patient_provider, get_call_log_provider
+from app.providers import get_queue_provider, get_patient_provider, get_call_log_provider, get_settings_provider
 from app.services.realtime_voice import RealtimeVoiceService
 
 logger = logging.getLogger(__name__)
@@ -41,7 +41,7 @@ class CallOrchestrator:
 
         # Get patient
         patient_provider = get_patient_provider()
-        patient = patient_provider.get_patient(patient_id)
+        patient = await patient_provider.get_patient(patient_id)
         if not patient:
             if self.on_error:
                 await self.on_error(f"Patient {patient_id} not found")
@@ -52,7 +52,7 @@ class CallOrchestrator:
         queue_state = queue_provider.get_state()
 
         # Create call log
-        call = call_log_provider.create_call(
+        call = await call_log_provider.create_call(
             patient_id=patient.patient_id,
             patient_name=patient.name,
             phone=patient.phone,
@@ -83,14 +83,54 @@ class CallOrchestrator:
         # Connect to OpenAI
         success = await self._voice_service.connect(call.call_id, patient.name)
         if not success:
-            call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
+            await call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
             self._voice_service = None
             self._current_call = None
             self._current_patient = None
             return None
 
-        # In Twilio mode, place the actual phone call and set up media bridge
+        # In Twilio mode, check safeguards then place the actual phone call
         if call_mode == "twilio":
+            # Safeguard: check DB-level allow_live_calls setting
+            settings_provider = get_settings_provider()
+            settings = await settings_provider.get_settings()
+            if not settings.allow_live_calls:
+                error_msg = "Live calls are disabled in system settings. Enable 'Allow Live Calls' first."
+                logger.warning(f"Twilio call blocked: {error_msg}")
+                if self.on_error:
+                    await self.on_error(error_msg)
+                await call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
+                await self._voice_service.disconnect()
+                self._voice_service = None
+                self._current_call = None
+                self._current_patient = None
+                return None
+
+            # Safeguard: check phone number allowlist
+            if not settings.allowed_phones:
+                error_msg = "No phone numbers in allowlist. Add allowed numbers in settings first."
+                logger.warning(f"Twilio call blocked: {error_msg}")
+                if self.on_error:
+                    await self.on_error(error_msg)
+                await call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
+                await self._voice_service.disconnect()
+                self._voice_service = None
+                self._current_call = None
+                self._current_patient = None
+                return None
+
+            if patient.phone not in settings.allowed_phones:
+                error_msg = f"Phone number {patient.phone} is not in the allowlist."
+                logger.warning(f"Twilio call blocked: {error_msg}")
+                if self.on_error:
+                    await self.on_error(error_msg)
+                await call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
+                await self._voice_service.disconnect()
+                self._voice_service = None
+                self._current_call = None
+                self._current_patient = None
+                return None
+
             try:
                 from app.services.twilio_voice_service import (
                     TwilioMediaBridge,
@@ -120,7 +160,7 @@ class CallOrchestrator:
                 logger.error(f"Failed to place Twilio call: {e}")
                 if self.on_error:
                     await self.on_error(f"Twilio call failed: {str(e)}")
-                call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
+                await call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
                 await self._voice_service.disconnect()
                 self._voice_service = None
                 self._current_call = None
@@ -144,32 +184,37 @@ class CallOrchestrator:
         if not self._current_call:
             return
 
+        # Capture and clear references first to prevent re-entrant calls
+        # (disconnect -> on_session_ended -> end_call again)
+        call = self._current_call
+        patient = self._current_patient
+        voice_service = self._voice_service
+        self._current_call = None
+        self._current_patient = None
+        self._voice_service = None
+        self._twilio_bridge = None
+
         call_log_provider = get_call_log_provider()
-        call_log_provider.end_call(self._current_call.call_id, outcome)
+        await call_log_provider.end_call(call.call_id, outcome)
 
         # Update patient record
-        if self._current_patient:
+        if patient:
             patient_provider = get_patient_provider()
-            patient_provider.update_patient_after_call(
-                self._current_patient.patient_id,
+            await patient_provider.update_patient_after_call(
+                patient.patient_id,
                 outcome.value,
             )
 
         # Disconnect voice service
-        if self._voice_service:
-            await self._voice_service.disconnect()
-            self._voice_service = None
-
-        self._twilio_bridge = None
+        if voice_service:
+            await voice_service.disconnect()
 
         if self.on_call_ended:
-            await self.on_call_ended(self._current_call)
+            await self.on_call_ended(call)
 
         if self.on_status_update:
             await self.on_status_update("Call Ended")
 
-        self._current_call = None
-        self._current_patient = None
         self._call_mode = "web"
 
     async def send_audio(self, audio_data: bytes):
@@ -186,11 +231,11 @@ class CallOrchestrator:
 
         # Only log complete transcripts
         if speaker == "ai_complete":
-            call_log_provider.add_transcript(self._current_call.call_id, "ai", text)
+            await call_log_provider.add_transcript(self._current_call.call_id, "ai", text)
             if self.on_transcript_update:
                 await self.on_transcript_update("ai", text)
         elif speaker == "patient":
-            call_log_provider.add_transcript(self._current_call.call_id, "patient", text)
+            await call_log_provider.add_transcript(self._current_call.call_id, "patient", text)
             if self.on_transcript_update:
                 await self.on_transcript_update("patient", text)
         elif speaker == "ai":
@@ -216,14 +261,14 @@ class CallOrchestrator:
                 queue_provider = get_queue_provider()
                 queue_state = queue_provider.get_state()
 
-                call_log_provider.update_call(
+                await call_log_provider.update_call(
                     self._current_call.call_id,
                     transfer_attempted=True,
                 )
 
                 if queue_state.outbound_allowed and queue_state.global_agents_available >= 1:
                     # Transfer would succeed
-                    call_log_provider.update_call(
+                    await call_log_provider.update_call(
                         self._current_call.call_id,
                         transfer_success=True,
                     )
@@ -255,7 +300,7 @@ class CallOrchestrator:
             await self.end_call(outcome)
 
         elif name == "send_sms":
-            call_log_provider.update_call(
+            await call_log_provider.update_call(
                 self._current_call.call_id,
                 sms_sent=True,
             )

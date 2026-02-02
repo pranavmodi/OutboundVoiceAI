@@ -1,7 +1,11 @@
-"""Mock queue provider simulating FreePBX/Asterisk."""
+"""Mock queue provider simulating FreePBX/Asterisk — with DB snapshot persistence."""
+import asyncio
+import logging
 from datetime import datetime
 from typing import Optional
 from app.models import QueueInfo, GlobalQueueState
+
+logger = logging.getLogger(__name__)
 
 
 class MockQueueProvider:
@@ -22,20 +26,20 @@ class MockQueueProvider:
         """Get current queue state."""
         return self._state
 
-    def poll(self) -> GlobalQueueState:
+    async def poll(self) -> GlobalQueueState:
         """Poll queues and update state (called every 10 seconds)."""
-        # Import here to avoid circular imports
         from app.providers.settings_provider import get_settings_provider
 
         if not self._ami_connected:
             self._state.ami_connected = False
             self._state.outbound_allowed = False
             self._stable_polls = 0
+            self._persist_snapshot_bg()
             return self._state
 
         # Get dynamic thresholds from settings
         settings_provider = get_settings_provider()
-        thresholds = settings_provider.get_thresholds()
+        thresholds = await settings_provider.get_thresholds()
 
         # Aggregate metrics
         self._state.global_calls_waiting = sum(q.calls_waiting for q in self._state.queues)
@@ -62,7 +66,47 @@ class MockQueueProvider:
         self._state.stable_polls_count = self._stable_polls
         self._state.outbound_allowed = self._stable_polls >= thresholds.stable_polls_required
 
+        self._persist_snapshot_bg()
         return self._state
+
+    def _persist_snapshot_bg(self):
+        """Fire-and-forget persist of current state to queue_state_snapshots."""
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(self._save_snapshot())
+        except RuntimeError:
+            pass
+
+    async def _save_snapshot(self):
+        try:
+            from app.db import AsyncSessionLocal
+            from app.db.models import QueueStateSnapshotRow
+
+            async with AsyncSessionLocal() as session:
+                row = QueueStateSnapshotRow(
+                    global_calls_waiting=self._state.global_calls_waiting,
+                    global_oldest_wait_seconds=self._state.global_oldest_wait_seconds,
+                    global_agents_available=self._state.global_agents_available,
+                    global_agents_logged_in=self._state.global_agents_logged_in,
+                    outbound_allowed=self._state.outbound_allowed,
+                    stable_polls_count=self._state.stable_polls_count,
+                    ami_connected=self._state.ami_connected,
+                    queues=[
+                        {
+                            "queue_name": q.queue_name,
+                            "calls_waiting": q.calls_waiting,
+                            "oldest_wait_seconds": q.oldest_wait_seconds,
+                            "agents_available": q.agents_available,
+                            "agents_logged_in": q.agents_logged_in,
+                        }
+                        for q in self._state.queues
+                    ],
+                )
+                session.add(row)
+                await session.commit()
+        except Exception as e:
+            logger.warning("Failed to persist queue snapshot: %s", e)
 
     def set_queue_state(
         self,
@@ -84,7 +128,6 @@ class MockQueueProvider:
                 if agents_logged_in is not None:
                     queue.agents_logged_in = agents_logged_in
                 break
-        self.poll()
 
     def simulate_busy_queue(self):
         """Simulate a busy queue scenario."""
@@ -93,32 +136,23 @@ class MockQueueProvider:
             queue.oldest_wait_seconds = 60
             queue.agents_available = 0
         self._stable_polls = 0
-        self.poll()
 
     def simulate_quiet_queue(self):
         """Simulate a quiet queue scenario (outbound allowed)."""
-        # Import here to avoid circular imports
-        from app.providers.settings_provider import get_settings_provider
-
         for queue in self._state.queues:
             queue.calls_waiting = 0
             queue.oldest_wait_seconds = 0
             queue.agents_available = 2
-        # Force stable polls to allow outbound using dynamic threshold
-        settings_provider = get_settings_provider()
-        thresholds = settings_provider.get_thresholds()
-        self._stable_polls = thresholds.stable_polls_required
-        self.poll()
+        # Force stable polls — use default threshold
+        self._stable_polls = 3
 
     def simulate_ami_failure(self):
         """Simulate AMI connection failure."""
         self._ami_connected = False
-        self.poll()
 
     def simulate_ami_recovery(self):
         """Simulate AMI connection recovery."""
         self._ami_connected = True
-        self.poll()
 
     def reset_with_config(self, queues_config: list[dict], ami_connected: bool):
         """Reset queue state from simulation config."""
@@ -134,7 +168,6 @@ class MockQueueProvider:
         ]
         self._ami_connected = ami_connected
         self._stable_polls = 0
-        self.poll()
 
     def add_queue(self, queue_name: str, agents_available: int = 1, agents_logged_in: int = 1):
         """Add a new queue."""
@@ -145,7 +178,6 @@ class MockQueueProvider:
                 agents_logged_in=agents_logged_in,
             )
         )
-        self.poll()
 
 
 # Global instance
@@ -157,7 +189,4 @@ def get_queue_provider() -> MockQueueProvider:
     global _queue_provider
     if _queue_provider is None:
         _queue_provider = MockQueueProvider()
-        # Initialize with a few polls to allow outbound
-        for _ in range(3):
-            _queue_provider.poll()
     return _queue_provider

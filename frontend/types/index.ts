@@ -155,6 +155,8 @@ export interface SystemSettings {
   system_enabled: boolean;
   business_hours: BusinessHours;
   queue_thresholds: QueueThresholds;
+  allow_live_calls: boolean;
+  allowed_phones: string[];
   can_make_calls: boolean;
   is_within_business_hours: boolean;
 }

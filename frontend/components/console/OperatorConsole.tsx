@@ -21,6 +21,10 @@ import {
   CheckCircle,
   XCircle,
   Save,
+  ShieldAlert,
+  Phone,
+  Plus,
+  Trash2,
 } from "lucide-react";
 import type { SystemSettings, BusinessHours, QueueThresholds } from "@/types";
 
@@ -30,6 +34,8 @@ interface OperatorConsoleProps {
   onSetSystemEnabled: (enabled: boolean) => Promise<void>;
   onUpdateBusinessHours: (businessHours: BusinessHours) => Promise<void>;
   onUpdateQueueThresholds: (thresholds: QueueThresholds) => Promise<void>;
+  onSetAllowLiveCalls: (allowed: boolean) => Promise<void>;
+  onUpdateAllowedPhones: (phones: string[]) => Promise<void>;
 }
 
 export function OperatorConsole({
@@ -38,6 +44,8 @@ export function OperatorConsole({
   onSetSystemEnabled,
   onUpdateBusinessHours,
   onUpdateQueueThresholds,
+  onSetAllowLiveCalls,
+  onUpdateAllowedPhones,
 }: OperatorConsoleProps) {
   const [businessHoursForm, setBusinessHoursForm] = useState<BusinessHours>({
     start_time: "08:00",
@@ -52,12 +60,30 @@ export function OperatorConsole({
     stable_polls_required: 3,
   });
 
+  const [newPhone, setNewPhone] = useState("");
+
   useEffect(() => {
     if (settings) {
       setBusinessHoursForm(settings.business_hours);
       setThresholdsForm(settings.queue_thresholds);
     }
   }, [settings]);
+
+  const handleAddPhone = async () => {
+    const phone = newPhone.trim();
+    if (!phone || !settings) return;
+    if (settings.allowed_phones.includes(phone)) {
+      setNewPhone("");
+      return;
+    }
+    await onUpdateAllowedPhones([...settings.allowed_phones, phone]);
+    setNewPhone("");
+  };
+
+  const handleRemovePhone = async (phone: string) => {
+    if (!settings) return;
+    await onUpdateAllowedPhones(settings.allowed_phones.filter((p) => p !== phone));
+  };
 
   const handleBusinessHoursSubmit = async () => {
     await onUpdateBusinessHours(businessHoursForm);
@@ -108,6 +134,72 @@ export function OperatorConsole({
             checked={settings.system_enabled}
             onCheckedChange={onSetSystemEnabled}
           />
+        </div>
+      </div>
+
+      <Separator />
+
+      {/* Live Calls Safeguard */}
+      <div className="space-y-4 rounded-lg border border-orange-200 bg-orange-50/50 dark:border-orange-900 dark:bg-orange-950/20 p-4">
+        <div className="flex items-center gap-2">
+          <ShieldAlert className="h-4 w-4 text-orange-600 dark:text-orange-400" />
+          <h4 className="text-sm font-medium">Live Call Safeguards</h4>
+        </div>
+
+        <div className="flex items-center justify-between">
+          <div>
+            <Label htmlFor="allow-live-calls" className="text-sm">Allow Live Twilio Calls</Label>
+            <p className="text-xs text-muted-foreground">
+              When off, only web-simulated calls are allowed
+            </p>
+          </div>
+          <Switch
+            id="allow-live-calls"
+            checked={settings.allow_live_calls}
+            onCheckedChange={onSetAllowLiveCalls}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-xs text-muted-foreground">
+            Phone Number Allowlist
+          </Label>
+          <p className="text-xs text-muted-foreground">
+            Only these numbers can be dialed via Twilio. Empty list blocks all calls.
+          </p>
+          <div className="flex gap-2">
+            <Input
+              placeholder="+15551234567"
+              value={newPhone}
+              onChange={(e) => setNewPhone(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") handleAddPhone(); }}
+              className="h-9"
+            />
+            <Button size="sm" variant="outline" onClick={handleAddPhone} disabled={!newPhone.trim()}>
+              <Plus className="h-3 w-3 mr-1" />
+              Add
+            </Button>
+          </div>
+          {settings.allowed_phones.length > 0 ? (
+            <div className="flex flex-wrap gap-2 pt-1">
+              {settings.allowed_phones.map((phone) => (
+                <Badge key={phone} variant="secondary" className="flex items-center gap-1.5 pl-2 pr-1 py-1">
+                  <Phone className="h-3 w-3" />
+                  {phone}
+                  <button
+                    onClick={() => handleRemovePhone(phone)}
+                    className="ml-1 rounded-full p-0.5 hover:bg-destructive/20 hover:text-destructive transition-colors"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                </Badge>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-orange-600 dark:text-orange-400 font-medium pt-1">
+              No numbers allowed — all Twilio calls are blocked
+            </p>
+          )}
         </div>
       </div>
 

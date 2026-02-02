@@ -1,9 +1,14 @@
-"""Settings provider for system configuration."""
+"""Settings provider for system configuration — DB-backed."""
 from datetime import datetime
 from typing import Optional
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import select
+
+from app.db import AsyncSessionLocal
+from app.db.models import SystemSettingsRow
 from app.models import BusinessHours, QueueThresholds, SystemSettings
+from typing import List
 
 
 # Common timezones for selection
@@ -19,66 +24,174 @@ COMMON_TIMEZONES = [
 ]
 
 
+def _row_to_settings(row: SystemSettingsRow) -> SystemSettings:
+    bh = row.business_hours
+    qt = row.queue_thresholds
+    settings = SystemSettings.__new__(SystemSettings)
+    settings.system_enabled = row.system_enabled
+    settings.business_hours = BusinessHours(
+        start_time=bh.get("start_time", "08:00"),
+        end_time=bh.get("end_time", "17:00"),
+        enabled=bh.get("enabled", False),
+        timezone=bh.get("timezone", "America/New_York"),
+    )
+    settings.queue_thresholds = QueueThresholds(
+        calls_waiting_threshold=qt.get("calls_waiting_threshold", 1),
+        oldest_wait_threshold_seconds=qt.get("oldest_wait_threshold_seconds", 30),
+        stable_polls_required=qt.get("stable_polls_required", 3),
+    )
+    settings.allow_live_calls = row.allow_live_calls if row.allow_live_calls is not None else False
+    settings.allowed_phones = row.allowed_phones if row.allowed_phones is not None else []
+    return settings
+
+
 class SettingsProvider:
-    """Manages system settings with in-memory storage."""
+    """Manages system settings with PostgreSQL storage."""
 
-    def __init__(self):
-        self._settings = SystemSettings()
+    async def get_settings(self) -> SystemSettings:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(SystemSettingsRow).where(SystemSettingsRow.id == 1))
+            row = result.scalar_one_or_none()
+            if row is None:
+                return SystemSettings()
+            return _row_to_settings(row)
 
-    def get_settings(self) -> SystemSettings:
-        """Get current system settings."""
-        return self._settings
+    async def update_settings(self, settings: SystemSettings) -> SystemSettings:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(SystemSettingsRow).where(SystemSettingsRow.id == 1))
+            row = result.scalar_one_or_none()
+            if row is None:
+                row = SystemSettingsRow(id=1)
+                session.add(row)
+            row.system_enabled = settings.system_enabled
+            row.business_hours = {
+                "start_time": settings.business_hours.start_time,
+                "end_time": settings.business_hours.end_time,
+                "enabled": settings.business_hours.enabled,
+                "timezone": settings.business_hours.timezone,
+            }
+            row.queue_thresholds = {
+                "calls_waiting_threshold": settings.queue_thresholds.calls_waiting_threshold,
+                "oldest_wait_threshold_seconds": settings.queue_thresholds.oldest_wait_threshold_seconds,
+                "stable_polls_required": settings.queue_thresholds.stable_polls_required,
+            }
+            row.allow_live_calls = settings.allow_live_calls
+            row.allowed_phones = settings.allowed_phones
+            await session.commit()
+            return settings
 
-    def update_settings(self, settings: SystemSettings) -> SystemSettings:
-        """Update all system settings."""
-        self._settings = settings
-        return self._settings
+    async def set_system_enabled(self, enabled: bool) -> SystemSettings:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(SystemSettingsRow).where(SystemSettingsRow.id == 1))
+            row = result.scalar_one_or_none()
+            if row is None:
+                row = SystemSettingsRow(id=1)
+                session.add(row)
+            row.system_enabled = enabled
+            await session.commit()
+            return _row_to_settings(row)
 
-    def set_system_enabled(self, enabled: bool) -> SystemSettings:
-        """Enable or disable the system."""
-        self._settings.system_enabled = enabled
-        return self._settings
+    async def update_business_hours(self, business_hours: BusinessHours) -> SystemSettings:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(SystemSettingsRow).where(SystemSettingsRow.id == 1))
+            row = result.scalar_one_or_none()
+            if row is None:
+                row = SystemSettingsRow(
+                    id=1,
+                    business_hours={},
+                    queue_thresholds={
+                        "calls_waiting_threshold": 1,
+                        "oldest_wait_threshold_seconds": 30,
+                        "stable_polls_required": 3,
+                    },
+                )
+                session.add(row)
+            row.business_hours = {
+                "start_time": business_hours.start_time,
+                "end_time": business_hours.end_time,
+                "enabled": business_hours.enabled,
+                "timezone": business_hours.timezone,
+            }
+            await session.commit()
+            return _row_to_settings(row)
 
-    def update_business_hours(self, business_hours: BusinessHours) -> SystemSettings:
-        """Update business hours settings."""
-        self._settings.business_hours = business_hours
-        return self._settings
+    async def update_queue_thresholds(self, thresholds: QueueThresholds) -> SystemSettings:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(SystemSettingsRow).where(SystemSettingsRow.id == 1))
+            row = result.scalar_one_or_none()
+            if row is None:
+                row = SystemSettingsRow(
+                    id=1,
+                    business_hours={
+                        "start_time": "08:00",
+                        "end_time": "17:00",
+                        "enabled": False,
+                        "timezone": "America/New_York",
+                    },
+                    queue_thresholds={},
+                )
+                session.add(row)
+            row.queue_thresholds = {
+                "calls_waiting_threshold": thresholds.calls_waiting_threshold,
+                "oldest_wait_threshold_seconds": thresholds.oldest_wait_threshold_seconds,
+                "stable_polls_required": thresholds.stable_polls_required,
+            }
+            await session.commit()
+            return _row_to_settings(row)
 
-    def update_queue_thresholds(self, thresholds: QueueThresholds) -> SystemSettings:
-        """Update queue thresholds."""
-        self._settings.queue_thresholds = thresholds
-        return self._settings
+    async def set_allow_live_calls(self, allowed: bool) -> SystemSettings:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(SystemSettingsRow).where(SystemSettingsRow.id == 1))
+            row = result.scalar_one_or_none()
+            if row is None:
+                row = SystemSettingsRow(id=1, business_hours={}, queue_thresholds={})
+                session.add(row)
+            row.allow_live_calls = allowed
+            await session.commit()
+            return _row_to_settings(row)
 
-    def is_within_business_hours(self) -> bool:
-        """Check if current time is within configured business hours."""
-        bh = self._settings.business_hours
+    async def update_allowed_phones(self, phones: List[str]) -> SystemSettings:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(SystemSettingsRow).where(SystemSettingsRow.id == 1))
+            row = result.scalar_one_or_none()
+            if row is None:
+                row = SystemSettingsRow(id=1, business_hours={}, queue_thresholds={})
+                session.add(row)
+            row.allowed_phones = phones
+            await session.commit()
+            return _row_to_settings(row)
 
+    async def is_phone_allowed(self, phone: str) -> bool:
+        """Check if a phone number is in the allowlist. Empty list = block all."""
+        settings = await self.get_settings()
+        if not settings.allowed_phones:
+            return False
+        return phone in settings.allowed_phones
+
+    async def is_within_business_hours(self) -> bool:
+        settings = await self.get_settings()
+        bh = settings.business_hours
         if not bh.enabled:
-            return True  # If business hours not enabled, always allow
-
+            return True
         try:
             tz = ZoneInfo(bh.timezone)
             now = datetime.now(tz)
             current_time = now.strftime("%H:%M")
-
             return bh.start_time <= current_time <= bh.end_time
         except Exception:
-            # If timezone parsing fails, default to allowing calls
             return True
 
-    def can_make_outbound_call(self) -> bool:
-        """Check if all conditions allow making an outbound call."""
-        if not self._settings.system_enabled:
+    async def can_make_outbound_call(self) -> bool:
+        settings = await self.get_settings()
+        if not settings.system_enabled:
             return False
-
-        if not self.is_within_business_hours():
+        if not await self.is_within_business_hours():
             return False
-
         return True
 
-    def get_thresholds(self) -> QueueThresholds:
-        """Get current queue thresholds."""
-        return self._settings.queue_thresholds
+    async def get_thresholds(self) -> QueueThresholds:
+        settings = await self.get_settings()
+        return settings.queue_thresholds
 
 
 # Global instance

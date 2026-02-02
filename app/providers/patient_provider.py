@@ -1,218 +1,221 @@
-"""Mock patient provider simulating PatientModule database."""
-from datetime import datetime, timedelta
+"""Patient provider — DB-backed."""
+from datetime import datetime, timedelta, timezone
 from typing import Optional
+
+from sqlalchemy import select, delete
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db import AsyncSessionLocal
+from app.db.models import PatientRow
 from app.models import Patient, Language, IntakeStatus
 
 
-class MockPatientProvider:
-    """Simulates PatientModule database with outbound call queue."""
+def _row_to_patient(row: PatientRow) -> Patient:
+    try:
+        lang = Language(row.language)
+    except ValueError:
+        lang = Language.ENGLISH
+    try:
+        intake = IntakeStatus(row.intake_status)
+    except ValueError:
+        intake = IntakeStatus.COMPLETE
 
-    def __init__(self):
-        self._patients: dict[str, Patient] = {}
-        self._load_sample_data()
+    p = Patient.__new__(Patient)
+    p.patient_id = row.patient_id
+    p.name = row.name
+    p.phone = row.phone
+    p.language = lang
+    p.order_id = row.order_id
+    p.order_created = row.order_created
+    p.intake_status = intake
+    p.has_called_in_before = row.has_called_in_before
+    p.has_abandoned_before = row.has_abandoned_before
+    p.ai_called_before = row.ai_called_before
+    p.attempt_count = row.attempt_count
+    p.last_attempt_at = row.last_attempt_at
+    p.last_outcome = row.last_outcome
+    p.due_by = row.due_by
+    p.priority_bucket = row.priority_bucket
+    return p
 
-    def _load_sample_data(self):
-        """Load sample patient data for testing."""
-        now = datetime.now()
 
-        sample_patients = [
-            # Priority 1: Abandoned + never AI-called
-            Patient(
-                patient_id="PRE001",
-                name="John Smith",
-                phone="555-0101",
-                language=Language.ENGLISH,
-                order_id="ORD001",
-                order_created=now - timedelta(days=1),
-                has_abandoned_before=True,
-                ai_called_before=False,
-                due_by=now + timedelta(days=1),
-            ),
-            # Priority 1: Abandoned + never AI-called (Spanish)
-            Patient(
-                patient_id="PRE002",
-                name="Maria Garcia",
-                phone="555-0102",
-                language=Language.SPANISH,
-                order_id="ORD002",
-                order_created=now - timedelta(days=2),
-                has_abandoned_before=True,
-                ai_called_before=False,
-                due_by=now,
-            ),
-            # Priority 2: Abandoned + AI-called before
-            Patient(
-                patient_id="PRE003",
-                name="Robert Johnson",
-                phone="555-0103",
-                language=Language.ENGLISH,
-                order_id="ORD003",
-                order_created=now - timedelta(days=1),
-                has_abandoned_before=True,
-                ai_called_before=True,
-                attempt_count=1,
-                last_attempt_at=now - timedelta(hours=8),
-                last_outcome="no_answer",
-                due_by=now + timedelta(days=1),
-            ),
-            # Priority 3: Never AI-called + called in before
-            Patient(
-                patient_id="PRE004",
-                name="Emily Davis",
-                phone="555-0104",
-                language=Language.ENGLISH,
-                order_id="ORD004",
-                order_created=now - timedelta(hours=12),
-                has_called_in_before=True,
-                ai_called_before=False,
-                due_by=now + timedelta(days=2),
-            ),
-            # Priority 4: Never AI-called + never called in
-            Patient(
-                patient_id="PRE005",
-                name="Michael Wilson",
-                phone="555-0105",
-                language=Language.ENGLISH,
-                order_id="ORD005",
-                order_created=now - timedelta(hours=6),
-                ai_called_before=False,
-                due_by=now + timedelta(days=2),
-            ),
-            # Priority 4: Incomplete intake
-            Patient(
-                patient_id="PRE006",
-                name="Sarah Brown",
-                phone="555-0106",
-                language=Language.ENGLISH,
-                order_id="ORD006",
-                order_created=now - timedelta(hours=3),
-                intake_status=IntakeStatus.INCOMPLETE,
-                ai_called_before=False,
-                due_by=now + timedelta(days=2),
-            ),
-            # Priority 3: Chinese speaker
-            Patient(
-                patient_id="PRE007",
-                name="Wei Zhang",
-                phone="555-0107",
-                language=Language.CHINESE,
-                order_id="ORD007",
-                order_created=now - timedelta(hours=18),
-                has_called_in_before=True,
-                ai_called_before=False,
-                due_by=now + timedelta(days=1),
-            ),
-        ]
+def _compute_priority(has_abandoned_before: bool, ai_called_before: bool,
+                       has_called_in_before: bool) -> int:
+    if has_abandoned_before and not ai_called_before:
+        return 1
+    elif has_abandoned_before and ai_called_before:
+        return 2
+    elif not ai_called_before and has_called_in_before:
+        return 3
+    else:
+        return 4
 
-        for patient in sample_patients:
-            self._patients[patient.patient_id] = patient
 
-    def get_all_patients(self) -> list[Patient]:
-        """Get all patients in the queue."""
-        return list(self._patients.values())
+class PatientProvider:
+    """Manages patient records with PostgreSQL storage."""
 
-    def get_patient(self, patient_id: str) -> Optional[Patient]:
-        """Get a specific patient by ID."""
-        return self._patients.get(patient_id)
-
-    def get_outbound_queue(self, max_attempts: int = 3, min_hours_between: int = 6) -> list[Patient]:
-        """Get patients eligible for outbound calling, sorted by priority."""
-        now = datetime.now()
-        eligible = []
-
-        for patient in self._patients.values():
-            # Skip if max attempts reached
-            if patient.attempt_count >= max_attempts:
-                continue
-
-            # Skip if called too recently
-            if patient.last_attempt_at:
-                hours_since_last = (now - patient.last_attempt_at).total_seconds() / 3600
-                if hours_since_last < min_hours_between:
-                    continue
-
-            eligible.append(patient)
-
-        # Sort by priority bucket, then due_by, then order_created, then attempt_count
-        eligible.sort(
-            key=lambda p: (
-                p.priority_bucket,
-                p.due_by or datetime.max,
-                p.order_created or datetime.max,
-                p.attempt_count,
+    async def get_all_patients(self) -> list[Patient]:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(PatientRow).order_by(PatientRow.priority_bucket, PatientRow.due_by)
             )
-        )
+            return [_row_to_patient(r) for r in result.scalars().all()]
 
-        return eligible
+    async def get_patient(self, patient_id: str) -> Optional[Patient]:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(PatientRow).where(PatientRow.patient_id == patient_id)
+            )
+            row = result.scalar_one_or_none()
+            return _row_to_patient(row) if row else None
 
-    def get_next_candidate(self, max_attempts: int = 3, min_hours_between: int = 6) -> Optional[Patient]:
-        """Get the next patient to call."""
-        queue = self.get_outbound_queue(max_attempts, min_hours_between)
-        return queue[0] if queue else None
+    async def get_outbound_queue(self, max_attempts: int = 3, min_hours_between: int = 6) -> list[Patient]:
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(hours=min_hours_between)
 
-    def update_patient_after_call(
+        async with AsyncSessionLocal() as session:
+            stmt = (
+                select(PatientRow)
+                .where(PatientRow.attempt_count < max_attempts)
+                .where(
+                    (PatientRow.last_attempt_at == None) |  # noqa: E711
+                    (PatientRow.last_attempt_at <= cutoff)
+                )
+                .order_by(
+                    PatientRow.priority_bucket,
+                    PatientRow.due_by.asc().nulls_last(),
+                    PatientRow.order_created.asc().nulls_last(),
+                    PatientRow.attempt_count,
+                )
+            )
+            result = await session.execute(stmt)
+            return [_row_to_patient(r) for r in result.scalars().all()]
+
+    async def get_next_candidate(self, max_attempts: int = 3, min_hours_between: int = 6) -> Optional[Patient]:
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(hours=min_hours_between)
+
+        async with AsyncSessionLocal() as session:
+            stmt = (
+                select(PatientRow)
+                .where(PatientRow.attempt_count < max_attempts)
+                .where(
+                    (PatientRow.last_attempt_at == None) |  # noqa: E711
+                    (PatientRow.last_attempt_at <= cutoff)
+                )
+                .order_by(
+                    PatientRow.priority_bucket,
+                    PatientRow.due_by.asc().nulls_last(),
+                    PatientRow.order_created.asc().nulls_last(),
+                    PatientRow.attempt_count,
+                )
+                .limit(1)
+            )
+            result = await session.execute(stmt)
+            row = result.scalar_one_or_none()
+            return _row_to_patient(row) if row else None
+
+    async def update_patient_after_call(
         self,
         patient_id: str,
         outcome: str,
         increment_attempt: bool = True,
     ):
-        """Update patient record after a call attempt."""
-        patient = self._patients.get(patient_id)
-        if patient:
-            if increment_attempt:
-                patient.attempt_count += 1
-            patient.last_attempt_at = datetime.now()
-            patient.last_outcome = outcome
-            patient.ai_called_before = True
-            # Recompute priority
-            patient.priority_bucket = patient._compute_priority()
-
-    def add_patient(self, patient: Patient):
-        """Add a new patient to the queue."""
-        self._patients[patient.patient_id] = patient
-
-    def remove_patient(self, patient_id: str):
-        """Remove a patient from the queue."""
-        self._patients.pop(patient_id, None)
-
-    def reset_with_patients(self, patient_dicts: list[dict]):
-        """Reset patients from simulation config."""
-        self._patients.clear()
-        now = datetime.now()
-        for i, pd in enumerate(patient_dicts, start=1):
-            lang_str = pd.get("language", "en")
-            try:
-                lang = Language(lang_str)
-            except ValueError:
-                lang = Language.ENGLISH
-            patient = Patient(
-                patient_id=f"SIM{i:03d}",
-                name=pd["name"],
-                phone=pd["phone"],
-                language=lang,
-                order_id=f"ORD-SIM{i:03d}",
-                order_created=now - timedelta(days=1),
-                has_abandoned_before=pd.get("has_abandoned_before", False),
-                has_called_in_before=pd.get("has_called_in_before", False),
-                ai_called_before=pd.get("ai_called_before", False),
-                attempt_count=pd.get("attempt_count", 0),
-                due_by=now + timedelta(days=2),
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(PatientRow).where(PatientRow.patient_id == patient_id)
             )
-            self._patients[patient.patient_id] = patient
+            row = result.scalar_one_or_none()
+            if row:
+                if increment_attempt:
+                    row.attempt_count += 1
+                row.last_attempt_at = datetime.now(timezone.utc)
+                row.last_outcome = outcome
+                row.ai_called_before = True
+                row.priority_bucket = _compute_priority(
+                    row.has_abandoned_before, row.ai_called_before, row.has_called_in_before
+                )
+                await session.commit()
 
-    def reset_to_sample_data(self):
-        """Reset to initial sample data."""
-        self._patients.clear()
-        self._load_sample_data()
+    async def add_patient(self, patient: Patient):
+        async with AsyncSessionLocal() as session:
+            row = PatientRow(
+                patient_id=patient.patient_id,
+                name=patient.name,
+                phone=patient.phone,
+                language=patient.language.value,
+                order_id=patient.order_id,
+                order_created=patient.order_created,
+                intake_status=patient.intake_status.value,
+                has_called_in_before=patient.has_called_in_before,
+                has_abandoned_before=patient.has_abandoned_before,
+                ai_called_before=patient.ai_called_before,
+                attempt_count=patient.attempt_count,
+                last_attempt_at=patient.last_attempt_at,
+                last_outcome=patient.last_outcome,
+                due_by=patient.due_by,
+                priority_bucket=patient.priority_bucket,
+            )
+            session.add(row)
+            await session.commit()
+
+    async def remove_patient(self, patient_id: str):
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                delete(PatientRow).where(PatientRow.patient_id == patient_id)
+            )
+            await session.commit()
+
+    async def reset_with_patients(self, patient_dicts: list[dict]):
+        now = datetime.now(timezone.utc)
+        async with AsyncSessionLocal() as session:
+            await session.execute(delete(PatientRow))
+            for i, pd in enumerate(patient_dicts, start=1):
+                lang_str = pd.get("language", "en")
+                try:
+                    lang = Language(lang_str)
+                except ValueError:
+                    lang = Language.ENGLISH
+
+                has_abandoned = pd.get("has_abandoned_before", False)
+                ai_called = pd.get("ai_called_before", False)
+                has_called_in = pd.get("has_called_in_before", False)
+
+                row = PatientRow(
+                    patient_id=f"SIM{i:03d}",
+                    name=pd["name"],
+                    phone=pd["phone"],
+                    language=lang.value,
+                    order_id=f"ORD-SIM{i:03d}",
+                    order_created=now - timedelta(days=1),
+                    has_abandoned_before=has_abandoned,
+                    has_called_in_before=has_called_in,
+                    ai_called_before=ai_called,
+                    attempt_count=pd.get("attempt_count", 0),
+                    due_by=now + timedelta(days=2),
+                    priority_bucket=_compute_priority(has_abandoned, ai_called, has_called_in),
+                )
+                session.add(row)
+            await session.commit()
+
+    async def reset_to_sample_data(self):
+        """Reset to initial sample data by re-running seed."""
+        from app.db.seed import seed_sample_patients
+        async with AsyncSessionLocal() as session:
+            await session.execute(delete(PatientRow))
+            await session.commit()
+        async with AsyncSessionLocal() as session:
+            await seed_sample_patients(session)
+            await session.commit()
 
 
 # Global instance
-_patient_provider: Optional[MockPatientProvider] = None
+_patient_provider: Optional[PatientProvider] = None
 
 
-def get_patient_provider() -> MockPatientProvider:
+def get_patient_provider() -> PatientProvider:
     """Get the global patient provider instance."""
     global _patient_provider
     if _patient_provider is None:
-        _patient_provider = MockPatientProvider()
+        _patient_provider = PatientProvider()
     return _patient_provider
