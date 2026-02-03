@@ -89,6 +89,9 @@ export default function Dashboard() {
       setPatientsLastUpdated(new Date());
       setCalls(callList);
       setSettings(settingsData);
+      if (settingsData?.call_mode) {
+        setCallMode(settingsData.call_mode);
+      }
       setTimezones(tzList);
       setScenarios(scenarioList);
       setIsLoaded(true);
@@ -144,9 +147,12 @@ export default function Dashboard() {
   // Handle call start
   const handleCallPatient = useCallback(async (patientId: string) => {
     const patient = patients.find(p => p.patient_id === patientId);
-    setCallingPatientName(patient?.name || "Patient");
+    const patientName = patient?.name || "Patient";
+    setCallingPatientName(patientName);
     setCallStartTime(Date.now());
     setLastCallInfo(null);
+
+    dashboard.pushEvent("voice_connecting", `Initiating ${callMode} call to ${patientName}...`);
 
     if (!voice.connected) {
       voice.connect();
@@ -156,13 +162,17 @@ export default function Dashboard() {
       }
     }
 
+    if (voice.connected) {
+      dashboard.pushEvent("voice_connected", "Voice WebSocket connected");
+    }
+
     if (callMode === "web") {
       await audio.startRecording();
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
 
     voice.startCall(patientId, callMode);
-  }, [voice, audio, patients, callMode]);
+  }, [voice, audio, patients, callMode, dashboard]);
 
   // Stop recording when call ends
   const prevActiveRef = useRef(false);
@@ -174,6 +184,33 @@ export default function Dashboard() {
       audio.stopRecording();
     }
   }, [voice.isCallActive, audio]);
+
+  // Push voice status changes to dispatcher events
+  const prevVoiceStatusRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (voice.callStatus && voice.callStatus !== prevVoiceStatusRef.current) {
+      prevVoiceStatusRef.current = voice.callStatus;
+      // Map status to event type
+      if (voice.callStatus.toLowerCase().includes("openai") || voice.callStatus.toLowerCase().includes("session")) {
+        dashboard.pushEvent("openai_session", voice.callStatus);
+      } else if (voice.callStatus.toLowerCase().includes("blocked") || voice.callStatus.toLowerCase().includes("disabled")) {
+        dashboard.pushEvent("twilio_blocked", voice.callStatus);
+      } else if (voice.callStatus.toLowerCase().includes("twilio") || voice.callStatus.toLowerCase().includes("calling")) {
+        dashboard.pushEvent("twilio_calling", voice.callStatus);
+      } else {
+        dashboard.pushEvent("voice_message", voice.callStatus);
+      }
+    }
+  }, [voice.callStatus, dashboard]);
+
+  // Push voice errors to dispatcher events
+  const prevVoiceErrorRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (voice.error && voice.error !== prevVoiceErrorRef.current) {
+      prevVoiceErrorRef.current = voice.error;
+      dashboard.pushEvent("voice_error", voice.error);
+    }
+  }, [voice.error, dashboard]);
 
   // React to backend dispatch_call commands
   useEffect(() => {
@@ -195,6 +232,8 @@ export default function Dashboard() {
       duration,
     });
 
+    dashboard.pushEvent("call_ended", `Call ended with ${callingPatientName} (${duration}s)`);
+
     voice.endCall();
     audio.stopRecording();
     setActiveCall(null);
@@ -205,7 +244,7 @@ export default function Dashboard() {
       setPatients(list);
       setPatientsLastUpdated(new Date());
     });
-  }, [voice, audio, api, callStartTime, callingPatientName]);
+  }, [voice, audio, api, callStartTime, callingPatientName, dashboard]);
 
   // Handle mic toggle
   const handleToggleMic = useCallback(async () => {
@@ -282,6 +321,25 @@ export default function Dashboard() {
     return await api.deleteScenario(id);
   }, [api]);
 
+  const handleAddPatientToQueue = useCallback(async (data: {
+    name: string;
+    phone: string;
+    language?: string;
+    has_abandoned_before?: boolean;
+    has_called_in_before?: boolean;
+    ai_called_before?: boolean;
+    attempt_count?: number;
+  }) => {
+    const result = await api.addPatient(data);
+    if (result) {
+      // Refresh patients list
+      const patientList = await api.getOutboundQueue();
+      setPatients(patientList);
+      setPatientsLastUpdated(new Date());
+    }
+    return result;
+  }, [api]);
+
   // Settings handlers
   const handleSetSystemEnabled = useCallback(async (enabled: boolean) => {
     const newSettings = await api.setSystemEnabled(enabled);
@@ -323,8 +381,36 @@ export default function Dashboard() {
     if (newSettings) setSettings(newSettings);
   }, [api]);
 
+  const handleSetCallMode = useCallback(async (mode: string) => {
+    setCallMode(mode); // Update local state immediately for UI responsiveness
+    const newSettings = await api.setCallMode(mode);
+    if (newSettings) setSettings(newSettings);
+  }, [api]);
+
   // Refresh handlers
   const handleRefreshPatients = useCallback(async () => {
+    const patientList = await api.getOutboundQueue();
+    setPatients(patientList);
+    setPatientsLastUpdated(new Date());
+  }, [api]);
+
+  const handleDeletePatient = useCallback(async (patientId: string) => {
+    await api.deletePatient(patientId);
+    const patientList = await api.getOutboundQueue();
+    setPatients(patientList);
+    setPatientsLastUpdated(new Date());
+  }, [api]);
+
+  const handleUpdatePatient = useCallback(async (patientId: string, data: {
+    name?: string;
+    phone?: string;
+    language?: string;
+    has_abandoned_before?: boolean;
+    has_called_in_before?: boolean;
+    ai_called_before?: boolean;
+    attempt_count?: number;
+  }) => {
+    await api.updatePatient(patientId, data);
     const patientList = await api.getOutboundQueue();
     setPatients(patientList);
     setPatientsLastUpdated(new Date());
@@ -402,7 +488,7 @@ export default function Dashboard() {
               <LayoutDashboard className="h-4 w-4" />
               Dashboard
             </TabsTrigger>
-            <TabsTrigger value="history" className="flex items-center gap-2 rounded-md px-4 text-sm">
+            <TabsTrigger value="history" className="hidden flex items-center gap-2 rounded-md px-4 text-sm">
               <History className="h-4 w-4" />
               History
             </TabsTrigger>
@@ -459,7 +545,7 @@ export default function Dashboard() {
                       timezones={timezones}
                       callMode={callMode}
                       scenarios={scenarios}
-                      onCallModeChange={setCallMode}
+                      onCallModeChange={handleSetCallMode}
                       onSetSystemEnabled={handleSetSystemEnabled}
                       onUpdateBusinessHours={handleUpdateBusinessHours}
                       onUpdateQueueThresholds={handleUpdateQueueThresholds}
@@ -485,6 +571,9 @@ export default function Dashboard() {
                 patients={patients}
                 onCallPatient={handleCallPatient}
                 onRefresh={handleRefreshPatients}
+                onReloadScenario={settings?.active_scenario_id ? () => handleSetActiveScenario(settings.active_scenario_id!) : undefined}
+                onDeletePatient={handleDeletePatient}
+                onUpdatePatient={handleUpdatePatient}
                 isCallActive={voice.isCallActive}
                 outboundAllowed={queueState?.outbound_allowed ?? false}
                 source={settings?.patient_source as "simulation" | "live" | undefined}
@@ -542,6 +631,7 @@ export default function Dashboard() {
               onCreateScenario={handleCreateScenario}
               onDeleteScenario={handleDeleteScenario}
               onRefreshScenarios={handleRefreshScenarios}
+              onAddPatientToQueue={handleAddPatientToQueue}
             />
           </TabsContent>
         </Tabs>

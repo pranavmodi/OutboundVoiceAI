@@ -69,12 +69,17 @@ class SystemSettingsResponse(BaseModel):
     queue_source: str
     patient_source: str
     active_scenario_id: str | None
+    call_mode: str
     can_make_calls: bool
     is_within_business_hours: bool
 
 
 class ActiveScenarioRequest(BaseModel):
     scenario_id: str
+
+
+class CallModeRequest(BaseModel):
+    call_mode: str  # "web" or "twilio"
 
 
 async def settings_to_response(provider) -> SystemSettingsResponse:
@@ -104,6 +109,7 @@ async def settings_to_response(provider) -> SystemSettingsResponse:
         queue_source=settings.queue_source,
         patient_source=settings.patient_source,
         active_scenario_id=settings.active_scenario_id,
+        call_mode=settings.call_mode,
         can_make_calls=await provider.can_make_outbound_call(),
         is_within_business_hours=await provider.is_within_business_hours(),
     )
@@ -353,6 +359,19 @@ async def set_active_scenario(request: ActiveScenarioRequest):
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
+    return await settings_to_response(provider)
+
+
+@router.put("/call-mode", response_model=SystemSettingsResponse)
+async def set_call_mode(request: CallModeRequest):
+    """Set the call mode (web or twilio)."""
+    from fastapi import HTTPException
+
+    if request.call_mode not in ("web", "twilio"):
+        raise HTTPException(status_code=400, detail="call_mode must be 'web' or 'twilio'")
+
+    provider = get_settings_provider()
+    await provider.set_call_mode(request.call_mode)
     return await settings_to_response(provider)
 
 

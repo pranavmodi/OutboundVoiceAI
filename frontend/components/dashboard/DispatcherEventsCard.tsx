@@ -15,6 +15,11 @@ import {
   CheckCircle,
   XCircle,
   Pause,
+  Wifi,
+  WifiOff,
+  MessageSquare,
+  AlertTriangle,
+  Radio,
 } from "lucide-react";
 import { formatTime } from "@/lib/utils";
 import type { DispatcherDecision } from "@/hooks/useWebSocket";
@@ -27,6 +32,7 @@ const decisionConfig: Record<
   string,
   { label: string; icon: typeof Activity; variant: "default" | "secondary" | "destructive" | "outline" | "success" | "warning" }
 > = {
+  // Dispatcher decisions
   blocked: { label: "BLOCKED", icon: Ban, variant: "warning" },
   dispatched: { label: "DISPATCH", icon: Phone, variant: "success" },
   call_started: { label: "CALL START", icon: Zap, variant: "success" },
@@ -39,6 +45,15 @@ const decisionConfig: Record<
   started: { label: "STARTED", icon: CheckCircle, variant: "success" },
   stopped: { label: "STOPPED", icon: XCircle, variant: "destructive" },
   config_updated: { label: "CONFIG", icon: Activity, variant: "secondary" },
+  // Voice/Realtime events
+  voice_connecting: { label: "CONNECTING", icon: Wifi, variant: "secondary" },
+  voice_connected: { label: "CONNECTED", icon: Wifi, variant: "success" },
+  voice_disconnected: { label: "DISCONNECTED", icon: WifiOff, variant: "destructive" },
+  voice_error: { label: "VOICE ERROR", icon: AlertTriangle, variant: "destructive" },
+  voice_message: { label: "VOICE", icon: MessageSquare, variant: "outline" },
+  twilio_blocked: { label: "TWILIO BLOCKED", icon: Ban, variant: "warning" },
+  twilio_calling: { label: "TWILIO", icon: Radio, variant: "default" },
+  openai_session: { label: "OPENAI", icon: Zap, variant: "success" },
 };
 
 export function DispatcherEventsCard({ events }: DispatcherEventsCardProps) {

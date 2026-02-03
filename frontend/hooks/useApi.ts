@@ -142,6 +142,76 @@ export function useApi() {
     }
   }, []);
 
+  const addPatient = useCallback(async (data: {
+    name: string;
+    phone: string;
+    language?: string;
+    has_abandoned_before?: boolean;
+    has_called_in_before?: boolean;
+    ai_called_before?: boolean;
+    attempt_count?: number;
+  }): Promise<{ patient: Patient; saved_to_scenario: boolean } | null> => {
+    try {
+      const params = new URLSearchParams();
+      params.set("name", data.name);
+      params.set("phone", data.phone);
+      if (data.language) params.set("language", data.language);
+      if (data.has_abandoned_before !== undefined) params.set("has_abandoned_before", String(data.has_abandoned_before));
+      if (data.has_called_in_before !== undefined) params.set("has_called_in_before", String(data.has_called_in_before));
+      if (data.ai_called_before !== undefined) params.set("ai_called_before", String(data.ai_called_before));
+      if (data.attempt_count !== undefined) params.set("attempt_count", String(data.attempt_count));
+
+      const result = await fetchApi<{ status: string; patient: Patient; saved_to_scenario: boolean }>(`/api/patients?${params.toString()}`, {
+        method: "POST",
+      });
+      return { patient: result.patient, saved_to_scenario: result.saved_to_scenario };
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
+  const deletePatient = useCallback(async (patientId: string): Promise<{ removed_from_scenario: boolean } | null> => {
+    try {
+      const result = await fetchApi<{ status: string; removed_from_scenario: boolean }>(`/api/patients/${patientId}`, {
+        method: "DELETE",
+      });
+      return { removed_from_scenario: result.removed_from_scenario };
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
+  const updatePatient = useCallback(async (patientId: string, data: {
+    name?: string;
+    phone?: string;
+    language?: string;
+    has_abandoned_before?: boolean;
+    has_called_in_before?: boolean;
+    ai_called_before?: boolean;
+    attempt_count?: number;
+  }): Promise<{ patient: Patient; updated_in_scenario: boolean } | null> => {
+    try {
+      const params = new URLSearchParams();
+      if (data.name !== undefined) params.set("name", data.name);
+      if (data.phone !== undefined) params.set("phone", data.phone);
+      if (data.language !== undefined) params.set("language", data.language);
+      if (data.has_abandoned_before !== undefined) params.set("has_abandoned_before", String(data.has_abandoned_before));
+      if (data.has_called_in_before !== undefined) params.set("has_called_in_before", String(data.has_called_in_before));
+      if (data.ai_called_before !== undefined) params.set("ai_called_before", String(data.ai_called_before));
+      if (data.attempt_count !== undefined) params.set("attempt_count", String(data.attempt_count));
+
+      const result = await fetchApi<{ status: string; patient: Patient; updated_in_scenario: boolean }>(`/api/patients/${patientId}?${params.toString()}`, {
+        method: "PUT",
+      });
+      return { patient: result.patient, updated_in_scenario: result.updated_in_scenario };
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
   // Scenarios API methods
   const getScenarios = useCallback(async (): Promise<SimulationScenario[]> => {
     try {
@@ -347,6 +417,18 @@ export function useApi() {
     }
   }, []);
 
+  const setCallMode = useCallback(async (callMode: string): Promise<SystemSettings | null> => {
+    try {
+      return await fetchApi<SystemSettings>("/api/settings/call-mode", {
+        method: "PUT",
+        body: JSON.stringify({ call_mode: callMode }),
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
   const deleteAllCalls = useCallback(async (): Promise<boolean> => {
     try {
       await fetchApi("/api/calls", { method: "DELETE" });
@@ -380,6 +462,9 @@ export function useApi() {
     simulateAmiFailure,
     simulateAmiRecovery,
     resetPatients,
+    addPatient,
+    deletePatient,
+    updatePatient,
     getScenarios,
     getScenario,
     createScenario,
@@ -397,6 +482,7 @@ export function useApi() {
     updateAllowedPhones,
     setQueueSource,
     setPatientSource,
+    setCallMode,
     getTimezones,
     deleteAllCalls,
   }), [
@@ -413,6 +499,9 @@ export function useApi() {
     simulateAmiFailure,
     simulateAmiRecovery,
     resetPatients,
+    addPatient,
+    deletePatient,
+    updatePatient,
     getScenarios,
     getScenario,
     createScenario,
@@ -430,6 +519,7 @@ export function useApi() {
     updateAllowedPhones,
     setQueueSource,
     setPatientSource,
+    setCallMode,
     getTimezones,
     deleteAllCalls,
   ]);

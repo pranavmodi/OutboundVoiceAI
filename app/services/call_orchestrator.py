@@ -119,7 +119,14 @@ class CallOrchestrator:
                 self._current_patient = None
                 return None
 
-            if patient.phone not in settings.allowed_phones:
+            # Normalize phone numbers for comparison (remove spaces, dashes, parentheses)
+            def normalize_phone(p: str) -> str:
+                return ''.join(c for c in p if c.isdigit() or c == '+')
+
+            normalized_patient_phone = normalize_phone(patient.phone)
+            normalized_allowlist = [normalize_phone(p) for p in settings.allowed_phones]
+
+            if normalized_patient_phone not in normalized_allowlist:
                 error_msg = f"Phone number {patient.phone} is not in the allowlist."
                 logger.warning(f"Twilio call blocked: {error_msg}")
                 if self.on_error:

@@ -85,6 +85,7 @@ class SystemSettingsRow(Base):
     active_scenario_id: Mapped[str | None] = mapped_column(
         String(64), ForeignKey("simulation_scenarios.id", ondelete="SET NULL"), nullable=True
     )
+    call_mode: Mapped[str] = mapped_column(String(20), default="web")
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=_utcnow, onupdate=_utcnow)
 
     __table_args__ = (

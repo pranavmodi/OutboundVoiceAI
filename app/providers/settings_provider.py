@@ -52,6 +52,7 @@ def _row_to_settings(row: SystemSettingsRow) -> SystemSettings:
     settings.queue_source = row.queue_source if row.queue_source is not None else "simulation"
     settings.patient_source = row.patient_source if row.patient_source is not None else "simulation"
     settings.active_scenario_id = row.active_scenario_id
+    settings.call_mode = row.call_mode if row.call_mode is not None else "web"
     return settings
 
 
@@ -267,6 +268,17 @@ class SettingsProvider:
                 row = SystemSettingsRow(id=1, business_hours={}, queue_thresholds={})
                 session.add(row)
             row.active_scenario_id = scenario_id
+            await session.commit()
+            return _row_to_settings(row)
+
+    async def set_call_mode(self, call_mode: str) -> SystemSettings:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(SystemSettingsRow).where(SystemSettingsRow.id == 1))
+            row = result.scalar_one_or_none()
+            if row is None:
+                row = SystemSettingsRow(id=1, business_hours={}, queue_thresholds={})
+                session.add(row)
+            row.call_mode = call_mode
             await session.commit()
             return _row_to_settings(row)
 

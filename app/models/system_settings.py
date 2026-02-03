@@ -41,3 +41,4 @@ class SystemSettings:
     queue_source: str = "simulation"
     patient_source: str = "simulation"
     active_scenario_id: Optional[str] = None
+    call_mode: str = "web"  # "web" or "twilio"

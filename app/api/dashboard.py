@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 from typing import Optional
 
-from app.providers import get_queue_provider, get_mock_queue_provider, get_patient_provider, get_simulation_patient_provider, get_call_log_provider
+from app.providers import get_queue_provider, get_mock_queue_provider, get_patient_provider, get_simulation_patient_provider, get_call_log_provider, get_settings_provider
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
 
@@ -93,6 +93,237 @@ async def get_patients():
     patient_provider = get_patient_provider()
     patients = await patient_provider.get_all_patients()
     return {"patients": [p.to_dict() for p in patients]}
+
+
+@router.post("/patients")
+async def add_patient(
+    name: str,
+    phone: str,
+    language: str = "en",
+    has_abandoned_before: bool = False,
+    has_called_in_before: bool = False,
+    ai_called_before: bool = False,
+    attempt_count: int = 0,
+):
+    """Add a patient to the simulation queue and save to active scenario."""
+    from datetime import datetime, timedelta, timezone
+    from app.models import Patient, Language, IntakeStatus
+    from app.db.models import SimulationScenarioRow
+    from app.db import AsyncSessionLocal
+    from sqlalchemy import select
+    import uuid
+
+    # Validate language
+    try:
+        lang = Language(language)
+    except ValueError:
+        lang = Language.ENGLISH
+
+    # Generate a unique patient ID
+    patient_id = f"SIM-{uuid.uuid4().hex[:8].upper()}"
+    now = datetime.now(timezone.utc)
+
+    patient = Patient(
+        patient_id=patient_id,
+        name=name,
+        phone=phone,
+        language=lang,
+        order_id=f"ORD-{patient_id}",
+        order_created=now - timedelta(days=1),
+        intake_status=IntakeStatus.COMPLETE,
+        has_called_in_before=has_called_in_before,
+        has_abandoned_before=has_abandoned_before,
+        ai_called_before=ai_called_before,
+        attempt_count=attempt_count,
+        due_by=now + timedelta(days=2),
+    )
+
+    # Add to simulation queue
+    sim_provider = get_simulation_patient_provider()
+    await sim_provider.add_patient(patient)
+
+    # Also save to active scenario if it exists and is not builtin
+    saved_to_scenario = False
+    settings_provider = get_settings_provider()
+    settings = await settings_provider.get_settings()
+    if settings.active_scenario_id:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(SimulationScenarioRow).where(
+                    SimulationScenarioRow.id == settings.active_scenario_id
+                )
+            )
+            scenario_row = result.scalar_one_or_none()
+            if scenario_row:
+                # Add patient to scenario's patient list
+                patient_data = {
+                    "name": name,
+                    "phone": phone,
+                    "language": language,
+                    "has_abandoned_before": has_abandoned_before,
+                    "has_called_in_before": has_called_in_before,
+                    "ai_called_before": ai_called_before,
+                    "attempt_count": attempt_count,
+                }
+                current_patients = scenario_row.patients or []
+                scenario_row.patients = current_patients + [patient_data]
+                await session.commit()
+                saved_to_scenario = True
+
+    return {
+        "status": "ok",
+        "patient": patient.to_dict(),
+        "saved_to_scenario": saved_to_scenario,
+    }
+
+
+@router.delete("/patients/{patient_id}")
+async def delete_patient(patient_id: str):
+    """Delete a patient from the simulation queue and active scenario."""
+    from app.db.models import SimulationScenarioRow
+    from app.db import AsyncSessionLocal
+    from sqlalchemy import select
+
+    # Get patient first before deleting
+    sim_provider = get_simulation_patient_provider()
+    patient = await sim_provider.get_patient(patient_id)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+
+    patient_phone = patient.phone
+
+    # Also remove from active scenario if it exists and is not builtin
+    removed_from_scenario = False
+    settings_provider = get_settings_provider()
+    settings = await settings_provider.get_settings()
+    if settings.active_scenario_id:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(SimulationScenarioRow).where(
+                    SimulationScenarioRow.id == settings.active_scenario_id
+                )
+            )
+            scenario_row = result.scalar_one_or_none()
+            if scenario_row:
+                current_patients = scenario_row.patients or []
+                # Filter out the patient with matching phone
+                new_patients = [p for p in current_patients if p.get("phone") != patient_phone]
+                if len(new_patients) < len(current_patients):
+                    scenario_row.patients = new_patients
+                    await session.commit()
+                    removed_from_scenario = True
+
+    # Delete from simulation queue
+    await sim_provider.remove_patient(patient_id)
+
+    return {"status": "ok", "removed_from_scenario": removed_from_scenario}
+
+
+@router.put("/patients/{patient_id}")
+async def update_patient(
+    patient_id: str,
+    name: Optional[str] = None,
+    phone: Optional[str] = None,
+    language: Optional[str] = None,
+    has_abandoned_before: Optional[bool] = None,
+    has_called_in_before: Optional[bool] = None,
+    ai_called_before: Optional[bool] = None,
+    attempt_count: Optional[int] = None,
+):
+    """Update a patient in the simulation queue and active scenario."""
+    from app.db.models import SimulationScenarioRow, PatientRow
+    from app.db import AsyncSessionLocal
+    from sqlalchemy import select
+    from app.models import Language
+
+    # Get current patient first
+    sim_provider = get_simulation_patient_provider()
+    patient = await sim_provider.get_patient(patient_id)
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+
+    old_phone = patient.phone
+
+    # Update in database
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(PatientRow).where(PatientRow.patient_id == patient_id)
+        )
+        row = result.scalar_one_or_none()
+        if not row:
+            raise HTTPException(status_code=404, detail="Patient not found")
+
+        if name is not None:
+            row.name = name
+        if phone is not None:
+            row.phone = phone
+        if language is not None:
+            try:
+                row.language = Language(language).value
+            except ValueError:
+                row.language = "en"
+        if has_abandoned_before is not None:
+            row.has_abandoned_before = has_abandoned_before
+        if has_called_in_before is not None:
+            row.has_called_in_before = has_called_in_before
+        if ai_called_before is not None:
+            row.ai_called_before = ai_called_before
+        if attempt_count is not None:
+            row.attempt_count = attempt_count
+
+        # Recompute priority
+        from app.providers.patient_provider import _compute_priority
+        row.priority_bucket = _compute_priority(
+            row.has_abandoned_before, row.ai_called_before, row.has_called_in_before
+        )
+
+        await session.commit()
+        await session.refresh(row)
+
+    # Also update in active scenario if it exists and is not builtin
+    updated_in_scenario = False
+    settings_provider = get_settings_provider()
+    settings = await settings_provider.get_settings()
+    if settings.active_scenario_id:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(SimulationScenarioRow).where(
+                    SimulationScenarioRow.id == settings.active_scenario_id
+                )
+            )
+            scenario_row = result.scalar_one_or_none()
+            if scenario_row:
+                current_patients = scenario_row.patients or []
+                # Find patient by old phone and update
+                for p in current_patients:
+                    if p.get("phone") == old_phone:
+                        if name is not None:
+                            p["name"] = name
+                        if phone is not None:
+                            p["phone"] = phone
+                        if language is not None:
+                            p["language"] = language
+                        if has_abandoned_before is not None:
+                            p["has_abandoned_before"] = has_abandoned_before
+                        if has_called_in_before is not None:
+                            p["has_called_in_before"] = has_called_in_before
+                        if ai_called_before is not None:
+                            p["ai_called_before"] = ai_called_before
+                        if attempt_count is not None:
+                            p["attempt_count"] = attempt_count
+                        updated_in_scenario = True
+                        break
+                if updated_in_scenario:
+                    scenario_row.patients = current_patients
+                    await session.commit()
+
+    # Get updated patient
+    updated_patient = await sim_provider.get_patient(patient_id)
+    return {
+        "status": "ok",
+        "patient": updated_patient.to_dict() if updated_patient else None,
+        "updated_in_scenario": updated_in_scenario,
+    }
 
 
 @router.get("/patients/queue")

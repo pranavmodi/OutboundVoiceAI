@@ -127,9 +127,7 @@ async def update_scenario(scenario_id: str, request: ScenarioUpdateRequest):
         row = result.scalar_one_or_none()
         if row is None:
             raise HTTPException(status_code=404, detail="Scenario not found")
-        if row.is_builtin:
-            raise HTTPException(status_code=400, detail="Cannot modify builtin scenarios")
-
+        
         if request.label is not None:
             row.label = request.label
         if request.description is not None:
@@ -156,8 +154,6 @@ async def delete_scenario(scenario_id: str):
         row = result.scalar_one_or_none()
         if row is None:
             raise HTTPException(status_code=404, detail="Scenario not found")
-        if row.is_builtin:
-            raise HTTPException(status_code=400, detail="Cannot delete builtin scenarios")
 
         await session.execute(
             delete(SimulationScenarioRow).where(SimulationScenarioRow.id == scenario_id)

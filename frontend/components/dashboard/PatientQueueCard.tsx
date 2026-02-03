@@ -1,16 +1,45 @@
 "use client";
 
+import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Users, Phone, RefreshCw, UserRound, Clock } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Users, Phone, RefreshCw, UserRound, Clock, RotateCcw, Pencil, Trash2 } from "lucide-react";
 import type { Patient } from "@/types";
 
 interface PatientQueueCardProps {
   patients: Patient[];
   onCallPatient: (patientId: string) => void;
   onRefresh: () => void;
+  onReloadScenario?: () => void;
+  onDeletePatient?: (patientId: string) => Promise<void>;
+  onUpdatePatient?: (patientId: string, data: {
+    name?: string;
+    phone?: string;
+    language?: string;
+    has_abandoned_before?: boolean;
+    has_called_in_before?: boolean;
+    ai_called_before?: boolean;
+    attempt_count?: number;
+  }) => Promise<void>;
   isCallActive: boolean;
   outboundAllowed: boolean;
   source?: "simulation" | "live";
@@ -47,12 +76,160 @@ export function PatientQueueCard({
   patients,
   onCallPatient,
   onRefresh,
+  onReloadScenario,
+  onDeletePatient,
+  onUpdatePatient,
   isCallActive,
   outboundAllowed,
   source = "simulation",
   lastUpdated,
 }: PatientQueueCardProps) {
+  const [editingPatient, setEditingPatient] = useState<Patient | null>(null);
+  const [editForm, setEditForm] = useState({
+    name: "",
+    phone: "",
+    language: "en",
+    has_abandoned_before: false,
+    has_called_in_before: false,
+    ai_called_before: false,
+    attempt_count: 0,
+  });
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState<string | null>(null);
+
+  const handleEditClick = (patient: Patient) => {
+    setEditingPatient(patient);
+    setEditForm({
+      name: patient.name,
+      phone: patient.phone,
+      language: patient.language,
+      has_abandoned_before: patient.has_abandoned_before,
+      has_called_in_before: patient.has_called_in_before,
+      ai_called_before: patient.ai_called_before,
+      attempt_count: patient.attempt_count,
+    });
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingPatient || !onUpdatePatient) return;
+    setSaving(true);
+    try {
+      await onUpdatePatient(editingPatient.patient_id, editForm);
+      setEditingPatient(null);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (patientId: string) => {
+    if (!onDeletePatient) return;
+    if (!confirm("Delete this patient?")) return;
+    setDeleting(patientId);
+    try {
+      await onDeletePatient(patientId);
+    } finally {
+      setDeleting(null);
+    }
+  };
+
+  const isSimulation = source === "simulation";
+
   return (
+    <>
+      {/* Edit Patient Dialog */}
+      <Dialog open={!!editingPatient} onOpenChange={(open) => !open && setEditingPatient(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Patient</DialogTitle>
+            <DialogDescription>
+              Update patient information. Changes will be saved to the active scenario.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid gap-2">
+              <Label htmlFor="edit-name">Name</Label>
+              <Input
+                id="edit-name"
+                value={editForm.name}
+                onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="edit-phone">Phone</Label>
+              <Input
+                id="edit-phone"
+                value={editForm.phone}
+                onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label>Language</Label>
+              <Select
+                value={editForm.language}
+                onValueChange={(v) => setEditForm({ ...editForm, language: v })}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="en">English</SelectItem>
+                  <SelectItem value="es">Spanish</SelectItem>
+                  <SelectItem value="zh">Chinese</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="edit-attempts">Attempt Count</Label>
+              <Input
+                id="edit-attempts"
+                type="number"
+                min={0}
+                value={editForm.attempt_count}
+                onChange={(e) => setEditForm({ ...editForm, attempt_count: parseInt(e.target.value) || 0 })}
+              />
+            </div>
+            <div className="flex flex-wrap gap-4">
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={editForm.has_abandoned_before}
+                  onChange={(e) => setEditForm({ ...editForm, has_abandoned_before: e.target.checked })}
+                  className="h-4 w-4"
+                />
+                Has abandoned
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={editForm.has_called_in_before}
+                  onChange={(e) => setEditForm({ ...editForm, has_called_in_before: e.target.checked })}
+                  className="h-4 w-4"
+                />
+                Has called in
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={editForm.ai_called_before}
+                  onChange={(e) => setEditForm({ ...editForm, ai_called_before: e.target.checked })}
+                  className="h-4 w-4"
+                />
+                AI called
+              </label>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditingPatient(null)}>
+              Cancel
+            </Button>
+            <Button onClick={handleSaveEdit} disabled={saving}>
+              {saving ? "Saving..." : "Save"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Main Card */}
     <Card className="flex flex-col">
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between">
@@ -70,7 +247,18 @@ export function PatientQueueCard({
             <Badge variant="outline" className="tabular-nums text-xs">
               {patients.length} patient{patients.length !== 1 ? "s" : ""}
             </Badge>
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onRefresh}>
+            {source === "simulation" && onReloadScenario && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                onClick={onReloadScenario}
+                title="Reload scenario (reset patients)"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+              </Button>
+            )}
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onRefresh} title="Refresh">
               <RefreshCw className="h-3.5 w-3.5" />
             </Button>
           </div>
@@ -115,16 +303,41 @@ export function PatientQueueCard({
                       )}
                     </div>
                   </div>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => onCallPatient(patient.patient_id)}
-                    disabled={isCallActive || !outboundAllowed}
-                    className="ml-3 shrink-0 h-8 text-xs"
-                  >
-                    <Phone className="h-3 w-3 mr-1.5" />
-                    Call
-                  </Button>
+                  <div className="flex items-center gap-1 ml-3 shrink-0">
+                    {isSimulation && onUpdatePatient && (
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        onClick={() => handleEditClick(patient)}
+                        className="h-8 w-8"
+                        title="Edit patient"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                    )}
+                    {isSimulation && onDeletePatient && (
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        onClick={() => handleDelete(patient.patient_id)}
+                        disabled={deleting === patient.patient_id}
+                        className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                        title="Delete patient"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    )}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => onCallPatient(patient.patient_id)}
+                      disabled={isCallActive || !outboundAllowed}
+                      className="h-8 text-xs"
+                    >
+                      <Phone className="h-3 w-3 mr-1.5" />
+                      Call
+                    </Button>
+                  </div>
                 </div>
               ))
             )}
@@ -132,5 +345,6 @@ export function PatientQueueCard({
         </ScrollArea>
       </CardContent>
     </Card>
+    </>
   );
 }

@@ -25,7 +25,7 @@ import {
   Wifi,
   WifiOff,
 } from "lucide-react";
-import type { SimulationScenario, ScenarioPatient, QueueInfo } from "@/types";
+import type { SimulationScenario, ScenarioPatient, QueueInfo, Patient } from "@/types";
 
 interface QueueRow {
   Queue: string;
@@ -53,6 +53,15 @@ interface SimulationConsoleProps {
   }) => Promise<SimulationScenario | null>;
   onDeleteScenario: (id: string) => Promise<boolean>;
   onRefreshScenarios: () => Promise<void>;
+  onAddPatientToQueue?: (data: {
+    name: string;
+    phone: string;
+    language?: string;
+    has_abandoned_before?: boolean;
+    has_called_in_before?: boolean;
+    ai_called_before?: boolean;
+    attempt_count?: number;
+  }) => Promise<{ patient: Patient; saved_to_scenario: boolean } | null>;
 }
 
 function mkQueue(Queue: string, overrides: Partial<QueueRow> = {}): QueueRow {
@@ -85,6 +94,7 @@ export function SimulationConsole({
   onCreateScenario,
   onDeleteScenario,
   onRefreshScenarios,
+  onAddPatientToQueue,
 }: SimulationConsoleProps) {
   const [selectedScenarioId, setSelectedScenarioId] = useState<string>("");
   const [label, setLabel] = useState("");
@@ -96,8 +106,16 @@ export function SimulationConsole({
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
 
+  // Add patient to queue form state
+  const [newPatientName, setNewPatientName] = useState("");
+  const [newPatientPhone, setNewPatientPhone] = useState("");
+  const [newPatientLanguage, setNewPatientLanguage] = useState("en");
+  const [newPatientAbandoned, setNewPatientAbandoned] = useState(false);
+  const [newPatientCalledIn, setNewPatientCalledIn] = useState(false);
+  const [newPatientAiCalled, setNewPatientAiCalled] = useState(false);
+  const [addingPatient, setAddingPatient] = useState(false);
+
   const selectedScenario = scenarios.find(s => s.id === selectedScenarioId);
-  const isBuiltin = selectedScenario?.is_builtin ?? false;
 
   // Load scenario data when selection changes
   const loadScenario = useCallback((scenario: SimulationScenario) => {
@@ -170,9 +188,9 @@ export function SimulationConsole({
     setIsDirty(true);
   };
 
-  // Save existing scenario (only for custom scenarios)
+  // Save existing scenario
   const handleSave = async () => {
-    if (!selectedScenarioId || isBuiltin) return;
+    if (!selectedScenarioId) return;
     setSaving(true);
     setFeedback(null);
     try {
@@ -228,7 +246,7 @@ export function SimulationConsole({
 
   // Delete scenario
   const handleDelete = async () => {
-    if (!selectedScenarioId || isBuiltin) return;
+    if (!selectedScenarioId) return;
     if (!confirm("Are you sure you want to delete this scenario?")) return;
     setSaving(true);
     setFeedback(null);
@@ -250,6 +268,63 @@ export function SimulationConsole({
       setFeedback({ type: "error", message: "Failed to delete scenario." });
     } finally {
       setSaving(false);
+    }
+  };
+
+  // Add patient to queue and scenario
+  const handleAddPatientToQueue = async () => {
+    if (!onAddPatientToQueue || !newPatientName.trim() || !newPatientPhone.trim()) return;
+    setAddingPatient(true);
+    setFeedback(null);
+    try {
+      const result = await onAddPatientToQueue({
+        name: newPatientName.trim(),
+        phone: newPatientPhone.trim(),
+        language: newPatientLanguage,
+        has_abandoned_before: newPatientAbandoned,
+        has_called_in_before: newPatientCalledIn,
+        ai_called_before: newPatientAiCalled,
+        attempt_count: 0,
+      });
+      if (result) {
+        const scenarioMsg = result.saved_to_scenario
+          ? " and saved to scenario."
+          : " to queue. Use 'Save As New' to create a custom scenario for persistent changes.";
+        setFeedback({ type: "success", message: `Patient "${newPatientName}" added${scenarioMsg}` });
+
+        // Add to local patients state so it shows in the table
+        setPatients(prev => [...prev, {
+          name: result.patient.name,
+          phone: result.patient.phone,
+          language: result.patient.language,
+          has_abandoned_before: result.patient.has_abandoned_before,
+          has_called_in_before: result.patient.has_called_in_before,
+          ai_called_before: result.patient.ai_called_before,
+          attempt_count: result.patient.attempt_count,
+        }]);
+
+        // Reset form
+        setNewPatientName("");
+        setNewPatientPhone("");
+        setNewPatientLanguage("en");
+        setNewPatientAbandoned(false);
+        setNewPatientCalledIn(false);
+        setNewPatientAiCalled(false);
+
+        if (result.saved_to_scenario) {
+          await onRefreshScenarios();
+          setIsDirty(false);
+        } else {
+          // Mark as dirty so user knows there are unsaved changes
+          setIsDirty(true);
+        }
+      } else {
+        setFeedback({ type: "error", message: "Failed to add patient." });
+      }
+    } catch {
+      setFeedback({ type: "error", message: "Failed to add patient." });
+    } finally {
+      setAddingPatient(false);
     }
   };
 
@@ -303,7 +378,7 @@ export function SimulationConsole({
                 id="scenario-label"
                 value={label}
                 onChange={handleFieldChange(setLabel)}
-                disabled={isBuiltin}
+                disabled={false}
                 placeholder="Scenario name"
               />
             </div>
@@ -314,7 +389,7 @@ export function SimulationConsole({
                   variant={amiConnected ? "default" : "outline"}
                   size="sm"
                   onClick={() => { setAmiConnected(true); setIsDirty(true); }}
-                  disabled={isBuiltin}
+                  disabled={false}
                 >
                   <Wifi className="h-4 w-4 mr-1" />
                   Connected
@@ -323,7 +398,7 @@ export function SimulationConsole({
                   variant={!amiConnected ? "destructive" : "outline"}
                   size="sm"
                   onClick={() => { setAmiConnected(false); setIsDirty(true); }}
-                  disabled={isBuiltin}
+                  disabled={false}
                 >
                   <WifiOff className="h-4 w-4 mr-1" />
                   Disconnected
@@ -338,7 +413,7 @@ export function SimulationConsole({
               id="scenario-description"
               value={description}
               onChange={handleFieldChange(setDescription)}
-              disabled={isBuiltin}
+              disabled={false}
               placeholder="Describe this scenario..."
               rows={2}
             />
@@ -382,7 +457,7 @@ export function SimulationConsole({
                         value={q.Queue}
                         onChange={e => updateQueue(i, "Queue", e.target.value)}
                         className="h-8"
-                        disabled={isBuiltin}
+                        disabled={false}
                       />
                     </td>
                     <td className="py-2 pr-2">
@@ -392,7 +467,7 @@ export function SimulationConsole({
                         value={q.Calls}
                         onChange={e => updateQueue(i, "Calls", parseInt(e.target.value) || 0)}
                         className="h-8 w-20"
-                        disabled={isBuiltin}
+                        disabled={false}
                       />
                     </td>
                     <td className="py-2 pr-2">
@@ -402,7 +477,7 @@ export function SimulationConsole({
                         value={q.Holdtime}
                         onChange={e => updateQueue(i, "Holdtime", parseInt(e.target.value) || 0)}
                         className="h-8 w-20"
-                        disabled={isBuiltin}
+                        disabled={false}
                       />
                     </td>
                     <td className="py-2 pr-2">
@@ -412,27 +487,23 @@ export function SimulationConsole({
                         value={q.AvailableAgents}
                         onChange={e => updateQueue(i, "AvailableAgents", parseInt(e.target.value) || 0)}
                         className="h-8 w-20"
-                        disabled={isBuiltin}
+                        disabled={false}
                       />
                     </td>
                     <td className="py-2">
-                      {!isBuiltin && (
-                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => removeQueue(i)}>
-                          <Trash2 className="h-4 w-4 text-muted-foreground" />
-                        </Button>
-                      )}
+                      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => removeQueue(i)}>
+                        <Trash2 className="h-4 w-4 text-muted-foreground" />
+                      </Button>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          {!isBuiltin && (
-            <Button variant="outline" size="sm" onClick={addQueue}>
-              <Plus className="h-4 w-4 mr-1" />
-              Add Queue
-            </Button>
-          )}
+          <Button variant="outline" size="sm" onClick={addQueue}>
+            <Plus className="h-4 w-4 mr-1" />
+            Add Queue
+          </Button>
         </CardContent>
       </Card>
 
@@ -475,7 +546,7 @@ export function SimulationConsole({
                         value={p.name}
                         onChange={e => updatePatient(i, "name", e.target.value)}
                         className="h-8"
-                        disabled={isBuiltin}
+                        disabled={false}
                       />
                     </td>
                     <td className="py-2 pr-2">
@@ -483,14 +554,14 @@ export function SimulationConsole({
                         value={p.phone}
                         onChange={e => updatePatient(i, "phone", e.target.value)}
                         className="h-8 w-28"
-                        disabled={isBuiltin}
+                        disabled={false}
                       />
                     </td>
                     <td className="py-2 pr-2">
                       <Select
                         value={p.language}
                         onValueChange={v => updatePatient(i, "language", v)}
-                        disabled={isBuiltin}
+                        disabled={false}
                       >
                         <SelectTrigger className="h-8 w-20">
                           <SelectValue />
@@ -508,7 +579,7 @@ export function SimulationConsole({
                         checked={p.has_abandoned_before}
                         onChange={e => updatePatient(i, "has_abandoned_before", e.target.checked)}
                         className="h-4 w-4"
-                        disabled={isBuiltin}
+                        disabled={false}
                       />
                     </td>
                     <td className="py-2 pr-2 text-center">
@@ -517,7 +588,7 @@ export function SimulationConsole({
                         checked={p.has_called_in_before}
                         onChange={e => updatePatient(i, "has_called_in_before", e.target.checked)}
                         className="h-4 w-4"
-                        disabled={isBuiltin}
+                        disabled={false}
                       />
                     </td>
                     <td className="py-2 pr-2 text-center">
@@ -526,7 +597,7 @@ export function SimulationConsole({
                         checked={p.ai_called_before}
                         onChange={e => updatePatient(i, "ai_called_before", e.target.checked)}
                         className="h-4 w-4"
-                        disabled={isBuiltin}
+                        disabled={false}
                       />
                     </td>
                     <td className="py-2 pr-2">
@@ -536,48 +607,102 @@ export function SimulationConsole({
                         value={p.attempt_count}
                         onChange={e => updatePatient(i, "attempt_count", parseInt(e.target.value) || 0)}
                         className="h-8 w-16"
-                        disabled={isBuiltin}
+                        disabled={false}
                       />
                     </td>
                     <td className="py-2">
-                      {!isBuiltin && (
-                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => removePatient(i)}>
-                          <Trash2 className="h-4 w-4 text-muted-foreground" />
-                        </Button>
-                      )}
+                      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => removePatient(i)}>
+                        <Trash2 className="h-4 w-4 text-muted-foreground" />
+                      </Button>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          {!isBuiltin && (
-            <Button variant="outline" size="sm" onClick={addPatient}>
-              <Plus className="h-4 w-4 mr-1" />
-              Add Patient
-            </Button>
+          {/* Add new patient inline form */}
+          {onAddPatientToQueue && (
+            <div className="border-t pt-4 mt-4">
+              <div className="text-sm font-medium mb-3">Add New Patient</div>
+              <div className="flex flex-wrap items-end gap-2">
+                <Input
+                  value={newPatientName}
+                  onChange={e => setNewPatientName(e.target.value)}
+                  placeholder="Name"
+                  className="h-8 w-32"
+                />
+                <Input
+                  value={newPatientPhone}
+                  onChange={e => setNewPatientPhone(e.target.value)}
+                  placeholder="Phone"
+                  className="h-8 w-28"
+                />
+                <Select value={newPatientLanguage} onValueChange={setNewPatientLanguage}>
+                  <SelectTrigger className="h-8 w-20">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="en">EN</SelectItem>
+                    <SelectItem value="es">ES</SelectItem>
+                    <SelectItem value="zh">ZH</SelectItem>
+                  </SelectContent>
+                </Select>
+                <label className="flex items-center gap-1 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={newPatientAbandoned}
+                    onChange={e => setNewPatientAbandoned(e.target.checked)}
+                    className="h-4 w-4"
+                  />
+                  Aband.
+                </label>
+                <label className="flex items-center gap-1 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={newPatientCalledIn}
+                    onChange={e => setNewPatientCalledIn(e.target.checked)}
+                    className="h-4 w-4"
+                  />
+                  Called
+                </label>
+                <label className="flex items-center gap-1 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={newPatientAiCalled}
+                    onChange={e => setNewPatientAiCalled(e.target.checked)}
+                    className="h-4 w-4"
+                  />
+                  AI
+                </label>
+                <Button
+                  size="sm"
+                  onClick={handleAddPatientToQueue}
+                  disabled={addingPatient || !newPatientName.trim() || !newPatientPhone.trim()}
+                  className="h-8"
+                >
+                  <Plus className="h-4 w-4 mr-1" />
+                  {addingPatient ? "Adding..." : "Add"}
+                </Button>
+              </div>
+            </div>
           )}
         </CardContent>
       </Card>
 
       {/* Action Buttons */}
       <div className="flex justify-end gap-3">
-        {!isBuiltin && (
-          <Button variant="destructive" size="sm" onClick={handleDelete} disabled={saving}>
-            <Trash2 className="h-4 w-4 mr-1" />
-            Delete
-          </Button>
-        )}
+        <Button variant="destructive" size="sm" onClick={handleDelete} disabled={saving}>
+          <Trash2 className="h-4 w-4 mr-1" />
+          Delete
+        </Button>
         <Button variant="outline" onClick={handleSaveAsNew} disabled={saving}>
           <Copy className="h-4 w-4 mr-1" />
           Save As New
         </Button>
-        {!isBuiltin && (
-          <Button onClick={handleSave} disabled={saving || !isDirty}>
-            <Save className="h-4 w-4 mr-1" />
-            {saving ? "Saving..." : "Save"}
-          </Button>
-        )}
+        <Button onClick={handleSave} disabled={saving || !isDirty}>
+          <Save className="h-4 w-4 mr-1" />
+          {saving ? "Saving..." : "Save"}
+        </Button>
       </div>
     </div>
   );

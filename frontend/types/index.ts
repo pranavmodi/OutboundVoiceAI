@@ -176,6 +176,7 @@ export interface SystemSettings {
   queue_source: string;
   patient_source: string;
   active_scenario_id: string | null;
+  call_mode: string;
   can_make_calls: boolean;
   is_within_business_hours: boolean;
 }

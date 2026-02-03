@@ -27,6 +27,7 @@ interface UseDashboardWSReturn {
   dispatchedPatient: DispatchedPatient | null;
   clearDispatch: () => void;
   dispatcherEvents: DispatcherDecision[];
+  pushEvent: (decision: string, detail: string) => void;
 }
 
 export function useDashboardWS(): UseDashboardWSReturn {
@@ -42,6 +43,16 @@ export function useDashboardWS(): UseDashboardWSReturn {
 
   const clearDispatch = useCallback(() => {
     setDispatchedPatient(null);
+  }, []);
+
+  const pushEvent = useCallback((decision: string, detail: string) => {
+    const event: DispatcherDecision = {
+      timestamp: new Date().toISOString(),
+      decision,
+      detail,
+      state: "frontend",
+    };
+    setDispatcherEvents((prev) => [event, ...prev].slice(0, 50));
   }, []);
 
   const connect = useCallback(() => {
@@ -153,7 +164,7 @@ export function useDashboardWS(): UseDashboardWSReturn {
     };
   }, [connect]);
 
-  return { connected, queueState, activeCall, statistics, lastStatus, dispatchedPatient, clearDispatch, dispatcherEvents };
+  return { connected, queueState, activeCall, statistics, lastStatus, dispatchedPatient, clearDispatch, dispatcherEvents, pushEvent };
 }
 
 interface UseVoiceWSReturn {
