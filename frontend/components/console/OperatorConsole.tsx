@@ -116,6 +116,12 @@ export function OperatorConsole({
     await onUpdateBusinessHours(businessHoursForm);
   };
 
+  const handleBusinessHoursEnabledChange = async (enabled: boolean) => {
+    const newForm = { ...businessHoursForm, enabled };
+    setBusinessHoursForm(newForm);
+    await onUpdateBusinessHours(newForm);
+  };
+
   const handleThresholdsSubmit = async () => {
     await onUpdateQueueThresholds(thresholdsForm);
   };
@@ -411,9 +417,7 @@ export function OperatorConsole({
             <Switch
               id="business-hours-enabled"
               checked={businessHoursForm.enabled}
-              onCheckedChange={(checked) =>
-                setBusinessHoursForm({ ...businessHoursForm, enabled: checked })
-              }
+              onCheckedChange={handleBusinessHoursEnabledChange}
             />
           </div>
 
