@@ -18,9 +18,10 @@ import type { QueueState } from "@/types";
 
 interface QueueStatusCardProps {
   queueState: QueueState | null;
+  source?: "simulation" | "live";
 }
 
-export function QueueStatusCard({ queueState }: QueueStatusCardProps) {
+export function QueueStatusCard({ queueState, source = "simulation" }: QueueStatusCardProps) {
   if (!queueState) {
     return (
       <Card>
@@ -48,6 +49,12 @@ export function QueueStatusCard({ queueState }: QueueStatusCardProps) {
             Queue Status
           </CardTitle>
           <div className="flex items-center gap-2">
+            <Badge
+              variant={source === "live" ? "default" : "secondary"}
+              className="text-xs"
+            >
+              {source === "live" ? "Live FreePBX" : "Simulation"}
+            </Badge>
             {queueState.ami_connected ? (
               <Badge variant="success" className="flex items-center gap-1 text-xs">
                 <Wifi className="h-3 w-3" />

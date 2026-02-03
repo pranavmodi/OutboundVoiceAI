@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useMemo } from "react";
-import type { SystemStatus, Patient, CallLog, QueueState, SystemSettings, BusinessHours, QueueThresholds, DispatcherSettings } from "@/types";
+import type { SystemStatus, Patient, CallLog, QueueState, SystemSettings, BusinessHours, QueueThresholds, DispatcherSettings, SimulationScenario, ScenarioPatient } from "@/types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -142,20 +142,90 @@ export function useApi() {
     }
   }, []);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const applySimulation = useCallback(async (config: any): Promise<any> => {
-    setLoading(true);
-    setError(null);
+  // Scenarios API methods
+  const getScenarios = useCallback(async (): Promise<SimulationScenario[]> => {
     try {
-      return await fetchApi("/api/simulation/apply", {
+      return await fetchApi<SimulationScenario[]>("/api/scenarios");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return [];
+    }
+  }, []);
+
+  const getScenario = useCallback(async (id: string): Promise<SimulationScenario | null> => {
+    try {
+      return await fetchApi<SimulationScenario>(`/api/scenarios/${id}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
+  const createScenario = useCallback(async (data: {
+    label: string;
+    description?: string;
+    ami_connected?: boolean;
+    queues?: Array<{ Queue: string; Calls?: number; Holdtime?: number; AvailableAgents?: number }>;
+    patients?: ScenarioPatient[];
+  }): Promise<SimulationScenario | null> => {
+    try {
+      return await fetchApi<SimulationScenario>("/api/scenarios", {
         method: "POST",
-        body: JSON.stringify(config),
+        body: JSON.stringify(data),
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unknown error");
       return null;
-    } finally {
-      setLoading(false);
+    }
+  }, []);
+
+  const updateScenario = useCallback(async (id: string, data: {
+    label?: string;
+    description?: string;
+    ami_connected?: boolean;
+    queues?: Array<{ Queue: string; Calls?: number; Holdtime?: number; AvailableAgents?: number }>;
+    patients?: ScenarioPatient[];
+  }): Promise<SimulationScenario | null> => {
+    try {
+      return await fetchApi<SimulationScenario>(`/api/scenarios/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(data),
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
+  const deleteScenario = useCallback(async (id: string): Promise<boolean> => {
+    try {
+      await fetchApi(`/api/scenarios/${id}`, { method: "DELETE" });
+      return true;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return false;
+    }
+  }, []);
+
+  const deleteCustomScenarios = useCallback(async (): Promise<boolean> => {
+    try {
+      await fetchApi("/api/scenarios", { method: "DELETE" });
+      return true;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return false;
+    }
+  }, []);
+
+  const setActiveScenario = useCallback(async (scenarioId: string): Promise<SystemSettings | null> => {
+    try {
+      return await fetchApi<SystemSettings>("/api/settings/active-scenario", {
+        method: "PUT",
+        body: JSON.stringify({ scenario_id: scenarioId }),
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
     }
   }, []);
 
@@ -287,16 +357,6 @@ export function useApi() {
     }
   }, []);
 
-  const deleteCustomScenarios = useCallback(async (): Promise<boolean> => {
-    try {
-      await fetchApi("/api/scenarios", { method: "DELETE" });
-      return true;
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Unknown error");
-      return false;
-    }
-  }, []);
-
   const getTimezones = useCallback(async (): Promise<string[]> => {
     try {
       return await fetchApi<string[]>("/api/settings/timezones");
@@ -320,7 +380,13 @@ export function useApi() {
     simulateAmiFailure,
     simulateAmiRecovery,
     resetPatients,
-    applySimulation,
+    getScenarios,
+    getScenario,
+    createScenario,
+    updateScenario,
+    deleteScenario,
+    deleteCustomScenarios,
+    setActiveScenario,
     getSettings,
     updateSettings,
     setSystemEnabled,
@@ -333,7 +399,6 @@ export function useApi() {
     setPatientSource,
     getTimezones,
     deleteAllCalls,
-    deleteCustomScenarios,
   }), [
     loading,
     error,
@@ -348,7 +413,13 @@ export function useApi() {
     simulateAmiFailure,
     simulateAmiRecovery,
     resetPatients,
-    applySimulation,
+    getScenarios,
+    getScenario,
+    createScenario,
+    updateScenario,
+    deleteScenario,
+    deleteCustomScenarios,
+    setActiveScenario,
     getSettings,
     updateSettings,
     setSystemEnabled,
@@ -361,6 +432,5 @@ export function useApi() {
     setPatientSource,
     getTimezones,
     deleteAllCalls,
-    deleteCustomScenarios,
   ]);
 }

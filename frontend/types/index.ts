@@ -175,6 +175,29 @@ export interface SystemSettings {
   allowed_phones: string[];
   queue_source: string;
   patient_source: string;
+  active_scenario_id: string | null;
   can_make_calls: boolean;
   is_within_business_hours: boolean;
+}
+
+export interface ScenarioPatient {
+  name: string;
+  phone: string;
+  language: string;
+  has_abandoned_before: boolean;
+  has_called_in_before: boolean;
+  ai_called_before: boolean;
+  attempt_count: number;
+}
+
+export interface SimulationScenario {
+  id: string;
+  label: string;
+  description: string;
+  is_builtin: boolean;
+  ami_connected: boolean;
+  queues: QueueInfo[];
+  patients: ScenarioPatient[];
+  created_at: string;
+  updated_at: string;
 }

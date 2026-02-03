@@ -108,68 +108,169 @@ async def seed_sample_patients(session: AsyncSession):
 
 
 async def seed_builtin_scenarios(session: AsyncSession):
-    """Insert built-in simulation scenarios if they don't exist."""
-    result = await session.execute(
-        select(SimulationScenarioRow.id).where(SimulationScenarioRow.is_builtin == True)  # noqa: E712
+    """Upsert built-in simulation scenarios (7 consolidated builtins).
+
+    This deletes existing builtins and re-creates them, allowing updates
+    to builtin scenario data on each restart.
+    """
+    from sqlalchemy import delete
+
+    # Delete old builtins to allow updating their data
+    await session.execute(
+        delete(SimulationScenarioRow).where(SimulationScenarioRow.is_builtin == True)  # noqa: E712
     )
-    if result.scalars().first() is not None:
-        return
 
     scenarios = [
         SimulationScenarioRow(
-            id="quiet_queue",
-            label="Quiet Queue",
-            description="Agents available, no calls waiting — outbound allowed immediately",
+            id="single_patient_ready",
+            label="Single Patient Ready",
+            description="One patient waiting, one agent available. Simplest scenario to trigger a single outbound call immediately.",
             is_builtin=True,
             ami_connected=True,
             queues=[
-                {"Queue": "scheduling_en", "Calls": 0, "Holdtime": 0,
-                 "AvailableAgents": 2},
-                {"Queue": "scheduling_es", "Calls": 0, "Holdtime": 0,
-                 "AvailableAgents": 1},
+                {"Queue": "scheduling_en", "Calls": 0, "Holdtime": 0, "AvailableAgents": 1},
             ],
             patients=[
-                {"name": "Jane Doe", "phone": "555-1001", "language": "en",
-                 "has_abandoned_before": True},
-                {"name": "Carlos Ruiz", "phone": "555-1002", "language": "es"},
+                {"name": "Pranav Modi", "phone": "+918287149638", "language": "en",
+                 "has_abandoned_before": True, "has_called_in_before": False,
+                 "ai_called_before": False, "attempt_count": 0},
             ],
-            dispatcher={"poll_interval": 5, "dispatch_timeout": 30,
-                        "max_attempts": 3, "min_hours_between": 6},
+            dispatcher={},
         ),
         SimulationScenarioRow(
-            id="busy_queue",
-            label="Busy Queue",
-            description="High call volume — outbound blocked",
+            id="default_full_queue",
+            label="Default (Full Queue)",
+            description="3 queues with agents available, 7 patients across all priority buckets. Standard dispatcher settings.",
             is_builtin=True,
             ami_connected=True,
             queues=[
-                {"Queue": "scheduling_en", "Calls": 5, "Holdtime": 120,
-                 "AvailableAgents": 0},
-                {"Queue": "intake", "Calls": 3, "Holdtime": 60,
-                 "AvailableAgents": 0},
+                {"Queue": "scheduling_en", "Calls": 0, "Holdtime": 0, "AvailableAgents": 2},
+                {"Queue": "scheduling_es", "Calls": 0, "Holdtime": 0, "AvailableAgents": 1},
+                {"Queue": "intake", "Calls": 0, "Holdtime": 0, "AvailableAgents": 1},
             ],
             patients=[
-                {"name": "Test Patient", "phone": "555-2001", "language": "en"},
+                {"name": "John Smith", "phone": "555-0101", "language": "en",
+                 "has_abandoned_before": True, "has_called_in_before": False,
+                 "ai_called_before": False, "attempt_count": 0},
+                {"name": "Maria Garcia", "phone": "555-0102", "language": "es",
+                 "has_abandoned_before": True, "has_called_in_before": False,
+                 "ai_called_before": False, "attempt_count": 0},
+                {"name": "Robert Johnson", "phone": "555-0103", "language": "en",
+                 "has_abandoned_before": True, "has_called_in_before": False,
+                 "ai_called_before": True, "attempt_count": 1},
+                {"name": "Emily Davis", "phone": "555-0104", "language": "en",
+                 "has_abandoned_before": False, "has_called_in_before": True,
+                 "ai_called_before": False, "attempt_count": 0},
+                {"name": "Michael Wilson", "phone": "555-0105", "language": "en",
+                 "has_abandoned_before": False, "has_called_in_before": False,
+                 "ai_called_before": False, "attempt_count": 0},
+                {"name": "Sarah Brown", "phone": "555-0106", "language": "en",
+                 "has_abandoned_before": False, "has_called_in_before": False,
+                 "ai_called_before": False, "attempt_count": 0},
+                {"name": "Wei Zhang", "phone": "555-0107", "language": "zh",
+                 "has_abandoned_before": False, "has_called_in_before": True,
+                 "ai_called_before": False, "attempt_count": 0},
             ],
-            dispatcher={"poll_interval": 10, "dispatch_timeout": 30,
-                        "max_attempts": 3, "min_hours_between": 6},
+            dispatcher={},
         ),
         SimulationScenarioRow(
-            id="ami_failure",
+            id="busy_queues",
+            label="Busy Queues (Blocked)",
+            description="All queues are overloaded with calls waiting and no agents free. Outbound should be blocked by gating conditions.",
+            is_builtin=True,
+            ami_connected=True,
+            queues=[
+                {"Queue": "scheduling_en", "Calls": 5, "Holdtime": 120, "AvailableAgents": 0},
+                {"Queue": "scheduling_es", "Calls": 3, "Holdtime": 90, "AvailableAgents": 0},
+                {"Queue": "intake", "Calls": 4, "Holdtime": 60, "AvailableAgents": 0},
+            ],
+            patients=[
+                {"name": "John Smith", "phone": "555-0101", "language": "en",
+                 "has_abandoned_before": True, "has_called_in_before": False,
+                 "ai_called_before": False, "attempt_count": 0},
+                {"name": "Maria Garcia", "phone": "555-0102", "language": "es",
+                 "has_abandoned_before": True, "has_called_in_before": False,
+                 "ai_called_before": False, "attempt_count": 0},
+            ],
+            dispatcher={},
+        ),
+        SimulationScenarioRow(
+            id="ami_down",
             label="AMI Disconnected",
-            description="AMI connection lost — outbound blocked",
+            description="AMI connection is down. Dispatcher will block all outbound calls regardless of queue or patient state.",
             is_builtin=True,
             ami_connected=False,
             queues=[
-                {"Queue": "scheduling_en", "Calls": 0, "Holdtime": 0,
-                 "AvailableAgents": 0},
+                {"Queue": "scheduling_en", "Calls": 0, "Holdtime": 0, "AvailableAgents": 2},
             ],
             patients=[
-                {"name": "Test Patient", "phone": "555-3001", "language": "en"},
+                {"name": "John Smith", "phone": "555-0101", "language": "en",
+                 "has_abandoned_before": True, "has_called_in_before": False,
+                 "ai_called_before": False, "attempt_count": 0},
             ],
-            dispatcher={"poll_interval": 10, "dispatch_timeout": 30,
-                        "max_attempts": 3, "min_hours_between": 6},
+            dispatcher={},
+        ),
+        SimulationScenarioRow(
+            id="multilingual",
+            label="Multilingual Patients",
+            description="Three patients in different languages (EN, ES, ZH), one agent available. Tests language routing.",
+            is_builtin=True,
+            ami_connected=True,
+            queues=[
+                {"Queue": "scheduling_en", "Calls": 0, "Holdtime": 0, "AvailableAgents": 1},
+                {"Queue": "scheduling_es", "Calls": 0, "Holdtime": 0, "AvailableAgents": 1},
+            ],
+            patients=[
+                {"name": "John Smith", "phone": "555-0101", "language": "en",
+                 "has_abandoned_before": True, "has_called_in_before": False,
+                 "ai_called_before": False, "attempt_count": 0},
+                {"name": "Maria Garcia", "phone": "555-0102", "language": "es",
+                 "has_abandoned_before": True, "has_called_in_before": False,
+                 "ai_called_before": False, "attempt_count": 0},
+                {"name": "Wei Zhang", "phone": "555-0107", "language": "zh",
+                 "has_abandoned_before": False, "has_called_in_before": True,
+                 "ai_called_before": False, "attempt_count": 0},
+            ],
+            dispatcher={},
+        ),
+        SimulationScenarioRow(
+            id="retry_scenario",
+            label="Retry Exhaustion",
+            description="Two patients near their max attempt limit. One has 2/3 attempts used, the other has 3/3 (exhausted). Only the first should be eligible.",
+            is_builtin=True,
+            ami_connected=True,
+            queues=[
+                {"Queue": "scheduling_en", "Calls": 0, "Holdtime": 0, "AvailableAgents": 1},
+            ],
+            patients=[
+                {"name": "Robert Johnson", "phone": "555-0103", "language": "en",
+                 "has_abandoned_before": True, "has_called_in_before": False,
+                 "ai_called_before": True, "attempt_count": 2},
+                {"name": "Emily Davis", "phone": "555-0104", "language": "en",
+                 "has_abandoned_before": False, "has_called_in_before": True,
+                 "ai_called_before": True, "attempt_count": 3},
+            ],
+            dispatcher={},
+        ),
+        SimulationScenarioRow(
+            id="empty_queue",
+            label="No Patients",
+            description="Agents available but no patients in the outbound queue. Dispatcher should tick but find no candidate.",
+            is_builtin=True,
+            ami_connected=True,
+            queues=[
+                {"Queue": "scheduling_en", "Calls": 0, "Holdtime": 0, "AvailableAgents": 2},
+            ],
+            patients=[],
+            dispatcher={},
         ),
     ]
     session.add_all(scenarios)
     logger.info("Seeded %d built-in simulation scenarios", len(scenarios))
+
+    # Set active_scenario_id to single_patient_ready if NULL
+    result = await session.execute(select(SystemSettingsRow).where(SystemSettingsRow.id == 1))
+    settings_row = result.scalar_one_or_none()
+    if settings_row and settings_row.active_scenario_id is None:
+        settings_row.active_scenario_id = "single_patient_ready"
+        logger.info("Set default active_scenario_id to 'single_patient_ready'")

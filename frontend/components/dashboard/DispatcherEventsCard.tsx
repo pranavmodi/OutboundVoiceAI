@@ -12,6 +12,9 @@ import {
   MonitorOff,
   Clock,
   Zap,
+  CheckCircle,
+  XCircle,
+  Pause,
 } from "lucide-react";
 import { formatTime } from "@/lib/utils";
 import type { DispatcherDecision } from "@/hooks/useWebSocket";
@@ -24,17 +27,18 @@ const decisionConfig: Record<
   string,
   { label: string; icon: typeof Activity; variant: "default" | "secondary" | "destructive" | "outline" | "success" | "warning" }
 > = {
-  blocked: { label: "Blocked", icon: Ban, variant: "warning" },
-  dispatched: { label: "Dispatched", icon: Phone, variant: "success" },
-  call_started: { label: "Call Started", icon: Zap, variant: "success" },
-  call_ended: { label: "Call Ended", icon: PhoneOff, variant: "secondary" },
-  call_active: { label: "In Call", icon: Phone, variant: "default" },
-  no_candidate: { label: "No Patients", icon: UserX, variant: "secondary" },
-  no_frontend_connected: { label: "No Frontend", icon: MonitorOff, variant: "destructive" },
-  dispatch_timeout: { label: "Timeout", icon: Clock, variant: "destructive" },
-  waiting: { label: "Waiting", icon: Clock, variant: "outline" },
-  started: { label: "Started", icon: Activity, variant: "success" },
-  stopped: { label: "Stopped", icon: Ban, variant: "destructive" },
+  blocked: { label: "BLOCKED", icon: Ban, variant: "warning" },
+  dispatched: { label: "DISPATCH", icon: Phone, variant: "success" },
+  call_started: { label: "CALL START", icon: Zap, variant: "success" },
+  call_ended: { label: "CALL END", icon: PhoneOff, variant: "secondary" },
+  call_active: { label: "IN CALL", icon: Phone, variant: "default" },
+  no_candidate: { label: "NO PATIENTS", icon: UserX, variant: "secondary" },
+  no_frontend_connected: { label: "NO FRONTEND", icon: MonitorOff, variant: "destructive" },
+  dispatch_timeout: { label: "TIMEOUT", icon: Clock, variant: "destructive" },
+  waiting: { label: "WAITING", icon: Pause, variant: "outline" },
+  started: { label: "STARTED", icon: CheckCircle, variant: "success" },
+  stopped: { label: "STOPPED", icon: XCircle, variant: "destructive" },
+  config_updated: { label: "CONFIG", icon: Activity, variant: "secondary" },
 };
 
 export function DispatcherEventsCard({ events }: DispatcherEventsCardProps) {
@@ -54,8 +58,8 @@ export function DispatcherEventsCard({ events }: DispatcherEventsCardProps) {
         </div>
       </CardHeader>
       <CardContent className="flex-1 p-0">
-        <ScrollArea className="h-[300px]">
-          <div className="space-y-1.5 px-6 pb-6">
+        <ScrollArea className="h-[350px]">
+          <div className="space-y-1 px-6 pb-6">
             {events.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
                 <Activity className="h-10 w-10 mb-3 opacity-15" />
@@ -65,7 +69,7 @@ export function DispatcherEventsCard({ events }: DispatcherEventsCardProps) {
             ) : (
               events.map((event, index) => {
                 const config = decisionConfig[event.decision] || {
-                  label: event.decision,
+                  label: event.decision.toUpperCase(),
                   icon: Activity,
                   variant: "outline" as const,
                 };
@@ -74,21 +78,21 @@ export function DispatcherEventsCard({ events }: DispatcherEventsCardProps) {
                 return (
                   <div
                     key={`${event.timestamp}-${index}`}
-                    className="flex items-start gap-2.5 rounded-lg bg-muted/40 px-3 py-2.5"
+                    className="flex items-start gap-3 rounded-lg bg-muted/40 px-3 py-2"
                   >
-                    <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-background mt-0.5">
-                      <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+                    <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-background mt-0.5">
+                      <Icon className="h-3 w-3 text-muted-foreground" />
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <Badge variant={config.variant} className="text-[10px] px-1.5 py-0">
+                    <div className="flex-1 min-w-0 space-y-0.5">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Badge variant={config.variant} className="text-[10px] px-1.5 py-0 font-mono">
                           {config.label}
                         </Badge>
                         <span className="text-[10px] text-muted-foreground tabular-nums">
                           {formatTime(event.timestamp)}
                         </span>
                       </div>
-                      <p className="text-xs text-muted-foreground mt-1 truncate leading-relaxed">
+                      <p className="text-xs text-foreground/80 leading-relaxed">
                         {event.detail}
                       </p>
                     </div>

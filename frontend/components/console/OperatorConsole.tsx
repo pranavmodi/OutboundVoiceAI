@@ -29,13 +29,15 @@ import {
   Trash2,
   Radio,
   Users,
+  Layers,
 } from "lucide-react";
-import type { SystemSettings, BusinessHours, QueueThresholds, DispatcherSettings } from "@/types";
+import type { SystemSettings, BusinessHours, QueueThresholds, DispatcherSettings, SimulationScenario } from "@/types";
 
 interface OperatorConsoleProps {
   settings: SystemSettings | null;
   timezones: string[];
   callMode: string;
+  scenarios: SimulationScenario[];
   onCallModeChange: (mode: string) => void;
   onSetSystemEnabled: (enabled: boolean) => Promise<void>;
   onUpdateBusinessHours: (businessHours: BusinessHours) => Promise<void>;
@@ -45,12 +47,14 @@ interface OperatorConsoleProps {
   onUpdateAllowedPhones: (phones: string[]) => Promise<void>;
   onSetQueueSource: (source: string) => Promise<void>;
   onSetPatientSource: (source: string) => Promise<void>;
+  onSetActiveScenario: (id: string) => Promise<void>;
 }
 
 export function OperatorConsole({
   settings,
   timezones,
   callMode,
+  scenarios,
   onCallModeChange,
   onSetSystemEnabled,
   onUpdateBusinessHours,
@@ -60,6 +64,7 @@ export function OperatorConsole({
   onUpdateAllowedPhones,
   onSetQueueSource,
   onSetPatientSource,
+  onSetActiveScenario,
 }: OperatorConsoleProps) {
   const [businessHoursForm, setBusinessHoursForm] = useState<BusinessHours>({
     start_time: "08:00",
@@ -284,6 +289,45 @@ export function OperatorConsole({
           )}
         </div>
       </div>
+
+      {/* Active Scenario Selector - only visible when either source is simulation */}
+      {(settings.queue_source === "simulation" || settings.patient_source === "simulation") && (
+        <>
+          <Separator />
+
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <Layers className="h-4 w-4 text-muted-foreground" />
+              <h4 className="text-sm font-medium">Active Scenario</h4>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Select which simulation scenario to use. Changing the active scenario will reset mock queue/patient data, clear call logs, and restart the dispatcher.
+            </p>
+            <div className="flex items-center gap-4">
+              <Select
+                value={settings.active_scenario_id || ""}
+                onValueChange={onSetActiveScenario}
+              >
+                <SelectTrigger className="w-64">
+                  <SelectValue placeholder="Select scenario..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {scenarios.map((s) => (
+                    <SelectItem key={s.id} value={s.id}>
+                      <span className="flex items-center gap-2">
+                        {s.label}
+                        {s.is_builtin && (
+                          <Badge variant="outline" className="text-xs">Builtin</Badge>
+                        )}
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        </>
+      )}
 
       <Separator />
 

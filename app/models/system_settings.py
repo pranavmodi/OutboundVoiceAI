@@ -40,3 +40,4 @@ class SystemSettings:
     allowed_phones: List[str] = field(default_factory=list)
     queue_source: str = "simulation"
     patient_source: str = "simulation"
+    active_scenario_id: Optional[str] = None

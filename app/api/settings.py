@@ -68,8 +68,13 @@ class SystemSettingsResponse(BaseModel):
     allowed_phones: List[str]
     queue_source: str
     patient_source: str
+    active_scenario_id: str | None
     can_make_calls: bool
     is_within_business_hours: bool
+
+
+class ActiveScenarioRequest(BaseModel):
+    scenario_id: str
 
 
 async def settings_to_response(provider) -> SystemSettingsResponse:
@@ -98,9 +103,54 @@ async def settings_to_response(provider) -> SystemSettingsResponse:
         allowed_phones=settings.allowed_phones,
         queue_source=settings.queue_source,
         patient_source=settings.patient_source,
+        active_scenario_id=settings.active_scenario_id,
         can_make_calls=await provider.can_make_outbound_call(),
         is_within_business_hours=await provider.is_within_business_hours(),
     )
+
+
+async def activate_scenario(scenario_id: str) -> None:
+    """Load a scenario from DB and apply it to mock providers.
+
+    1. Loads scenario from DB
+    2. Calls MockQueueProvider.reset_with_config(queues, ami_connected)
+    3. Calls SimulationPatientProvider.reset_with_patients(patients)
+    4. Calls call_log_provider.reset()
+    5. Calls dispatcher.restart()
+    """
+    from sqlalchemy import select
+    from app.db import AsyncSessionLocal
+    from app.db.models import SimulationScenarioRow
+    from app.providers import get_mock_queue_provider, get_simulation_patient_provider, get_call_log_provider
+    from app.services.dispatcher import get_dispatcher
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(SimulationScenarioRow).where(SimulationScenarioRow.id == scenario_id)
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            raise ValueError(f"Scenario not found: {scenario_id}")
+
+        # 1. Reset queue provider
+        queue_provider = get_mock_queue_provider()
+        queue_provider.reset_with_config(
+            queues_config=row.queues or [],
+            ami_connected=row.ami_connected,
+        )
+
+        # 2. Reset patient provider
+        patient_provider = get_simulation_patient_provider()
+        await patient_provider.reset_with_patients(
+            patient_dicts=row.patients or []
+        )
+
+        # 3. Clear call logs
+        call_log_provider = get_call_log_provider()
+        await call_log_provider.reset()
+
+        # 4. Restart dispatcher
+        get_dispatcher().restart()
 
 
 @router.get("", response_model=SystemSettingsResponse)
@@ -222,29 +272,87 @@ async def update_allowed_phones(request: AllowedPhonesRequest):
 
 @router.put("/queue-source", response_model=SystemSettingsResponse)
 async def set_queue_source(request: SourceRequest):
-    """Switch queue data source between simulation and live FreePBX."""
+    """Switch queue data source between simulation and live FreePBX.
+
+    When switching TO 'simulation', auto-loads the active scenario.
+    """
     from app.providers import set_queue_source as _set_queue_source
+    from fastapi import HTTPException
 
     if request.source not in ("simulation", "live"):
-        from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="source must be 'simulation' or 'live'")
+
     provider = get_settings_provider()
+    current_settings = await provider.get_settings()
+    was_simulation = current_settings.queue_source == "simulation"
+
     await provider.set_queue_source(request.source)
     _set_queue_source(request.source)
+
+    # When switching TO simulation, activate the scenario
+    if request.source == "simulation" and not was_simulation:
+        active_id = current_settings.active_scenario_id
+        if active_id:
+            try:
+                await activate_scenario(active_id)
+            except ValueError:
+                pass  # Scenario not found, skip activation
+
     return await settings_to_response(provider)
 
 
 @router.put("/patient-source", response_model=SystemSettingsResponse)
 async def set_patient_source(request: SourceRequest):
-    """Switch patient data source between simulation and live RadFlow."""
+    """Switch patient data source between simulation and live RadFlow.
+
+    When switching TO 'simulation', auto-loads the active scenario.
+    """
     from app.providers import set_patient_source as _set_patient_source
+    from fastapi import HTTPException
 
     if request.source not in ("simulation", "live"):
-        from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="source must be 'simulation' or 'live'")
+
     provider = get_settings_provider()
+    current_settings = await provider.get_settings()
+    was_simulation = current_settings.patient_source == "simulation"
+
     await provider.set_patient_source(request.source)
     _set_patient_source(request.source)
+
+    # When switching TO simulation, activate the scenario
+    if request.source == "simulation" and not was_simulation:
+        active_id = current_settings.active_scenario_id
+        if active_id:
+            try:
+                await activate_scenario(active_id)
+            except ValueError:
+                pass  # Scenario not found, skip activation
+
+    return await settings_to_response(provider)
+
+
+@router.put("/active-scenario", response_model=SystemSettingsResponse)
+async def set_active_scenario(request: ActiveScenarioRequest):
+    """Set the active simulation scenario and apply it.
+
+    This updates the active_scenario_id in settings and immediately
+    activates the scenario (resets mock providers, clears call logs,
+    restarts dispatcher).
+    """
+    from fastapi import HTTPException
+
+    provider = get_settings_provider()
+
+    # Update the active scenario ID in settings
+    await provider.set_active_scenario_id(request.scenario_id)
+
+    # Activate the scenario (load into mock providers)
+    try:
+        await activate_scenario(request.scenario_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
     return await settings_to_response(provider)
 
 

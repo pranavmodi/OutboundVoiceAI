@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Users, Phone, RefreshCw, UserRound } from "lucide-react";
+import { Users, Phone, RefreshCw, UserRound, Clock } from "lucide-react";
 import type { Patient } from "@/types";
 
 interface PatientQueueCardProps {
@@ -13,6 +13,8 @@ interface PatientQueueCardProps {
   onRefresh: () => void;
   isCallActive: boolean;
   outboundAllowed: boolean;
+  source?: "simulation" | "live";
+  lastUpdated?: Date | null;
 }
 
 const priorityLabels: Record<number, string> = {
@@ -29,12 +31,26 @@ const priorityColors: Record<number, "destructive" | "warning" | "secondary" | "
   4: "outline",
 };
 
+function formatLastUpdated(date: Date | null | undefined): string {
+  if (!date) return "";
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffSec = Math.floor(diffMs / 1000);
+  if (diffSec < 5) return "just now";
+  if (diffSec < 60) return `${diffSec}s ago`;
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  return date.toLocaleTimeString();
+}
+
 export function PatientQueueCard({
   patients,
   onCallPatient,
   onRefresh,
   isCallActive,
   outboundAllowed,
+  source = "simulation",
+  lastUpdated,
 }: PatientQueueCardProps) {
   return (
     <Card className="flex flex-col">
@@ -45,7 +61,13 @@ export function PatientQueueCard({
             Outbound Queue
           </CardTitle>
           <div className="flex items-center gap-2">
-            <Badge variant="secondary" className="tabular-nums">
+            <Badge
+              variant={source === "live" ? "default" : "secondary"}
+              className="text-xs"
+            >
+              {source === "live" ? "Live RadFlow" : "Simulation"}
+            </Badge>
+            <Badge variant="outline" className="tabular-nums text-xs">
               {patients.length} patient{patients.length !== 1 ? "s" : ""}
             </Badge>
             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onRefresh}>
@@ -53,6 +75,12 @@ export function PatientQueueCard({
             </Button>
           </div>
         </div>
+        {lastUpdated && (
+          <div className="flex items-center gap-1 text-xs text-muted-foreground mt-1">
+            <Clock className="h-3 w-3" />
+            Updated {formatLastUpdated(lastUpdated)}
+          </div>
+        )}
       </CardHeader>
       <CardContent className="flex-1 p-0">
         <ScrollArea className="h-[400px]">

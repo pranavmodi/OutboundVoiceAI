@@ -1,10 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -17,243 +19,237 @@ import {
   Users,
   Plus,
   Trash2,
-  RotateCcw,
+  Save,
+  Copy,
+  Settings2,
+  Wifi,
+  WifiOff,
 } from "lucide-react";
-
-// ---------- Types ----------
+import type { SimulationScenario, ScenarioPatient, QueueInfo } from "@/types";
 
 interface QueueRow {
-  Event: string;
   Queue: string;
-  Max: number;
-  Strategy: string;
   Calls: number;
   Holdtime: number;
-  TalkTime: number;
-  Completed: number;
-  Abandoned: number;
-  ServiceLevel: number;
-  ServicelevelPerf: number;
-  ServicelevelPerf2: number;
-  Weight: number;
   AvailableAgents: number;
 }
 
-interface PatientRow {
-  name: string;
-  phone: string;
-  language: string;
-  has_abandoned_before: boolean;
-  has_called_in_before: boolean;
-  ai_called_before: boolean;
-  attempt_count: number;
+interface SimulationConsoleProps {
+  scenarios: SimulationScenario[];
+  activeScenarioId: string | null;
+  onSaveScenario: (id: string, data: {
+    label?: string;
+    description?: string;
+    ami_connected?: boolean;
+    queues?: QueueRow[];
+    patients?: ScenarioPatient[];
+  }) => Promise<SimulationScenario | null>;
+  onCreateScenario: (data: {
+    label: string;
+    description?: string;
+    ami_connected?: boolean;
+    queues?: QueueRow[];
+    patients?: ScenarioPatient[];
+  }) => Promise<SimulationScenario | null>;
+  onDeleteScenario: (id: string) => Promise<boolean>;
+  onRefreshScenarios: () => Promise<void>;
 }
-
-interface SimulationConfig {
-  queue: {
-    ami_connected: boolean;
-    queues: QueueRow[];
-  };
-  patients: PatientRow[];
-}
-
-interface Scenario {
-  id: string;
-  label: string;
-  description: string;
-  amiConnected: boolean;
-  queues: QueueRow[];
-  patients: PatientRow[];
-}
-
-// ---------- Helpers ----------
 
 function mkQueue(Queue: string, overrides: Partial<QueueRow> = {}): QueueRow {
   return {
-    Event: "QueueParams", Queue, Max: 0, Strategy: "ringall",
-    Calls: 0, Holdtime: 0, TalkTime: 0, Completed: 0, Abandoned: 0,
-    ServiceLevel: 135, ServicelevelPerf: 0.0, ServicelevelPerf2: 0.0,
-    Weight: 0, AvailableAgents: 0, ...overrides,
+    Queue,
+    Calls: 0,
+    Holdtime: 0,
+    AvailableAgents: 0,
+    ...overrides,
   };
 }
 
-// ---------- Scenarios ----------
-
-const SCENARIOS: Scenario[] = [
-  {
-    id: "single_patient_ready",
-    label: "Single Patient Ready",
-    description: "One patient waiting, one agent available. Simplest scenario to trigger a single outbound call immediately.",
-    amiConnected: true,
-    queues: [
-      mkQueue("scheduling_en", { AvailableAgents: 1 }),
-    ],
-    patients: [
-      { name: "Pranav Modi", phone: "+918287149638", language: "en", has_abandoned_before: true, has_called_in_before: false, ai_called_before: false, attempt_count: 0 },
-    ],
-
-  },
-  {
-    id: "default",
-    label: "Default (Full Queue)",
-    description: "3 queues with agents available, 7 patients across all priority buckets. Standard dispatcher settings.",
-    amiConnected: true,
-    queues: [
-      mkQueue("scheduling_en", { AvailableAgents: 2 }),
-      mkQueue("scheduling_es", { AvailableAgents: 1 }),
-      mkQueue("intake", { AvailableAgents: 1 }),
-    ],
-    patients: [
-      { name: "John Smith", phone: "555-0101", language: "en", has_abandoned_before: true, has_called_in_before: false, ai_called_before: false, attempt_count: 0 },
-      { name: "Maria Garcia", phone: "555-0102", language: "es", has_abandoned_before: true, has_called_in_before: false, ai_called_before: false, attempt_count: 0 },
-      { name: "Robert Johnson", phone: "555-0103", language: "en", has_abandoned_before: true, has_called_in_before: false, ai_called_before: true, attempt_count: 1 },
-      { name: "Emily Davis", phone: "555-0104", language: "en", has_abandoned_before: false, has_called_in_before: true, ai_called_before: false, attempt_count: 0 },
-      { name: "Michael Wilson", phone: "555-0105", language: "en", has_abandoned_before: false, has_called_in_before: false, ai_called_before: false, attempt_count: 0 },
-      { name: "Sarah Brown", phone: "555-0106", language: "en", has_abandoned_before: false, has_called_in_before: false, ai_called_before: false, attempt_count: 0 },
-      { name: "Wei Zhang", phone: "555-0107", language: "zh", has_abandoned_before: false, has_called_in_before: true, ai_called_before: false, attempt_count: 0 },
-    ],
-
-  },
-  {
-    id: "busy_queues",
-    label: "Busy Queues (Blocked)",
-    description: "All queues are overloaded with calls waiting and no agents free. Outbound should be blocked by gating conditions.",
-    amiConnected: true,
-    queues: [
-      mkQueue("scheduling_en", { Calls: 5, Holdtime: 120, AvailableAgents: 0 }),
-      mkQueue("scheduling_es", { Calls: 3, Holdtime: 90, AvailableAgents: 0 }),
-      mkQueue("intake", { Calls: 4, Holdtime: 60, AvailableAgents: 0 }),
-    ],
-    patients: [
-      { name: "John Smith", phone: "555-0101", language: "en", has_abandoned_before: true, has_called_in_before: false, ai_called_before: false, attempt_count: 0 },
-      { name: "Maria Garcia", phone: "555-0102", language: "es", has_abandoned_before: true, has_called_in_before: false, ai_called_before: false, attempt_count: 0 },
-    ],
-
-  },
-  {
-    id: "ami_down",
-    label: "AMI Disconnected",
-    description: "AMI connection is down. Dispatcher will block all outbound calls regardless of queue or patient state.",
-    amiConnected: false,
-    queues: [
-      mkQueue("scheduling_en", { AvailableAgents: 2 }),
-    ],
-    patients: [
-      { name: "John Smith", phone: "555-0101", language: "en", has_abandoned_before: true, has_called_in_before: false, ai_called_before: false, attempt_count: 0 },
-    ],
-
-  },
-  {
-    id: "multilingual",
-    label: "Multilingual Patients",
-    description: "Three patients in different languages (EN, ES, ZH), one agent available. Tests language routing.",
-    amiConnected: true,
-    queues: [
-      mkQueue("scheduling_en", { AvailableAgents: 1 }),
-      mkQueue("scheduling_es", { AvailableAgents: 1 }),
-    ],
-    patients: [
-      { name: "John Smith", phone: "555-0101", language: "en", has_abandoned_before: true, has_called_in_before: false, ai_called_before: false, attempt_count: 0 },
-      { name: "Maria Garcia", phone: "555-0102", language: "es", has_abandoned_before: true, has_called_in_before: false, ai_called_before: false, attempt_count: 0 },
-      { name: "Wei Zhang", phone: "555-0107", language: "zh", has_abandoned_before: false, has_called_in_before: true, ai_called_before: false, attempt_count: 0 },
-    ],
-
-  },
-  {
-    id: "retry_scenario",
-    label: "Retry Exhaustion",
-    description: "Two patients near their max attempt limit. One has 2/3 attempts used, the other has 3/3 (exhausted). Only the first should be eligible.",
-    amiConnected: true,
-    queues: [
-      mkQueue("scheduling_en", { AvailableAgents: 1 }),
-    ],
-    patients: [
-      { name: "Robert Johnson", phone: "555-0103", language: "en", has_abandoned_before: true, has_called_in_before: false, ai_called_before: true, attempt_count: 2 },
-      { name: "Emily Davis", phone: "555-0104", language: "en", has_abandoned_before: false, has_called_in_before: true, ai_called_before: true, attempt_count: 3 },
-    ],
-
-  },
-  {
-    id: "empty_queue",
-    label: "No Patients",
-    description: "Agents available but no patients in the outbound queue. Dispatcher should tick but find no candidate.",
-    amiConnected: true,
-    queues: [
-      mkQueue("scheduling_en", { AvailableAgents: 2 }),
-    ],
-    patients: [],
-
-  },
-];
-
-// ---------- Props ----------
-
-interface SimulationConsoleProps {
-  onApplySimulation: (config: SimulationConfig) => Promise<void>;
+function mkPatient(overrides: Partial<ScenarioPatient> = {}): ScenarioPatient {
+  return {
+    name: "",
+    phone: "",
+    language: "en",
+    has_abandoned_before: false,
+    has_called_in_before: false,
+    ai_called_before: false,
+    attempt_count: 0,
+    ...overrides,
+  };
 }
 
-// ---------- Component ----------
-
-export function SimulationConsole({ onApplySimulation }: SimulationConsoleProps) {
-  const defaultScenario = SCENARIOS[0];
-  const [selectedScenarioId, setSelectedScenarioId] = useState(defaultScenario.id);
-  const [queues, setQueues] = useState<QueueRow[]>(() => defaultScenario.queues.map(q => ({ ...q })));
-  const [amiConnected, setAmiConnected] = useState(defaultScenario.amiConnected);
-  const [patients, setPatients] = useState<PatientRow[]>(() => defaultScenario.patients.map(p => ({ ...p })));
-  const [applying, setApplying] = useState(false);
+export function SimulationConsole({
+  scenarios,
+  activeScenarioId,
+  onSaveScenario,
+  onCreateScenario,
+  onDeleteScenario,
+  onRefreshScenarios,
+}: SimulationConsoleProps) {
+  const [selectedScenarioId, setSelectedScenarioId] = useState<string>("");
+  const [label, setLabel] = useState("");
+  const [description, setDescription] = useState("");
+  const [amiConnected, setAmiConnected] = useState(true);
+  const [queues, setQueues] = useState<QueueRow[]>([]);
+  const [patients, setPatients] = useState<ScenarioPatient[]>([]);
+  const [isDirty, setIsDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
 
-  // Scenario loader
-  const loadScenario = (scenarioId: string) => {
-    const scenario = SCENARIOS.find(s => s.id === scenarioId);
-    if (!scenario) return;
-    setSelectedScenarioId(scenarioId);
-    setQueues(scenario.queues.map(q => ({ ...q })));
-    setAmiConnected(scenario.amiConnected);
-    setPatients(scenario.patients.map(p => ({ ...p })));
+  const selectedScenario = scenarios.find(s => s.id === selectedScenarioId);
+  const isBuiltin = selectedScenario?.is_builtin ?? false;
+
+  // Load scenario data when selection changes
+  const loadScenario = useCallback((scenario: SimulationScenario) => {
+    setLabel(scenario.label);
+    setDescription(scenario.description);
+    setAmiConnected(scenario.ami_connected);
+    setQueues((scenario.queues || []).map(q => ({
+      Queue: q.Queue || "",
+      Calls: q.Calls || 0,
+      Holdtime: q.Holdtime || 0,
+      AvailableAgents: q.AvailableAgents || 0,
+    })));
+    setPatients((scenario.patients || []).map(p => ({ ...mkPatient(), ...p })));
+    setIsDirty(false);
     setFeedback(null);
+  }, []);
+
+  // Initialize with first scenario or active scenario
+  useEffect(() => {
+    if (scenarios.length > 0 && !selectedScenarioId) {
+      const initialId = activeScenarioId || scenarios[0].id;
+      setSelectedScenarioId(initialId);
+      const scenario = scenarios.find(s => s.id === initialId);
+      if (scenario) loadScenario(scenario);
+    }
+  }, [scenarios, activeScenarioId, selectedScenarioId, loadScenario]);
+
+  const handleSelectScenario = (scenarioId: string) => {
+    const scenario = scenarios.find(s => s.id === scenarioId);
+    if (scenario) {
+      setSelectedScenarioId(scenarioId);
+      loadScenario(scenario);
+    }
   };
 
   // Queue handlers
   const updateQueue = (index: number, field: keyof QueueRow, value: string | number) => {
     setQueues(prev => prev.map((q, i) => i === index ? { ...q, [field]: value } : q));
+    setIsDirty(true);
   };
 
   const addQueue = () => {
     setQueues(prev => [...prev, mkQueue("")]);
+    setIsDirty(true);
   };
 
   const removeQueue = (index: number) => {
     setQueues(prev => prev.filter((_, i) => i !== index));
+    setIsDirty(true);
   };
 
   // Patient handlers
-  const updatePatient = (index: number, field: keyof PatientRow, value: string | number | boolean) => {
+  const updatePatient = (index: number, field: keyof ScenarioPatient, value: string | number | boolean) => {
     setPatients(prev => prev.map((p, i) => i === index ? { ...p, [field]: value } : p));
+    setIsDirty(true);
   };
 
   const addPatient = () => {
-    setPatients(prev => [...prev, { name: "", phone: "", language: "en", has_abandoned_before: false, has_called_in_before: false, ai_called_before: false, attempt_count: 0 }]);
+    setPatients(prev => [...prev, mkPatient()]);
+    setIsDirty(true);
   };
 
   const removePatient = (index: number) => {
     setPatients(prev => prev.filter((_, i) => i !== index));
+    setIsDirty(true);
   };
 
-  // Apply
-  const handleApply = async () => {
-    setApplying(true);
+  const handleFieldChange = (setter: (v: string) => void) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    setter(e.target.value);
+    setIsDirty(true);
+  };
+
+  // Save existing scenario (only for custom scenarios)
+  const handleSave = async () => {
+    if (!selectedScenarioId || isBuiltin) return;
+    setSaving(true);
     setFeedback(null);
     try {
-      await onApplySimulation({
-        queue: { ami_connected: amiConnected, queues },
+      const result = await onSaveScenario(selectedScenarioId, {
+        label,
+        description,
+        ami_connected: amiConnected,
+        queues,
         patients,
       });
-      setFeedback({ type: "success", message: "Simulation applied and dispatcher restarted." });
+      if (result) {
+        setFeedback({ type: "success", message: "Scenario saved successfully." });
+        setIsDirty(false);
+        await onRefreshScenarios();
+      } else {
+        setFeedback({ type: "error", message: "Failed to save scenario." });
+      }
     } catch {
-      setFeedback({ type: "error", message: "Failed to apply simulation configuration." });
+      setFeedback({ type: "error", message: "Failed to save scenario." });
     } finally {
-      setApplying(false);
+      setSaving(false);
+    }
+  };
+
+  // Save as new scenario
+  const handleSaveAsNew = async () => {
+    setSaving(true);
+    setFeedback(null);
+    try {
+      const result = await onCreateScenario({
+        label: label + " (Copy)",
+        description,
+        ami_connected: amiConnected,
+        queues,
+        patients,
+      });
+      if (result) {
+        setFeedback({ type: "success", message: "New scenario created successfully." });
+        await onRefreshScenarios();
+        // Select the new scenario
+        setSelectedScenarioId(result.id);
+        setLabel(result.label);
+        setIsDirty(false);
+      } else {
+        setFeedback({ type: "error", message: "Failed to create scenario." });
+      }
+    } catch {
+      setFeedback({ type: "error", message: "Failed to create scenario." });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Delete scenario
+  const handleDelete = async () => {
+    if (!selectedScenarioId || isBuiltin) return;
+    if (!confirm("Are you sure you want to delete this scenario?")) return;
+    setSaving(true);
+    setFeedback(null);
+    try {
+      const success = await onDeleteScenario(selectedScenarioId);
+      if (success) {
+        setFeedback({ type: "success", message: "Scenario deleted." });
+        await onRefreshScenarios();
+        // Select first available scenario
+        const remaining = scenarios.filter(s => s.id !== selectedScenarioId);
+        if (remaining.length > 0) {
+          setSelectedScenarioId(remaining[0].id);
+          loadScenario(remaining[0]);
+        }
+      } else {
+        setFeedback({ type: "error", message: "Failed to delete scenario." });
+      }
+    } catch {
+      setFeedback({ type: "error", message: "Failed to delete scenario." });
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -266,35 +262,91 @@ export function SimulationConsole({ onApplySimulation }: SimulationConsoleProps)
         </div>
       )}
 
-      {/* Scenario Preset Selector */}
+      {/* Scenario Selector and Settings */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <RotateCcw className="h-5 w-5" />
-            Scenario Preset
+            <Settings2 className="h-5 w-5" />
+            Scenario Editor
           </CardTitle>
           <CardDescription>
-            Load a pre-built scenario to quickly configure all sections below. You can still edit individual values after loading.
+            Edit simulation scenarios. Builtins are read-only — use "Save As New" to create a custom copy.
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-3">
-          <Select value={selectedScenarioId} onValueChange={loadScenario}>
-            <SelectTrigger className="w-full sm:w-80">
-              <SelectValue placeholder="Select a scenario..." />
-            </SelectTrigger>
-            <SelectContent>
-              {SCENARIOS.map(s => (
-                <SelectItem key={s.id} value={s.id}>{s.label}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <p className="text-sm text-muted-foreground">
-            {SCENARIOS.find(s => s.id === selectedScenarioId)?.description}
-          </p>
+        <CardContent className="space-y-4">
+          <div className="flex flex-col sm:flex-row gap-4">
+            <div className="flex-1 space-y-1.5">
+              <Label>Select Scenario</Label>
+              <Select value={selectedScenarioId} onValueChange={handleSelectScenario}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select a scenario..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {scenarios.map(s => (
+                    <SelectItem key={s.id} value={s.id}>
+                      <span className="flex items-center gap-2">
+                        {s.label}
+                        {s.is_builtin && <Badge variant="outline" className="text-xs">Builtin</Badge>}
+                        {s.id === activeScenarioId && <Badge variant="success" className="text-xs">Active</Badge>}
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="scenario-label">Label</Label>
+              <Input
+                id="scenario-label"
+                value={label}
+                onChange={handleFieldChange(setLabel)}
+                disabled={isBuiltin}
+                placeholder="Scenario name"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>AMI Connection</Label>
+              <div className="flex items-center gap-2 pt-2">
+                <Button
+                  variant={amiConnected ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => { setAmiConnected(true); setIsDirty(true); }}
+                  disabled={isBuiltin}
+                >
+                  <Wifi className="h-4 w-4 mr-1" />
+                  Connected
+                </Button>
+                <Button
+                  variant={!amiConnected ? "destructive" : "outline"}
+                  size="sm"
+                  onClick={() => { setAmiConnected(false); setIsDirty(true); }}
+                  disabled={isBuiltin}
+                >
+                  <WifiOff className="h-4 w-4 mr-1" />
+                  Disconnected
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="scenario-description">Description</Label>
+            <Textarea
+              id="scenario-description"
+              value={description}
+              onChange={handleFieldChange(setDescription)}
+              disabled={isBuiltin}
+              placeholder="Describe this scenario..."
+              rows={2}
+            />
+          </div>
         </CardContent>
       </Card>
 
-      {/* Section 1: Queue Configuration */}
+      {/* Queue Configuration */}
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
@@ -304,34 +356,21 @@ export function SimulationConsole({ onApplySimulation }: SimulationConsoleProps)
                 Queue Configuration
               </CardTitle>
               <CardDescription>
-                Simulates FreePBX/Asterisk call queues. The dispatcher checks these metrics each tick to decide whether outbound calls are safe to make. When calls are waiting or agents are unavailable, outbound is blocked.
+                Simulates FreePBX/Asterisk call queues. The dispatcher checks these metrics each tick.
               </CardDescription>
             </div>
             <Badge variant="secondary">{queues.length} queues</Badge>
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* Queue Table */}
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b text-left text-muted-foreground">
-                  <th className="pb-1 pr-2">
-                    <div>Queue</div>
-                    <div className="font-normal text-xs">Queue ID</div>
-                  </th>
-                  <th className="pb-1 pr-2">
-                    <div>Calls</div>
-                    <div className="font-normal text-xs">Inbound calls in queue</div>
-                  </th>
-                  <th className="pb-1 pr-2">
-                    <div>Holdtime (s)</div>
-                    <div className="font-normal text-xs">Avg hold time</div>
-                  </th>
-                  <th className="pb-1 pr-2">
-                    <div>Avail Agents</div>
-                    <div className="font-normal text-xs">Agents ready to take calls</div>
-                  </th>
+                  <th className="pb-1 pr-2">Queue</th>
+                  <th className="pb-1 pr-2">Calls</th>
+                  <th className="pb-1 pr-2">Holdtime (s)</th>
+                  <th className="pb-1 pr-2">Avail Agents</th>
                   <th className="pb-1"></th>
                 </tr>
               </thead>
@@ -343,6 +382,7 @@ export function SimulationConsole({ onApplySimulation }: SimulationConsoleProps)
                         value={q.Queue}
                         onChange={e => updateQueue(i, "Queue", e.target.value)}
                         className="h-8"
+                        disabled={isBuiltin}
                       />
                     </td>
                     <td className="py-2 pr-2">
@@ -352,6 +392,7 @@ export function SimulationConsole({ onApplySimulation }: SimulationConsoleProps)
                         value={q.Calls}
                         onChange={e => updateQueue(i, "Calls", parseInt(e.target.value) || 0)}
                         className="h-8 w-20"
+                        disabled={isBuiltin}
                       />
                     </td>
                     <td className="py-2 pr-2">
@@ -361,6 +402,7 @@ export function SimulationConsole({ onApplySimulation }: SimulationConsoleProps)
                         value={q.Holdtime}
                         onChange={e => updateQueue(i, "Holdtime", parseInt(e.target.value) || 0)}
                         className="h-8 w-20"
+                        disabled={isBuiltin}
                       />
                     </td>
                     <td className="py-2 pr-2">
@@ -370,26 +412,31 @@ export function SimulationConsole({ onApplySimulation }: SimulationConsoleProps)
                         value={q.AvailableAgents}
                         onChange={e => updateQueue(i, "AvailableAgents", parseInt(e.target.value) || 0)}
                         className="h-8 w-20"
+                        disabled={isBuiltin}
                       />
                     </td>
                     <td className="py-2">
-                      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => removeQueue(i)}>
-                        <Trash2 className="h-4 w-4 text-muted-foreground" />
-                      </Button>
+                      {!isBuiltin && (
+                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => removeQueue(i)}>
+                          <Trash2 className="h-4 w-4 text-muted-foreground" />
+                        </Button>
+                      )}
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          <Button variant="outline" size="sm" onClick={addQueue}>
-            <Plus className="h-4 w-4 mr-1" />
-            Add Queue
-          </Button>
+          {!isBuiltin && (
+            <Button variant="outline" size="sm" onClick={addQueue}>
+              <Plus className="h-4 w-4 mr-1" />
+              Add Queue
+            </Button>
+          )}
         </CardContent>
       </Card>
 
-      {/* Section 2: Patient List */}
+      {/* Patient List */}
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
@@ -399,7 +446,7 @@ export function SimulationConsole({ onApplySimulation }: SimulationConsoleProps)
                 Patient List
               </CardTitle>
               <CardDescription>
-                Mock patient records for the outbound call queue. Patients are sorted by priority bucket (1-4) based on their flags. Abandoned patients who have never been AI-called get highest priority.
+                Mock patient records for the outbound call queue.
               </CardDescription>
             </div>
             <Badge variant="secondary">{patients.length} patients</Badge>
@@ -410,34 +457,13 @@ export function SimulationConsole({ onApplySimulation }: SimulationConsoleProps)
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b text-left text-muted-foreground">
-                  <th className="pb-1 pr-2">
-                    <div>Name</div>
-                    <div className="font-normal text-xs">Patient full name</div>
-                  </th>
-                  <th className="pb-1 pr-2">
-                    <div>Phone</div>
-                    <div className="font-normal text-xs">Number to dial</div>
-                  </th>
-                  <th className="pb-1 pr-2">
-                    <div>Language</div>
-                    <div className="font-normal text-xs">Preferred language</div>
-                  </th>
-                  <th className="pb-1 pr-2">
-                    <div>Abandoned</div>
-                    <div className="font-normal text-xs">Previously abandoned a call</div>
-                  </th>
-                  <th className="pb-1 pr-2">
-                    <div>Called In</div>
-                    <div className="font-normal text-xs">Has called the clinic before</div>
-                  </th>
-                  <th className="pb-1 pr-2">
-                    <div>AI Called</div>
-                    <div className="font-normal text-xs">Previously called by AI</div>
-                  </th>
-                  <th className="pb-1 pr-2">
-                    <div>Attempts</div>
-                    <div className="font-normal text-xs">Past call attempts</div>
-                  </th>
+                  <th className="pb-1 pr-2">Name</th>
+                  <th className="pb-1 pr-2">Phone</th>
+                  <th className="pb-1 pr-2">Lang</th>
+                  <th className="pb-1 pr-2">Aband.</th>
+                  <th className="pb-1 pr-2">Called</th>
+                  <th className="pb-1 pr-2">AI</th>
+                  <th className="pb-1 pr-2">Att.</th>
                   <th className="pb-1"></th>
                 </tr>
               </thead>
@@ -449,6 +475,7 @@ export function SimulationConsole({ onApplySimulation }: SimulationConsoleProps)
                         value={p.name}
                         onChange={e => updatePatient(i, "name", e.target.value)}
                         className="h-8"
+                        disabled={isBuiltin}
                       />
                     </td>
                     <td className="py-2 pr-2">
@@ -456,10 +483,15 @@ export function SimulationConsole({ onApplySimulation }: SimulationConsoleProps)
                         value={p.phone}
                         onChange={e => updatePatient(i, "phone", e.target.value)}
                         className="h-8 w-28"
+                        disabled={isBuiltin}
                       />
                     </td>
                     <td className="py-2 pr-2">
-                      <Select value={p.language} onValueChange={v => updatePatient(i, "language", v)}>
+                      <Select
+                        value={p.language}
+                        onValueChange={v => updatePatient(i, "language", v)}
+                        disabled={isBuiltin}
+                      >
                         <SelectTrigger className="h-8 w-20">
                           <SelectValue />
                         </SelectTrigger>
@@ -476,6 +508,7 @@ export function SimulationConsole({ onApplySimulation }: SimulationConsoleProps)
                         checked={p.has_abandoned_before}
                         onChange={e => updatePatient(i, "has_abandoned_before", e.target.checked)}
                         className="h-4 w-4"
+                        disabled={isBuiltin}
                       />
                     </td>
                     <td className="py-2 pr-2 text-center">
@@ -484,6 +517,7 @@ export function SimulationConsole({ onApplySimulation }: SimulationConsoleProps)
                         checked={p.has_called_in_before}
                         onChange={e => updatePatient(i, "has_called_in_before", e.target.checked)}
                         className="h-4 w-4"
+                        disabled={isBuiltin}
                       />
                     </td>
                     <td className="py-2 pr-2 text-center">
@@ -492,6 +526,7 @@ export function SimulationConsole({ onApplySimulation }: SimulationConsoleProps)
                         checked={p.ai_called_before}
                         onChange={e => updatePatient(i, "ai_called_before", e.target.checked)}
                         className="h-4 w-4"
+                        disabled={isBuiltin}
                       />
                     </td>
                     <td className="py-2 pr-2">
@@ -501,31 +536,48 @@ export function SimulationConsole({ onApplySimulation }: SimulationConsoleProps)
                         value={p.attempt_count}
                         onChange={e => updatePatient(i, "attempt_count", parseInt(e.target.value) || 0)}
                         className="h-8 w-16"
+                        disabled={isBuiltin}
                       />
                     </td>
                     <td className="py-2">
-                      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => removePatient(i)}>
-                        <Trash2 className="h-4 w-4 text-muted-foreground" />
-                      </Button>
+                      {!isBuiltin && (
+                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => removePatient(i)}>
+                          <Trash2 className="h-4 w-4 text-muted-foreground" />
+                        </Button>
+                      )}
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          <Button variant="outline" size="sm" onClick={addPatient}>
-            <Plus className="h-4 w-4 mr-1" />
-            Add Patient
-          </Button>
+          {!isBuiltin && (
+            <Button variant="outline" size="sm" onClick={addPatient}>
+              <Plus className="h-4 w-4 mr-1" />
+              Add Patient
+            </Button>
+          )}
         </CardContent>
       </Card>
 
-      {/* Apply Button */}
-      <div className="flex justify-end">
-        <Button size="lg" onClick={handleApply} disabled={applying}>
-          <RotateCcw className={`h-4 w-4 mr-2 ${applying ? "animate-spin" : ""}`} />
-          {applying ? "Applying..." : "Apply & Restart Simulation"}
+      {/* Action Buttons */}
+      <div className="flex justify-end gap-3">
+        {!isBuiltin && (
+          <Button variant="destructive" size="sm" onClick={handleDelete} disabled={saving}>
+            <Trash2 className="h-4 w-4 mr-1" />
+            Delete
+          </Button>
+        )}
+        <Button variant="outline" onClick={handleSaveAsNew} disabled={saving}>
+          <Copy className="h-4 w-4 mr-1" />
+          Save As New
         </Button>
+        {!isBuiltin && (
+          <Button onClick={handleSave} disabled={saving || !isDirty}>
+            <Save className="h-4 w-4 mr-1" />
+            {saving ? "Saving..." : "Save"}
+          </Button>
+        )}
       </div>
     </div>
   );

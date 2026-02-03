@@ -82,6 +82,9 @@ class SystemSettingsRow(Base):
     allowed_phones: Mapped[list] = mapped_column(JSONB, default=list)
     queue_source: Mapped[str] = mapped_column(String(20), default="simulation")
     patient_source: Mapped[str] = mapped_column(String(20), default="simulation")
+    active_scenario_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("simulation_scenarios.id", ondelete="SET NULL"), nullable=True
+    )
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=_utcnow, onupdate=_utcnow)
 
     __table_args__ = (

@@ -2,13 +2,9 @@
 import os
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
-from pydantic import BaseModel
 from typing import Optional
 
 from app.providers import get_queue_provider, get_mock_queue_provider, get_patient_provider, get_simulation_patient_provider, get_call_log_provider
-from app.models import CallOutcome, DispatcherSettings
-from app.providers.settings_provider import get_settings_provider
-from app.services.dispatcher import get_dispatcher
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
 
@@ -169,103 +165,6 @@ async def get_statistics():
     return await call_log_provider.get_statistics()
 
 
-class QueueConfigItem(BaseModel):
-    Event: str = "QueueParams"
-    Queue: str = ""
-    Max: int = 0
-    Strategy: str = "ringall"
-    Calls: int = 0
-    Holdtime: int = 0
-    TalkTime: int = 0
-    Completed: int = 0
-    Abandoned: int = 0
-    ServiceLevel: int = 135
-    ServicelevelPerf: float = 0.0
-    ServicelevelPerf2: float = 0.0
-    Weight: int = 0
-    AvailableAgents: int = 0
-
-
-class QueueConfig(BaseModel):
-    ami_connected: bool = True
-    queues: list[QueueConfigItem] = []
-
-
-class PatientConfigItem(BaseModel):
-    name: str
-    phone: str
-    language: str = "en"
-    has_abandoned_before: bool = False
-    has_called_in_before: bool = False
-    ai_called_before: bool = False
-    attempt_count: int = 0
-
-
-class DispatcherConfig(BaseModel):
-    poll_interval: int = 10
-    dispatch_timeout: int = 30
-    max_attempts: int = 3
-    min_hours_between: int = 6
-
-
-class SimulationApplyRequest(BaseModel):
-    queue: QueueConfig = QueueConfig()
-    patients: list[PatientConfigItem] = []
-    dispatcher: DispatcherConfig = DispatcherConfig()
-
-
-@router.post("/simulation/apply")
-async def apply_simulation(request: SimulationApplyRequest):
-    """Apply simulation configuration and restart dispatcher."""
-    queue_provider = get_mock_queue_provider()
-    patient_provider = get_simulation_patient_provider()
-    call_log_provider = get_call_log_provider()
-    dispatcher = get_dispatcher()
-
-    # 1. Reset queue provider (simulation only)
-    queue_provider.reset_with_config(
-        queues_config=[q.model_dump() for q in request.queue.queues],
-        ami_connected=request.queue.ami_connected,
-    )
-
-    # 2. Reset patient provider (simulation only)
-    await patient_provider.reset_with_patients(
-        patient_dicts=[p.model_dump() for p in request.patients]
-    )
-
-    # 3. Clear call log history
-    await call_log_provider.reset()
-
-    # 4. Update dispatcher config and restart
-    dispatcher.update_config(
-        poll_interval=request.dispatcher.poll_interval,
-        dispatch_timeout=request.dispatcher.dispatch_timeout,
-        max_attempts=request.dispatcher.max_attempts,
-        min_hours_between=request.dispatcher.min_hours_between,
-    )
-
-    # 4b. Persist dispatcher settings to DB so they survive restart
-    await get_settings_provider().update_dispatcher_settings(
-        DispatcherSettings(
-            poll_interval=request.dispatcher.poll_interval,
-            dispatch_timeout=request.dispatcher.dispatch_timeout,
-            max_attempts=request.dispatcher.max_attempts,
-            min_hours_between=request.dispatcher.min_hours_between,
-        )
-    )
-
-    dispatcher.restart()
-
-    # 5. Return new state
-    patients = await patient_provider.get_all_patients()
-    return {
-        "status": "ok",
-        "queue_state": queue_provider.get_state().to_dict(),
-        "patient_count": len(patients),
-        "dispatcher_status": dispatcher.get_status(),
-    }
-
-
 @router.post("/twilio/twiml/{stream_id}")
 @router.get("/twilio/twiml/{stream_id}")
 async def twilio_twiml(stream_id: str):
@@ -295,23 +194,6 @@ async def delete_all_calls():
     call_log_provider = get_call_log_provider()
     await call_log_provider.reset()
     return {"status": "ok"}
-
-
-@router.delete("/scenarios")
-async def delete_custom_scenarios():
-    """Delete all custom (non-builtin) simulation scenarios."""
-    from sqlalchemy import delete
-    from app.db.session import AsyncSessionLocal
-    from app.db.models import SimulationScenarioRow
-
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            delete(SimulationScenarioRow).where(
-                SimulationScenarioRow.is_builtin == False  # noqa: E712
-            )
-        )
-        await session.commit()
-    return {"status": "ok", "deleted": result.rowcount}
 
 
 @router.get("/config/check")

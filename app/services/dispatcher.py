@@ -144,23 +144,35 @@ class AutoCallDispatcher:
 
             # system_enabled
             if not settings.system_enabled:
-                tick_decision = self._log_decision("blocked", "system_enabled is false")
+                tick_decision = self._log_decision("blocked", "System is disabled")
 
             # is_within_business_hours
             elif not await settings_provider.is_within_business_hours():
-                tick_decision = self._log_decision("blocked", "Outside business hours")
+                bh = settings.business_hours
+                tick_decision = self._log_decision(
+                    "blocked",
+                    f"Outside business hours ({bh.start_time}-{bh.end_time} {bh.timezone})")
 
             # ami_connected (reflected in queue state)
             elif not queue_state.ami_connected:
-                tick_decision = self._log_decision("blocked", "AMI not connected")
+                tick_decision = self._log_decision("blocked", "AMI connection lost")
 
             # outbound_allowed (agents, waits, stability)
             elif not queue_state.outbound_allowed:
-                tick_decision = self._log_decision("blocked", "Outbound not allowed by queue state")
+                # Provide specific reason why outbound is blocked
+                if queue_state.global_agents_available == 0:
+                    reason = "No agents available"
+                elif queue_state.global_calls_waiting > 0:
+                    reason = f"{queue_state.global_calls_waiting} calls waiting, holdtime {queue_state.global_max_holdtime}s"
+                elif queue_state.stable_polls_count < 3:
+                    reason = f"Waiting for stable queue ({queue_state.stable_polls_count}/3 polls)"
+                else:
+                    reason = "Queue thresholds not met"
+                tick_decision = self._log_decision("blocked", reason)
 
             # has_active_call
             elif call_log_provider.has_active_call():
-                tick_decision = self._log_decision("blocked", "Call already active")
+                tick_decision = self._log_decision("blocked", "Call already in progress")
 
             else:
                 # 7. Get next candidate patient
@@ -176,7 +188,7 @@ class AutoCallDispatcher:
                 elif not dashboard_clients:
                     tick_decision = self._log_decision(
                         "no_frontend_connected",
-                        f"Would dispatch {candidate.name} but no frontend connected")
+                        f"Ready to call {candidate.name} but no frontend connected")
 
                 else:
                     # 9. Dispatch!
@@ -186,7 +198,7 @@ class AutoCallDispatcher:
 
                     tick_decision = self._log_decision(
                         "dispatched",
-                        f"Dispatching call to {candidate.name} (id={candidate.patient_id})")
+                        f"Dispatching call to {candidate.name} ({candidate.phone}, P{candidate.priority_bucket})")
 
                     await broadcast_to_dashboards({
                         "type": "dispatch_call",

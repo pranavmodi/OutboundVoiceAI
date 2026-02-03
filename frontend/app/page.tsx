@@ -24,8 +24,11 @@ import {
   Settings,
   ChevronDown,
   Circle,
+  History,
 } from "lucide-react";
-import type { Patient, CallLog, QueueState, SystemSettings } from "@/types";
+import type { Patient, CallLog, QueueState, SystemSettings, SimulationScenario } from "@/types";
+
+const PATIENT_POLL_INTERVAL_MS = 10000; // Poll patients every 10 seconds
 
 export default function Dashboard() {
   // API hooks
@@ -43,6 +46,7 @@ export default function Dashboard() {
   // State
   const [queueState, setQueueState] = useState<QueueState | null>(null);
   const [patients, setPatients] = useState<Patient[]>([]);
+  const [patientsLastUpdated, setPatientsLastUpdated] = useState<Date | null>(null);
   const [calls, setCalls] = useState<CallLog[]>([]);
   const [activeCall, setActiveCall] = useState<CallLog | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
@@ -54,10 +58,13 @@ export default function Dashboard() {
   const [settings, setSettings] = useState<SystemSettings | null>(null);
   const [timezones, setTimezones] = useState<string[]>([]);
 
+  // Scenarios state
+  const [scenarios, setScenarios] = useState<SimulationScenario[]>([]);
+
   // Call mode: "web" (browser audio) or "twilio" (real phone call)
   const [callMode, setCallMode] = useState<string>("web");
 
-  // Operator section collapsed state
+  // Operator section collapsed state - collapsed by default
   const [operatorOpen, setOperatorOpen] = useState(false);
 
   // Load initial data - only once
@@ -65,12 +72,13 @@ export default function Dashboard() {
     if (isLoaded) return;
 
     const loadData = async () => {
-      const [status, patientList, callList, settingsData, tzList] = await Promise.all([
+      const [status, patientList, callList, settingsData, tzList, scenarioList] = await Promise.all([
         api.getStatus(),
         api.getOutboundQueue(),
         api.getCalls(),
         api.getSettings(),
         api.getTimezones(),
+        api.getScenarios(),
       ]);
 
       if (status) {
@@ -78,13 +86,33 @@ export default function Dashboard() {
         setActiveCall(status.active_call);
       }
       setPatients(patientList);
+      setPatientsLastUpdated(new Date());
       setCalls(callList);
       setSettings(settingsData);
       setTimezones(tzList);
+      setScenarios(scenarioList);
       setIsLoaded(true);
     };
 
     loadData();
+  }, [isLoaded, api]);
+
+  // Poll patients at regular intervals (independent of browser focus)
+  useEffect(() => {
+    if (!isLoaded) return;
+
+    const pollPatients = async () => {
+      try {
+        const patientList = await api.getOutboundQueue();
+        setPatients(patientList);
+        setPatientsLastUpdated(new Date());
+      } catch (e) {
+        console.error("Failed to poll patients:", e);
+      }
+    };
+
+    const interval = setInterval(pollPatients, PATIENT_POLL_INTERVAL_MS);
+    return () => clearInterval(interval);
   }, [isLoaded, api]);
 
   // Sync queue state from dashboard WebSocket (replaces REST polling)
@@ -173,7 +201,10 @@ export default function Dashboard() {
     setCallStartTime(null);
 
     api.getCalls().then(setCalls);
-    api.getOutboundQueue().then(setPatients);
+    api.getOutboundQueue().then((list) => {
+      setPatients(list);
+      setPatientsLastUpdated(new Date());
+    });
   }, [voice, audio, api, callStartTime, callingPatientName]);
 
   // Handle mic toggle
@@ -185,17 +216,70 @@ export default function Dashboard() {
     }
   }, [audio]);
 
-  // Simulation apply handler
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const handleApplySimulation = useCallback(async (config: any) => {
-    const result = await api.applySimulation(config);
-    if (result) {
-      if (result.queue_state) setQueueState(result.queue_state);
-      const patientList = await api.getOutboundQueue();
+  // Scenario handlers
+  const handleRefreshScenarios = useCallback(async () => {
+    const scenarioList = await api.getScenarios();
+    setScenarios(scenarioList);
+  }, [api]);
+
+  const handleSetActiveScenario = useCallback(async (scenarioId: string) => {
+    const newSettings = await api.setActiveScenario(scenarioId);
+    if (newSettings) {
+      setSettings(newSettings);
+      // Refresh patients and calls since the scenario reset them
+      const [patientList, callList, statusData] = await Promise.all([
+        api.getOutboundQueue(),
+        api.getCalls(),
+        api.getQueueState(),
+      ]);
       setPatients(patientList);
-      const callList = await api.getCalls();
+      setPatientsLastUpdated(new Date());
       setCalls(callList);
+      if (statusData) setQueueState(statusData);
     }
+  }, [api]);
+
+  const handleSaveScenario = useCallback(async (
+    id: string,
+    data: {
+      label?: string;
+      description?: string;
+      ami_connected?: boolean;
+      queues?: Array<{ Queue: string; Calls?: number; Holdtime?: number; AvailableAgents?: number }>;
+      patients?: Array<{
+        name: string;
+        phone: string;
+        language: string;
+        has_abandoned_before: boolean;
+        has_called_in_before: boolean;
+        ai_called_before: boolean;
+        attempt_count: number;
+      }>;
+    }
+  ) => {
+    return await api.updateScenario(id, data);
+  }, [api]);
+
+  const handleCreateScenario = useCallback(async (data: {
+    label: string;
+    description?: string;
+    ami_connected?: boolean;
+    queues?: Array<{ Queue: string; Calls?: number; Holdtime?: number; AvailableAgents?: number }>;
+    patients?: Array<{
+      name: string;
+      phone: string;
+      language: string;
+      has_abandoned_before: boolean;
+      has_called_in_before: boolean;
+      ai_called_before: boolean;
+      attempt_count: number;
+    }>;
+  }) => {
+    return await api.createScenario(data);
+  }, [api]);
+
+  const handleDeleteScenario = useCallback(async (id: string) => {
+    return await api.deleteScenario(id);
   }, [api]);
 
   // Settings handlers
@@ -243,6 +327,7 @@ export default function Dashboard() {
   const handleRefreshPatients = useCallback(async () => {
     const patientList = await api.getOutboundQueue();
     setPatients(patientList);
+    setPatientsLastUpdated(new Date());
   }, [api]);
 
   const handleRefreshCalls = useCallback(async () => {
@@ -317,6 +402,10 @@ export default function Dashboard() {
               <LayoutDashboard className="h-4 w-4" />
               Dashboard
             </TabsTrigger>
+            <TabsTrigger value="history" className="flex items-center gap-2 rounded-md px-4 text-sm">
+              <History className="h-4 w-4" />
+              History
+            </TabsTrigger>
             <TabsTrigger value="simulation" className="flex items-center gap-2 rounded-md px-4 text-sm">
               <Terminal className="h-4 w-4" />
               Simulation
@@ -324,62 +413,8 @@ export default function Dashboard() {
           </TabsList>
 
           {/* Dashboard Tab */}
-          <TabsContent value="dashboard" className="space-y-8 animate-in">
-            <div className="grid gap-6 lg:grid-cols-2">
-              {/* Left Column */}
-              <div className="space-y-6">
-                <QueueStatusCard queueState={queueState} />
-                <PatientQueueCard
-                  patients={patients}
-                  onCallPatient={handleCallPatient}
-                  onRefresh={handleRefreshPatients}
-                  isCallActive={voice.isCallActive}
-                  outboundAllowed={queueState?.outbound_allowed ?? false}
-                />
-              </div>
-
-              {/* Right Column */}
-              <div className="space-y-6">
-                <ActiveCallCard
-                  call={voice.isCallActive ? ({
-                    call_id: "active",
-                    patient_id: "",
-                    patient_name: callingPatientName || "Patient",
-                    phone: "",
-                    order_id: null,
-                    priority_bucket: 0,
-                    started_at: callStartTime ? new Date(callStartTime).toISOString() : new Date().toISOString(),
-                    ended_at: null,
-                    duration_seconds: 0,
-                    outcome: "in_progress",
-                    transfer_attempted: false,
-                    transfer_success: false,
-                    voicemail_left: false,
-                    sms_sent: false,
-                    queue_snapshot: null,
-                    transcript: [],
-                    error_code: null,
-                    error_message: null,
-                  } as CallLog) : null}
-                  status={voice.callStatus}
-                  transcript={voice.transcript}
-                  isRecording={audio.isRecording}
-                  audioLevel={audio.audioLevel}
-                  onEndCall={handleEndCall}
-                  onToggleMic={handleToggleMic}
-                  lastCallInfo={lastCallInfo}
-                />
-                <CallHistoryCard calls={calls} onRefresh={handleRefreshCalls} />
-              </div>
-            </div>
-
-            {/* Dispatcher Events - full width */}
-            <DispatcherEventsCard events={dashboard.dispatcherEvents} />
-
-            {/* Transcript Browser - full width */}
-            <TranscriptBrowserCard calls={calls} onRefresh={handleRefreshCalls} />
-
-            {/* Operator Settings - collapsible */}
+          <TabsContent value="dashboard" className="space-y-6 animate-in">
+            {/* 1. System Settings - at the top, expanded by default */}
             <Collapsible open={operatorOpen} onOpenChange={setOperatorOpen}>
               <Card>
                 <CollapsibleTrigger asChild>
@@ -391,12 +426,26 @@ export default function Dashboard() {
                       </CardTitle>
                       <div className="flex items-center gap-3">
                         {settings && (
-                          <Badge
-                            variant={settings.system_enabled ? "success" : "outline"}
-                            className="text-xs"
-                          >
-                            {settings.system_enabled ? "Enabled" : "Disabled"}
-                          </Badge>
+                          <>
+                            <Badge
+                              variant={settings.queue_source === "live" ? "default" : "secondary"}
+                              className="text-xs"
+                            >
+                              Queue: {settings.queue_source === "live" ? "Live" : "Sim"}
+                            </Badge>
+                            <Badge
+                              variant={settings.patient_source === "live" ? "default" : "secondary"}
+                              className="text-xs"
+                            >
+                              Patients: {settings.patient_source === "live" ? "Live" : "Sim"}
+                            </Badge>
+                            <Badge
+                              variant={settings.system_enabled ? "success" : "outline"}
+                              className="text-xs"
+                            >
+                              {settings.system_enabled ? "Enabled" : "Disabled"}
+                            </Badge>
+                          </>
                         )}
                         <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${operatorOpen ? "rotate-180" : ""}`} />
                       </div>
@@ -409,6 +458,7 @@ export default function Dashboard() {
                       settings={settings}
                       timezones={timezones}
                       callMode={callMode}
+                      scenarios={scenarios}
                       onCallModeChange={setCallMode}
                       onSetSystemEnabled={handleSetSystemEnabled}
                       onUpdateBusinessHours={handleUpdateBusinessHours}
@@ -418,17 +468,80 @@ export default function Dashboard() {
                       onUpdateAllowedPhones={handleUpdateAllowedPhones}
                       onSetQueueSource={handleSetQueueSource}
                       onSetPatientSource={handleSetPatientSource}
+                      onSetActiveScenario={handleSetActiveScenario}
                     />
                   </CardContent>
                 </CollapsibleContent>
               </Card>
             </Collapsible>
+
+            {/* 2. Queue Status + Patient Queue side by side */}
+            <div className="grid gap-6 lg:grid-cols-2">
+              <QueueStatusCard
+                queueState={queueState}
+                source={settings?.queue_source as "simulation" | "live" | undefined}
+              />
+              <PatientQueueCard
+                patients={patients}
+                onCallPatient={handleCallPatient}
+                onRefresh={handleRefreshPatients}
+                isCallActive={voice.isCallActive}
+                outboundAllowed={queueState?.outbound_allowed ?? false}
+                source={settings?.patient_source as "simulation" | "live" | undefined}
+                lastUpdated={patientsLastUpdated}
+              />
+            </div>
+
+            {/* 3. Dispatcher Events - full width */}
+            <DispatcherEventsCard events={dashboard.dispatcherEvents} />
+
+            {/* 4. Active Call */}
+            <ActiveCallCard
+              call={voice.isCallActive ? ({
+                call_id: "active",
+                patient_id: "",
+                patient_name: callingPatientName || "Patient",
+                phone: "",
+                order_id: null,
+                priority_bucket: 0,
+                started_at: callStartTime ? new Date(callStartTime).toISOString() : new Date().toISOString(),
+                ended_at: null,
+                duration_seconds: 0,
+                outcome: "in_progress",
+                transfer_attempted: false,
+                transfer_success: false,
+                voicemail_left: false,
+                sms_sent: false,
+                queue_snapshot: null,
+                transcript: [],
+                error_code: null,
+                error_message: null,
+              } as CallLog) : null}
+              status={voice.callStatus}
+              transcript={voice.transcript}
+              isRecording={audio.isRecording}
+              audioLevel={audio.audioLevel}
+              onEndCall={handleEndCall}
+              onToggleMic={handleToggleMic}
+              lastCallInfo={lastCallInfo}
+            />
+          </TabsContent>
+
+          {/* History Tab */}
+          <TabsContent value="history" className="space-y-6 animate-in">
+            <CallHistoryCard calls={calls} onRefresh={handleRefreshCalls} />
+            <TranscriptBrowserCard calls={calls} onRefresh={handleRefreshCalls} />
           </TabsContent>
 
           {/* Simulation Tab */}
           <TabsContent value="simulation" className="animate-in">
             <SimulationConsole
-              onApplySimulation={handleApplySimulation}
+              scenarios={scenarios}
+              activeScenarioId={settings?.active_scenario_id || null}
+              onSaveScenario={handleSaveScenario}
+              onCreateScenario={handleCreateScenario}
+              onDeleteScenario={handleDeleteScenario}
+              onRefreshScenarios={handleRefreshScenarios}
             />
           </TabsContent>
         </Tabs>

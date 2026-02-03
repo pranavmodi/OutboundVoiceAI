@@ -6,7 +6,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 
-from .api import dashboard_router, websocket_router, settings_router, dispatcher_router
+from .api import dashboard_router, websocket_router, settings_router, dispatcher_router, scenarios_router
 from .services.dispatcher import get_dispatcher
 from .providers import set_queue_source, set_patient_source
 from .providers.settings_provider import get_settings_provider
@@ -34,6 +34,13 @@ async def lifespan(app: FastAPI):
         max_attempts=ds.max_attempts,
         min_hours_between=ds.min_hours_between,
     )
+    # If sources are "simulation" and active_scenario_id is set, activate the scenario
+    if (settings.queue_source == "simulation" or settings.patient_source == "simulation") and settings.active_scenario_id:
+        from .api.settings import activate_scenario
+        try:
+            await activate_scenario(settings.active_scenario_id)
+        except ValueError:
+            pass  # Scenario not found, skip activation
     get_dispatcher().start()
     yield
     # Shutdown: stop the dispatcher and dispose engine
@@ -70,6 +77,7 @@ app.include_router(dashboard_router)
 app.include_router(websocket_router)
 app.include_router(settings_router)
 app.include_router(dispatcher_router)
+app.include_router(scenarios_router)
 
 # Legacy static (kept for compatibility)
 STATIC_DIR = Path("static")
