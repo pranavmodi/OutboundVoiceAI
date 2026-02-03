@@ -108,17 +108,13 @@ async def seed_sample_patients(session: AsyncSession):
 
 
 async def seed_builtin_scenarios(session: AsyncSession):
-    """Upsert built-in simulation scenarios (7 consolidated builtins).
+    """Seed built-in simulation scenarios if they don't already exist.
 
-    This deletes existing builtins and re-creates them, allowing updates
-    to builtin scenario data on each restart.
+    Only creates scenarios that are missing - preserves any user modifications.
     """
-    from sqlalchemy import delete
-
-    # Delete old builtins to allow updating their data
-    await session.execute(
-        delete(SimulationScenarioRow).where(SimulationScenarioRow.is_builtin == True)  # noqa: E712
-    )
+    # Get existing scenario IDs
+    result = await session.execute(select(SimulationScenarioRow.id))
+    existing_ids = {row[0] for row in result.fetchall()}
 
     scenarios = [
         SimulationScenarioRow(
@@ -265,8 +261,20 @@ async def seed_builtin_scenarios(session: AsyncSession):
             dispatcher={},
         ),
     ]
-    session.add_all(scenarios)
-    logger.info("Seeded %d built-in simulation scenarios", len(scenarios))
+    # Only add scenarios that don't already exist
+    new_scenarios = [s for s in scenarios if s.id not in existing_ids]
+    if new_scenarios:
+        session.add_all(new_scenarios)
+        print(f"[SEED] Seeded {len(new_scenarios)} new simulation scenarios")
+        for s in new_scenarios:
+            print(f"[SEED] - Created scenario '{s.label}' with {len(s.patients or [])} patients")
+    else:
+        print("[SEED] All simulation scenarios already exist, skipping seed")
+
+    # Log existing scenarios
+    for s in scenarios:
+        if s.id in existing_ids:
+            print(f"[SEED] - Scenario '{s.id}' already exists, preserving user data")
 
     # Set active_scenario_id to single_patient_ready if NULL
     result = await session.execute(select(SystemSettingsRow).where(SystemSettingsRow.id == 1))

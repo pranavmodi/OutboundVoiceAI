@@ -1,5 +1,6 @@
 """Scenarios API endpoints - full CRUD for simulation scenarios."""
 import uuid
+import logging
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -9,6 +10,7 @@ from sqlalchemy import select, delete
 from app.db import AsyncSessionLocal
 from app.db.models import SimulationScenarioRow
 
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/scenarios", tags=["scenarios"])
 
@@ -80,6 +82,9 @@ async def list_scenarios():
             select(SimulationScenarioRow).order_by(SimulationScenarioRow.label)
         )
         rows = result.scalars().all()
+        print(f"[LIST_SCENARIOS] Found {len(rows)} scenarios")
+        for row in rows:
+            print(f"[LIST_SCENARIOS] - {row.id}: '{row.label}' with {len(row.patients or [])} patients")
         return [_row_to_response(row) for row in rows]
 
 
@@ -92,7 +97,9 @@ async def get_scenario(scenario_id: str):
         )
         row = result.scalar_one_or_none()
         if row is None:
+            print(f"[GET_SCENARIO] Scenario not found: {scenario_id}")
             raise HTTPException(status_code=404, detail="Scenario not found")
+        print(f"[GET_SCENARIO] Loaded scenario '{row.label}' with {len(row.patients or [])} patients")
         return _row_to_response(row)
 
 
@@ -119,15 +126,27 @@ async def create_scenario(request: ScenarioCreateRequest):
 
 @router.put("/{scenario_id}", response_model=ScenarioResponse)
 async def update_scenario(scenario_id: str, request: ScenarioUpdateRequest):
-    """Update an existing scenario. Cannot update builtin scenarios."""
+    """Update an existing scenario."""
+    from app.providers import get_settings_provider, get_simulation_patient_provider, get_mock_queue_provider
+
+    print(f"[UPDATE_SCENARIO] Updating scenario: {scenario_id}")
+    if request.patients is not None:
+        print(f"[UPDATE_SCENARIO] New patients list has {len(request.patients)} patients")
+        for p in request.patients:
+            print(f"[UPDATE_SCENARIO] - Patient: {p.name}, {p.phone}")
+
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(SimulationScenarioRow).where(SimulationScenarioRow.id == scenario_id)
         )
         row = result.scalar_one_or_none()
         if row is None:
+            print(f"[UPDATE_SCENARIO] Scenario not found: {scenario_id}")
             raise HTTPException(status_code=404, detail="Scenario not found")
-        
+
+        old_patient_count = len(row.patients or [])
+        print(f"[UPDATE_SCENARIO] Current scenario '{row.label}' has {old_patient_count} patients")
+
         if request.label is not None:
             row.label = request.label
         if request.description is not None:
@@ -141,6 +160,28 @@ async def update_scenario(scenario_id: str, request: ScenarioUpdateRequest):
 
         await session.commit()
         await session.refresh(row)
+
+        new_patient_count = len(row.patients or [])
+        print(f"[UPDATE_SCENARIO] Saved scenario '{row.label}': {old_patient_count} -> {new_patient_count} patients")
+
+        # If this is the active scenario, reload patients into PatientRow table
+        settings_provider = get_settings_provider()
+        settings = await settings_provider.get_settings()
+        if settings.active_scenario_id == scenario_id:
+            print(f"[UPDATE_SCENARIO] This is the active scenario, reloading patients into PatientRow table")
+            patient_provider = get_simulation_patient_provider()
+            await patient_provider.reset_with_patients(row.patients or [])
+            print(f"[UPDATE_SCENARIO] Reloaded {len(row.patients or [])} patients into PatientRow table")
+
+            # Also reload queues if they were updated
+            if request.queues is not None or request.ami_connected is not None:
+                queue_provider = get_mock_queue_provider()
+                queue_provider.reset_with_config(
+                    queues_config=row.queues or [],
+                    ami_connected=row.ami_connected,
+                )
+                print(f"[UPDATE_SCENARIO] Reloaded queue configuration")
+
         return _row_to_response(row)
 
 

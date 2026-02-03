@@ -1,10 +1,13 @@
 """REST API endpoints for dashboard."""
 import os
+import logging
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 from typing import Optional
 
 from app.providers import get_queue_provider, get_mock_queue_provider, get_patient_provider, get_simulation_patient_provider, get_call_log_provider, get_settings_provider
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
 
@@ -141,11 +144,14 @@ async def add_patient(
     # Add to simulation queue
     sim_provider = get_simulation_patient_provider()
     await sim_provider.add_patient(patient)
+    print(f"[ADD_PATIENT] Added patient to queue: id={patient_id}, name={name}, phone={phone}")
 
-    # Also save to active scenario if it exists and is not builtin
+    # Also save to active scenario if it exists
     saved_to_scenario = False
     settings_provider = get_settings_provider()
     settings = await settings_provider.get_settings()
+    print(f"[ADD_PATIENT] Active scenario ID: {settings.active_scenario_id}")
+
     if settings.active_scenario_id:
         async with AsyncSessionLocal() as session:
             result = await session.execute(
@@ -166,9 +172,15 @@ async def add_patient(
                     "attempt_count": attempt_count,
                 }
                 current_patients = scenario_row.patients or []
+                print(f"[ADD_PATIENT] Scenario '{scenario_row.label}' has {len(current_patients)} patients, adding new one")
                 scenario_row.patients = current_patients + [patient_data]
                 await session.commit()
                 saved_to_scenario = True
+                print(f"[ADD_PATIENT] Saved patient to scenario '{scenario_row.label}', now has {len(scenario_row.patients)} patients")
+            else:
+                print(f"[ADD_PATIENT] Scenario not found: {settings.active_scenario_id}")
+    else:
+        logger.debug("[ADD_PATIENT] No active scenario, patient only added to queue")
 
     return {
         "status": "ok",

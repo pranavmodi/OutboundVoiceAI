@@ -42,10 +42,20 @@ class CallOrchestrator:
         # Get patient
         patient_provider = get_patient_provider()
         patient = await patient_provider.get_patient(patient_id)
+
+        # Debug: log all patients in the queue
+        all_patients = await patient_provider.get_all_patients()
+        print(f"[START_CALL] Looking for patient_id={patient_id}")
+        print(f"[START_CALL] All patients in PatientRow table ({len(all_patients)}):")
+        for p in all_patients:
+            print(f"[START_CALL]   - {p.patient_id}: {p.name}, {p.phone}")
+
         if not patient:
             if self.on_error:
                 await self.on_error(f"Patient {patient_id} not found")
             return None
+
+        print(f"[START_CALL] Found patient: {patient.name}, phone={patient.phone}")
 
         # Check queue state
         queue_provider = get_queue_provider()

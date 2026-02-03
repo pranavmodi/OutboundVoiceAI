@@ -1,4 +1,5 @@
 """Settings API endpoints."""
+import logging
 from typing import List
 
 from fastapi import APIRouter
@@ -7,6 +8,8 @@ from pydantic import BaseModel
 from app.models import BusinessHours, QueueThresholds, DispatcherSettings, SystemSettings
 from app.providers import get_settings_provider
 from app.providers.settings_provider import COMMON_TIMEZONES
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
@@ -130,13 +133,23 @@ async def activate_scenario(scenario_id: str) -> None:
     from app.providers import get_mock_queue_provider, get_simulation_patient_provider, get_call_log_provider
     from app.services.dispatcher import get_dispatcher
 
+    print(f"[ACTIVATE_SCENARIO] Activating scenario: {scenario_id}")
+
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(SimulationScenarioRow).where(SimulationScenarioRow.id == scenario_id)
         )
         row = result.scalar_one_or_none()
         if row is None:
+            print(f"[ACTIVATE_SCENARIO] Scenario not found: {scenario_id}")
             raise ValueError(f"Scenario not found: {scenario_id}")
+
+        patient_count = len(row.patients or [])
+        queue_count = len(row.queues or [])
+        print(f"[ACTIVATE_SCENARIO] Loading scenario '{row.label}': {patient_count} patients, {queue_count} queues")
+
+        for p in (row.patients or []):
+            print(f"[ACTIVATE_SCENARIO] - Patient from DB: {p.get('name')}, {p.get('phone')}")
 
         # 1. Reset queue provider
         queue_provider = get_mock_queue_provider()
@@ -157,6 +170,8 @@ async def activate_scenario(scenario_id: str) -> None:
 
         # 4. Restart dispatcher
         get_dispatcher().restart()
+
+        print(f"[ACTIVATE_SCENARIO] Scenario '{row.label}' activated successfully")
 
 
 @router.get("", response_model=SystemSettingsResponse)
