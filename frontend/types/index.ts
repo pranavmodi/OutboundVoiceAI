@@ -151,6 +151,7 @@ export interface BusinessHours {
   end_time: string;
   enabled: boolean;
   timezone: string;
+  days_of_week: number[];  // 0=Mon, 6=Sun
 }
 
 export interface QueueThresholds {

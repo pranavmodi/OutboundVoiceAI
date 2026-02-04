@@ -10,6 +10,7 @@ class BusinessHours:
     end_time: str = "17:00"    # HH:MM format
     enabled: bool = False
     timezone: str = "America/New_York"
+    days_of_week: List[int] = field(default_factory=lambda: [0, 1, 2, 3, 4])  # Mon-Fri (0=Mon, 6=Sun)
 
 
 @dataclass

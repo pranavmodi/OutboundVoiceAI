@@ -71,7 +71,10 @@ export function OperatorConsole({
     end_time: "17:00",
     enabled: false,
     timezone: "America/New_York",
+    days_of_week: [0, 1, 2, 3, 4],  // Mon-Fri
   });
+
+  const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
   const [thresholdsForm, setThresholdsForm] = useState<QueueThresholds>({
     calls_waiting_threshold: 1,
@@ -470,6 +473,36 @@ export function OperatorConsole({
                 ))}
               </SelectContent>
             </Select>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">Days of Week</Label>
+            <div className="flex flex-wrap gap-1">
+              {DAY_LABELS.map((day, idx) => {
+                const isSelected = businessHoursForm.days_of_week?.includes(idx) ?? false;
+                return (
+                  <button
+                    key={day}
+                    type="button"
+                    disabled={!businessHoursForm.enabled}
+                    onClick={() => {
+                      const current = businessHoursForm.days_of_week ?? [];
+                      const newDays = isSelected
+                        ? current.filter((d) => d !== idx)
+                        : [...current, idx].sort((a, b) => a - b);
+                      setBusinessHoursForm({ ...businessHoursForm, days_of_week: newDays });
+                    }}
+                    className={`px-2 py-1 text-xs rounded border transition-colors ${
+                      isSelected
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "bg-background text-muted-foreground border-border hover:bg-muted"
+                    } ${!businessHoursForm.enabled ? "opacity-50 cursor-not-allowed" : ""}`}
+                  >
+                    {day}
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           <div className="flex items-center justify-between">

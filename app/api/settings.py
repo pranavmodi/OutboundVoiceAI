@@ -21,6 +21,7 @@ class BusinessHoursRequest(BaseModel):
     end_time: str
     enabled: bool
     timezone: str
+    days_of_week: List[int] = [0, 1, 2, 3, 4]  # Mon-Fri (0=Mon, 6=Sun)
 
 
 class QueueThresholdsRequest(BaseModel):
@@ -95,6 +96,7 @@ async def settings_to_response(provider) -> SystemSettingsResponse:
             end_time=settings.business_hours.end_time,
             enabled=settings.business_hours.enabled,
             timezone=settings.business_hours.timezone,
+            days_of_week=settings.business_hours.days_of_week,
         ),
         queue_thresholds=QueueThresholdsRequest(
             calls_waiting_threshold=settings.queue_thresholds.calls_waiting_threshold,
@@ -193,6 +195,7 @@ async def update_settings(request: SystemSettingsRequest):
             end_time=request.business_hours.end_time,
             enabled=request.business_hours.enabled,
             timezone=request.business_hours.timezone,
+            days_of_week=request.business_hours.days_of_week,
         ),
         queue_thresholds=QueueThresholds(
             calls_waiting_threshold=request.queue_thresholds.calls_waiting_threshold,
@@ -227,6 +230,7 @@ async def update_business_hours(request: BusinessHoursRequest):
         end_time=request.end_time,
         enabled=request.enabled,
         timezone=request.timezone,
+        days_of_week=request.days_of_week,
     )
 
     await provider.update_business_hours(business_hours)

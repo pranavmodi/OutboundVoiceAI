@@ -34,6 +34,7 @@ def _row_to_settings(row: SystemSettingsRow) -> SystemSettings:
         end_time=bh.get("end_time", "17:00"),
         enabled=bh.get("enabled", False),
         timezone=bh.get("timezone", "America/New_York"),
+        days_of_week=bh.get("days_of_week", [0, 1, 2, 3, 4]),  # Default Mon-Fri
     )
     settings.queue_thresholds = QueueThresholds(
         calls_waiting_threshold=qt.get("calls_waiting_threshold", 1),
@@ -130,6 +131,7 @@ class SettingsProvider:
                 "end_time": business_hours.end_time,
                 "enabled": business_hours.enabled,
                 "timezone": business_hours.timezone,
+                "days_of_week": business_hours.days_of_week,
             }
             await session.commit()
             return _row_to_settings(row)
@@ -226,6 +228,13 @@ class SettingsProvider:
             tz = ZoneInfo(bh.timezone)
             now = datetime.now(tz)
             current_time = now.strftime("%H:%M")
+            current_day = now.weekday()  # 0=Monday, 6=Sunday
+
+            # Check if current day is in allowed days
+            if current_day not in bh.days_of_week:
+                return False
+
+            # Check if current time is within hours
             return bh.start_time <= current_time <= bh.end_time
         except Exception:
             return True
