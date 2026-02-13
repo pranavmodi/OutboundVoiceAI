@@ -19,6 +19,9 @@ router = APIRouter()
 # Connected dashboard clients for broadcasting updates
 dashboard_clients: Set[WebSocket] = set()
 
+# Connected voice clients (for web call mode)
+voice_clients: Set[WebSocket] = set()
+
 
 async def broadcast_to_dashboards(message: dict):
     """Broadcast a message to all connected dashboard clients."""
@@ -83,6 +86,7 @@ async def dashboard_websocket(websocket: WebSocket):
 async def voice_websocket(websocket: WebSocket):
     """WebSocket endpoint for voice call audio streaming."""
     await websocket.accept()
+    voice_clients.add(websocket)
 
     orchestrator = get_orchestrator()
     audio_buffer = bytearray()
@@ -197,6 +201,8 @@ async def voice_websocket(websocket: WebSocket):
     except Exception as e:
         print(f"WebSocket error: {e}")
     finally:
+        # Track disconnect
+        voice_clients.discard(websocket)
         # Clean up callbacks
         orchestrator.on_call_started = None
         orchestrator.on_call_ended = None
