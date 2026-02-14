@@ -15,6 +15,7 @@ import {
   Bot,
   Clock,
 } from "lucide-react";
+import { InfoTooltip } from "@/components/ui/info-tooltip";
 import { formatDuration } from "@/lib/utils";
 import type { CallLog } from "@/types";
 
@@ -138,6 +139,7 @@ export function ActiveCallCard({
           <CardTitle className="flex items-center gap-2 text-lg">
             <Phone className="h-5 w-5" />
             Active Call
+            <InfoTooltip content="Shows the current call in progress with live transcript. In web mode, use your microphone to speak as the patient." />
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -176,7 +178,10 @@ export function ActiveCallCard({
               <p className="text-sm font-medium">{call.patient_name}</p>
               <p className="text-xs text-muted-foreground tabular-nums mt-0.5">{call.phone}</p>
             </div>
-            <Badge variant="outline" className="text-xs">P{call.priority_bucket}</Badge>
+            <Badge variant="outline" className="text-xs flex items-center gap-1">
+              P{call.priority_bucket}
+              <InfoTooltip content="Priority bucket: P1=Abandoned/No AI, P2=Abandoned/AI called, P3=Called in/No AI, P4=Never contacted. Lower = higher priority." />
+            </Badge>
           </div>
         </div>
 

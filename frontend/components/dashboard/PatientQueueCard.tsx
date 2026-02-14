@@ -23,6 +23,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Users, Phone, RefreshCw, UserRound, Clock, RotateCcw, Pencil, Trash2 } from "lucide-react";
+import { InfoTooltip } from "@/components/ui/info-tooltip";
 import type { Patient } from "@/types";
 
 interface PatientQueueCardProps {
@@ -236,6 +237,7 @@ export function PatientQueueCard({
           <CardTitle className="flex items-center gap-2 text-lg">
             <Users className="h-5 w-5" />
             Outbound Queue
+            <InfoTooltip content="Patients awaiting outbound calls, sorted by priority. P1 = highest priority (abandoned, no AI call), P4 = lowest. Click Call to initiate." />
           </CardTitle>
           <div className="flex items-center gap-2">
             <Badge

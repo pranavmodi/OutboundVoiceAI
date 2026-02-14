@@ -14,6 +14,7 @@ import {
   WifiOff,
   Activity,
 } from "lucide-react";
+import { InfoTooltip } from "@/components/ui/info-tooltip";
 import type { QueueState } from "@/types";
 
 interface QueueStatusCardProps {
@@ -76,6 +77,7 @@ export function QueueStatusCard({ queueState, source = "simulation" }: QueueStat
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <Users className="h-3.5 w-3.5" />
               Agents Available
+              <InfoTooltip content="Total agents logged in and ready to take calls across all queues. At least 1 is needed for outbound." />
             </div>
             <p className="text-2xl font-semibold tabular-nums">{queueState.global_agents_available}</p>
             <p className="text-xs text-muted-foreground">
@@ -86,6 +88,7 @@ export function QueueStatusCard({ queueState, source = "simulation" }: QueueStat
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <Phone className="h-3.5 w-3.5" />
               Calls Waiting
+              <InfoTooltip content="Total inbound calls in queue waiting for an agent. Must be below threshold for outbound to be allowed." />
             </div>
             <p className="text-2xl font-semibold tabular-nums">{queueState.global_calls_waiting}</p>
           </div>
@@ -93,12 +96,14 @@ export function QueueStatusCard({ queueState, source = "simulation" }: QueueStat
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <Clock className="h-3.5 w-3.5" />
               Max Holdtime
+              <InfoTooltip content="Longest any caller has been waiting in seconds. Must be below threshold for outbound." />
             </div>
             <p className="text-2xl font-semibold tabular-nums">{queueState.global_max_holdtime}s</p>
           </div>
           <div className="rounded-lg bg-muted/50 p-3 space-y-1">
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
               Stable Polls
+              <InfoTooltip content="Consecutive queue polls where conditions were met. Once threshold reached, outbound calls can begin." />
             </div>
             <p className="text-2xl font-semibold tabular-nums">{queueState.stable_polls_count}/3</p>
           </div>
@@ -108,7 +113,10 @@ export function QueueStatusCard({ queueState, source = "simulation" }: QueueStat
 
         {/* Outbound Status */}
         <div className="flex items-center justify-between">
-          <span className="text-sm font-medium">Outbound Allowed</span>
+          <span className="text-sm font-medium flex items-center gap-1.5">
+            Outbound Allowed
+            <InfoTooltip content="Final gate for outbound calls. All conditions must be met: AMI connected, agents available, calls waiting and holdtime below thresholds, stable polls reached." />
+          </span>
           {queueState.outbound_allowed ? (
             <Badge variant="success" className="flex items-center gap-1">
               <CheckCircle className="h-3 w-3" />

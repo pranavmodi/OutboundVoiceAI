@@ -21,6 +21,7 @@ import {
   AlertTriangle,
   Radio,
 } from "lucide-react";
+import { InfoTooltip } from "@/components/ui/info-tooltip";
 import { formatTime } from "@/lib/utils";
 import type { DispatcherDecision } from "@/hooks/useWebSocket";
 
@@ -64,6 +65,7 @@ export function DispatcherEventsCard({ events }: DispatcherEventsCardProps) {
           <CardTitle className="flex items-center gap-2 text-lg">
             <Activity className="h-5 w-5" />
             Dispatcher Events
+            <InfoTooltip content="Real-time log of dispatcher decisions. Shows when calls are dispatched, blocked (and why), or when the system state changes." />
           </CardTitle>
           {events.length > 0 && (
             <span className="text-xs text-muted-foreground tabular-nums">

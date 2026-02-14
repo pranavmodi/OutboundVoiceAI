@@ -25,6 +25,7 @@ import {
   Wifi,
   WifiOff,
 } from "lucide-react";
+import { InfoTooltip } from "@/components/ui/info-tooltip";
 import type { SimulationScenario, ScenarioPatient, QueueInfo, Patient } from "@/types";
 
 interface QueueRow {
@@ -383,7 +384,10 @@ export function SimulationConsole({
               />
             </div>
             <div className="space-y-1.5">
-              <Label>AMI Connection</Label>
+              <Label className="flex items-center gap-1.5">
+                AMI Connection
+                <InfoTooltip content="Simulates the Asterisk Manager Interface connection status. When disconnected, all outbound calls are blocked as a safety measure." />
+              </Label>
               <div className="flex items-center gap-2 pt-2">
                 <Button
                   variant={amiConnected ? "default" : "outline"}
@@ -442,10 +446,30 @@ export function SimulationConsole({
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b text-left text-muted-foreground">
-                  <th className="pb-1 pr-2">Queue</th>
-                  <th className="pb-1 pr-2">Calls</th>
-                  <th className="pb-1 pr-2">Holdtime (s)</th>
-                  <th className="pb-1 pr-2">Avail Agents</th>
+                  <th className="pb-1 pr-2">
+                    <span className="flex items-center gap-1">
+                      Queue
+                      <InfoTooltip content="Queue name (e.g., scheduling_en, intake). Matches FreePBX queue names." />
+                    </span>
+                  </th>
+                  <th className="pb-1 pr-2">
+                    <span className="flex items-center gap-1">
+                      Calls
+                      <InfoTooltip content="Number of inbound calls currently waiting in this queue. High values block outbound calls." />
+                    </span>
+                  </th>
+                  <th className="pb-1 pr-2">
+                    <span className="flex items-center gap-1">
+                      Holdtime (s)
+                      <InfoTooltip content="Longest wait time in seconds for any caller in this queue. High values block outbound." />
+                    </span>
+                  </th>
+                  <th className="pb-1 pr-2">
+                    <span className="flex items-center gap-1">
+                      Avail Agents
+                      <InfoTooltip content="Number of agents logged in and available to take calls. Zero agents blocks outbound calls." />
+                    </span>
+                  </th>
                   <th className="pb-1"></th>
                 </tr>
               </thead>
@@ -530,11 +554,36 @@ export function SimulationConsole({
                 <tr className="border-b text-left text-muted-foreground">
                   <th className="pb-1 pr-2">Name</th>
                   <th className="pb-1 pr-2">Phone</th>
-                  <th className="pb-1 pr-2">Lang</th>
-                  <th className="pb-1 pr-2">Aband.</th>
-                  <th className="pb-1 pr-2">Called</th>
-                  <th className="pb-1 pr-2">AI</th>
-                  <th className="pb-1 pr-2">Att.</th>
+                  <th className="pb-1 pr-2">
+                    <span className="flex items-center gap-1">
+                      Lang
+                      <InfoTooltip content="Patient's preferred language. AI greets in this language and routes to matching queue." />
+                    </span>
+                  </th>
+                  <th className="pb-1 pr-2">
+                    <span className="flex items-center gap-1">
+                      Aband.
+                      <InfoTooltip content="Has Abandoned: Patient previously hung up before completing. Higher priority for callbacks." />
+                    </span>
+                  </th>
+                  <th className="pb-1 pr-2">
+                    <span className="flex items-center gap-1">
+                      Called
+                      <InfoTooltip content="Has Called In: Patient has previously called the center. May indicate active engagement." />
+                    </span>
+                  </th>
+                  <th className="pb-1 pr-2">
+                    <span className="flex items-center gap-1">
+                      AI
+                      <InfoTooltip content="AI Called Before: Patient has received a previous AI outbound call. Affects priority bucket." />
+                    </span>
+                  </th>
+                  <th className="pb-1 pr-2">
+                    <span className="flex items-center gap-1">
+                      Att.
+                      <InfoTooltip content="Attempt Count: Number of call attempts made. When max attempts reached, patient is skipped." />
+                    </span>
+                  </th>
                   <th className="pb-1"></th>
                 </tr>
               </thead>
