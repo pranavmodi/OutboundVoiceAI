@@ -212,7 +212,8 @@ class RealtimeVoiceService:
             }
 
             print(f"[RealtimeVoice] Connecting to {url}...")
-            self._ws = await websockets.connect(url, additional_headers=headers)
+            # self._ws = await websockets.connect(url, additional_headers=headers)  # incorrect kwarg for websockets>=12
+            self._ws = await websockets.connect(url, extra_headers=headers)
             print(f"[RealtimeVoice] WebSocket connected successfully")
 
             self._session = VoiceSession(

@@ -1,7 +1,8 @@
 """Auto-call dispatcher service.
 
 Runs a 10-second polling loop on the backend, evaluates all gating conditions,
-and signals the frontend to initiate calls via the dashboard WebSocket.
+and initiates calls directly (backend-driven). The frontend/dashboard is used
+only for visibility and audio transport in web-call mode.
 """
 import asyncio
 import json
@@ -104,7 +105,8 @@ class AutoCallDispatcher:
 
     async def _tick(self):
         """Single poll cycle: update queue, broadcast state, evaluate conditions."""
-        from app.api.websocket import dashboard_clients, broadcast_to_dashboards
+        from app.api.websocket import dashboard_clients, voice_clients, broadcast_to_dashboards
+        from app.services.call_orchestrator import get_orchestrator
 
         # 1. Poll queue state
         queue_provider = get_queue_provider()
@@ -113,7 +115,7 @@ class AutoCallDispatcher:
         # Track the decision made this tick (broadcast at end)
         tick_decision = None
 
-        # 3. If DISPATCHED, check timeout
+        # 3. If DISPATCHED, either start call when prerequisites are met, or check timeout
         if self._state == DispatcherState.DISPATCHED:
             if self._dispatched_at is not None:
                 elapsed = asyncio.get_event_loop().time() - self._dispatched_at
@@ -126,7 +128,32 @@ class AutoCallDispatcher:
                     self._dispatched_at = None
                     self._dispatched_patient_id = None
                 else:
-                    tick_decision = {"decision": "waiting", "detail": "Waiting for frontend to start dispatched call", "state": self._state.value}
+                    # If we're in web mode and a voice client has connected, start the call now
+                    settings_provider = get_settings_provider()
+                    settings = await settings_provider.get_settings()
+                    call_mode = settings.call_mode or "web"
+                    if call_mode == "web" and voice_clients and self._dispatched_patient_id:
+                        orchestrator = get_orchestrator()
+                        call = await orchestrator.start_call(self._dispatched_patient_id, call_mode=call_mode)
+                        if call:
+                            self.notify_call_started(self._dispatched_patient_id)
+                            await broadcast_to_dashboards({
+                                "type": "call_started",
+                                "call": call.to_dict(),
+                            })
+                            tick_decision = self._log_decision(
+                                "call_starting",
+                                f"Voice client connected; starting call for patient {self._dispatched_patient_id}")
+                        else:
+                            # Failed to start; reset state
+                            self._state = DispatcherState.IDLE
+                            self._dispatched_at = None
+                            self._dispatched_patient_id = None
+                            tick_decision = self._log_decision(
+                                "start_failed",
+                                "Failed to start call after voice client connected")
+                    else:
+                        tick_decision = {"decision": "waiting", "detail": "Waiting for voice client or prerequisites", "state": self._state.value}
 
         # 4. If CALL_ACTIVE, skip
         elif self._state == DispatcherState.CALL_ACTIVE:
@@ -184,27 +211,53 @@ class AutoCallDispatcher:
                 if candidate is None:
                     tick_decision = self._log_decision("no_candidate", "No eligible patients in queue")
 
-                # 8. Check that at least one dashboard frontend is connected
-                elif not dashboard_clients:
-                    tick_decision = self._log_decision(
-                        "no_frontend_connected",
-                        f"Ready to call {candidate.name} but no frontend connected")
-
                 else:
-                    # 9. Dispatch!
-                    self._state = DispatcherState.DISPATCHED
-                    self._dispatched_at = asyncio.get_event_loop().time()
-                    self._dispatched_patient_id = candidate.patient_id
+                    # 8. Determine call mode and required connectivity
+                    settings_provider = get_settings_provider()
+                    settings = await settings_provider.get_settings()
+                    call_mode = settings.call_mode or "web"
 
-                    tick_decision = self._log_decision(
-                        "dispatched",
-                        f"Dispatching call to {candidate.name} ({candidate.phone}, P{candidate.priority_bucket})")
+                    # In web mode, if no voice client is connected, pre-dispatch to trigger the frontend to connect voice
+                    if call_mode == "web" and not voice_clients:
+                        self._state = DispatcherState.DISPATCHED
+                        self._dispatched_at = asyncio.get_event_loop().time()
+                        self._dispatched_patient_id = candidate.patient_id
+                        tick_decision = self._log_decision(
+                            "waiting_for_voice_client",
+                            f"Ready to call {candidate.name}; requesting voice client to connect")
+                        await broadcast_to_dashboards({
+                            "type": "dispatch_call",
+                            "patient_id": candidate.patient_id,
+                            "patient_name": candidate.name,
+                        })
+                    else:
+                        # 9. Start call directly (backend-driven)
+                        self._state = DispatcherState.DISPATCHED
+                        self._dispatched_at = asyncio.get_event_loop().time()
+                        self._dispatched_patient_id = candidate.patient_id
 
-                    await broadcast_to_dashboards({
-                        "type": "dispatch_call",
-                        "patient_id": candidate.patient_id,
-                        "patient_name": candidate.name,
-                    })
+                        tick_decision = self._log_decision(
+                            "starting_call",
+                            f"Starting call to {candidate.name} ({candidate.phone}, mode={call_mode})")
+
+                        orchestrator = get_orchestrator()
+                        call = await orchestrator.start_call(candidate.patient_id, call_mode=call_mode)
+
+                        if call is None:
+                            # Failed to start; reset state
+                            self._state = DispatcherState.IDLE
+                            self._dispatched_at = None
+                            self._dispatched_patient_id = None
+                            tick_decision = self._log_decision(
+                                "start_failed",
+                                f"Failed to start call to {candidate.name}")
+                        else:
+                            # Mark active immediately; voice/ws callbacks will also keep state in sync
+                            self.notify_call_started(candidate.patient_id)
+                            await broadcast_to_dashboards({
+                                "type": "call_started",
+                                "call": call.to_dict(),
+                            })
 
         # 2. Broadcast queue_update + decision to all dashboards
         await broadcast_to_dashboards({

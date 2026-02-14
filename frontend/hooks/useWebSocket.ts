@@ -6,6 +6,12 @@ import type { WSMessage, QueueState, CallLog, Statistics } from "@/types";
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const WS_BASE = API_BASE.replace(/^http/, "ws");
 
+declare global {
+  interface Window {
+    __DASHBOARD_WS__?: WebSocket;
+  }
+}
+
 interface DispatchedPatient {
   patient_id: string;
   patient_name: string;
@@ -56,6 +62,12 @@ export function useDashboardWS(): UseDashboardWSReturn {
   }, []);
 
   const connect = useCallback(() => {
+    // Reuse a singleton socket across dev hot-reloads to avoid rapid flap
+    if (typeof window !== "undefined" && window.__DASHBOARD_WS__ && window.__DASHBOARD_WS__.readyState === WebSocket.OPEN) {
+      wsRef.current = window.__DASHBOARD_WS__;
+      setConnected(true);
+      return;
+    }
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
     const ws = new WebSocket(`${WS_BASE}/ws/dashboard`);
@@ -100,24 +112,22 @@ export function useDashboardWS(): UseDashboardWSReturn {
             break;
 
           case "transcript":
-            // Update active call transcript
-            if (activeCall) {
-              setActiveCall((prev) =>
-                prev
-                  ? {
-                      ...prev,
-                      transcript: [
-                        ...prev.transcript,
-                        {
-                          speaker: message.speaker as string,
-                          text: message.text as string,
-                          timestamp: new Date().toISOString(),
-                        },
-                      ],
-                    }
-                  : null
-              );
-            }
+            // Update active call transcript (use prev to avoid stale closure)
+            setActiveCall((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    transcript: [
+                      ...prev.transcript,
+                      {
+                        speaker: message.speaker as string,
+                        text: message.text as string,
+                        timestamp: new Date().toISOString(),
+                      },
+                    ],
+                  }
+                : prev
+            );
             break;
 
           case "queue_update":
@@ -151,7 +161,10 @@ export function useDashboardWS(): UseDashboardWSReturn {
     };
 
     wsRef.current = ws;
-  }, [activeCall]);
+    if (typeof window !== "undefined") {
+      window.__DASHBOARD_WS__ = ws;
+    }
+  }, []);
 
   useEffect(() => {
     connect();
@@ -160,7 +173,7 @@ export function useDashboardWS(): UseDashboardWSReturn {
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
       }
-      wsRef.current?.close();
+      // Do not forcibly close the singleton on unmount; leave it for reuse
     };
   }, [connect]);
 
