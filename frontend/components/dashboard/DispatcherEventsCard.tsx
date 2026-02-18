@@ -55,6 +55,8 @@ const decisionConfig: Record<
   twilio_blocked: { label: "TWILIO BLOCKED", icon: Ban, variant: "warning" },
   twilio_calling: { label: "TWILIO", icon: Radio, variant: "default" },
   openai_session: { label: "OPENAI", icon: Zap, variant: "success" },
+  sms_sent: { label: "SMS SENT", icon: MessageSquare, variant: "success" },
+  sms_failed: { label: "SMS FAILED", icon: AlertTriangle, variant: "destructive" },
 };
 
 export function DispatcherEventsCard({ events }: DispatcherEventsCardProps) {

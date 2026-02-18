@@ -8,6 +8,7 @@ from datetime import datetime
 from app.models import CallLog, CallOutcome, Patient
 from app.providers import get_queue_provider, get_patient_provider, get_call_log_provider, get_settings_provider
 from app.services.realtime_voice import RealtimeVoiceService
+from app.services.twilio_sms_service import build_sms_message, send_sms
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,9 @@ class CallOrchestrator:
         self._current_patient: Optional[Patient] = None
         self._twilio_bridge = None  # TwilioMediaBridge when in twilio mode
         self._call_mode: str = "web"  # "web" or "twilio"
+        # SMS idempotency guards keyed by call_id.
+        self._sms_sent_call_ids: set[str] = set()
+        self._sms_locks: dict[str, asyncio.Lock] = {}
 
         # Callbacks for UI updates
         self.on_call_started: Optional[Callable[[CallLog], Any]] = None
@@ -29,6 +33,73 @@ class CallOrchestrator:
         self.on_audio_output: Optional[Callable[[bytes], Any]] = None
         self.on_status_update: Optional[Callable[[str], Any]] = None
         self.on_error: Optional[Callable[[str], Any]] = None
+
+    async def _has_sms_been_sent(self, call_id: str) -> bool:
+        """Check persisted call state to avoid duplicate SMS sends."""
+        call_log_provider = get_call_log_provider()
+        row = await call_log_provider.get_call(call_id)
+        return bool(row and row.sms_sent)
+
+    async def _send_sms_for_call(
+        self,
+        call: CallLog,
+        patient: Optional[Patient],
+        message_type: str = "callback_info",
+        reason: str = "manual",
+        call_mode: Optional[str] = None,
+    ) -> bool:
+        """Send SMS for a call and update call log/status."""
+        if not patient or not patient.phone:
+            if self.on_status_update:
+                await self.on_status_update(f"SMS failed ({reason}): patient phone unavailable")
+            return False
+
+        lock = self._sms_locks.setdefault(call.call_id, asyncio.Lock())
+        async with lock:
+            # Fast in-memory checks first for repeated tool calls in the same process/session.
+            if call.sms_sent or call.call_id in self._sms_sent_call_ids:
+                if self.on_status_update:
+                    await self.on_status_update(f"SMS already sent for call {call.call_id[:8]}")
+                return True
+
+            # Persisted fallback check.
+            if await self._has_sms_been_sent(call.call_id):
+                call.sms_sent = True
+                self._sms_sent_call_ids.add(call.call_id)
+                if self.on_status_update:
+                    await self.on_status_update(f"SMS already sent for call {call.call_id[:8]}")
+                return True
+
+            mode = call_mode or self._call_mode or "web"
+            call_log_provider = get_call_log_provider()
+
+            # In web/browser mode, simulate SMS delivery (no external Twilio send).
+            if mode == "web":
+                await call_log_provider.update_call(call.call_id, sms_sent=True)
+                call.sms_sent = True
+                self._sms_sent_call_ids.add(call.call_id)
+                if self.on_status_update:
+                    await self.on_status_update(
+                        f"SMS sent ({reason}) in web mode (simulated) to {patient.phone}"
+                    )
+                return True
+
+            body = build_sms_message(message_type)
+            try:
+                sid = await asyncio.to_thread(send_sms, patient.phone, body)
+                await call_log_provider.update_call(call.call_id, sms_sent=True)
+                call.sms_sent = True
+                self._sms_sent_call_ids.add(call.call_id)
+                if self.on_status_update:
+                    await self.on_status_update(
+                        f"SMS sent ({reason}) in twilio mode to {patient.phone} [sid={sid}]"
+                    )
+                return True
+            except Exception as e:
+                logger.warning("SMS send failed for call %s: %s", call.call_id, e)
+                if self.on_status_update:
+                    await self.on_status_update(f"SMS failed ({reason}): {str(e)}")
+                return False
 
     async def start_call(self, patient_id: str, call_mode: str = "web") -> Optional[CallLog]:
         """Start an outbound call to a patient."""
@@ -206,6 +277,18 @@ class CallOrchestrator:
         call = self._current_call
         patient = self._current_patient
         voice_service = self._voice_service
+        call_mode = self._call_mode
+
+        # Auto-send callback SMS for all non-transferred ended calls.
+        if outcome != CallOutcome.TRANSFERRED:
+            await self._send_sms_for_call(
+                call=call,
+                patient=patient,
+                message_type="callback_info",
+                reason="auto_end_not_transferred",
+                call_mode=call_mode,
+            )
+
         self._current_call = None
         self._current_patient = None
         self._voice_service = None
@@ -317,12 +400,13 @@ class CallOrchestrator:
             await self.end_call(outcome)
 
         elif name == "send_sms":
-            await call_log_provider.update_call(
-                self._current_call.call_id,
-                sms_sent=True,
+            await self._send_sms_for_call(
+                call=self._current_call,
+                patient=self._current_patient,
+                message_type=args.get("message_type", "callback_info"),
+                reason="ai_tool",
+                call_mode=self._call_mode,
             )
-            if self.on_status_update:
-                await self.on_status_update("SMS sent to patient")
 
     async def _handle_voice_error(self, error: str):
         """Handle errors from voice service."""

@@ -190,12 +190,17 @@ export default function Dashboard() {
   useEffect(() => {
     if (voice.callStatus && voice.callStatus !== prevVoiceStatusRef.current) {
       prevVoiceStatusRef.current = voice.callStatus;
+      const normalized = voice.callStatus.toLowerCase();
+      // SMS status updates are already captured from dashboard status_update events.
+      if (normalized.includes("sms sent") || normalized.includes("sms failed")) {
+        return;
+      }
       // Map status to event type
-      if (voice.callStatus.toLowerCase().includes("openai") || voice.callStatus.toLowerCase().includes("session")) {
+      if (normalized.includes("openai") || normalized.includes("session")) {
         dashboard.pushEvent("openai_session", voice.callStatus);
-      } else if (voice.callStatus.toLowerCase().includes("blocked") || voice.callStatus.toLowerCase().includes("disabled")) {
+      } else if (normalized.includes("blocked") || normalized.includes("disabled")) {
         dashboard.pushEvent("twilio_blocked", voice.callStatus);
-      } else if (voice.callStatus.toLowerCase().includes("twilio") || voice.callStatus.toLowerCase().includes("calling")) {
+      } else if (normalized.includes("twilio") || normalized.includes("calling")) {
         dashboard.pushEvent("twilio_calling", voice.callStatus);
       } else {
         dashboard.pushEvent("voice_message", voice.callStatus);
