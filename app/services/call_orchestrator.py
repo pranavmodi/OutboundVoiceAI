@@ -279,43 +279,46 @@ class CallOrchestrator:
         voice_service = self._voice_service
         call_mode = self._call_mode
 
-        # Auto-send callback SMS for all non-transferred ended calls.
-        if outcome != CallOutcome.TRANSFERRED:
-            await self._send_sms_for_call(
-                call=call,
-                patient=patient,
-                message_type="callback_info",
-                reason="auto_end_not_transferred",
-                call_mode=call_mode,
-            )
+        try:
+            # Auto-send callback SMS for all non-transferred ended calls.
+            if outcome != CallOutcome.TRANSFERRED:
+                await self._send_sms_for_call(
+                    call=call,
+                    patient=patient,
+                    message_type="callback_info",
+                    reason="auto_end_not_transferred",
+                    call_mode=call_mode,
+                )
 
-        self._current_call = None
-        self._current_patient = None
-        self._voice_service = None
-        self._twilio_bridge = None
+            self._current_call = None
+            self._current_patient = None
+            self._voice_service = None
+            self._twilio_bridge = None
 
-        call_log_provider = get_call_log_provider()
-        await call_log_provider.end_call(call.call_id, outcome)
+            call_log_provider = get_call_log_provider()
+            await call_log_provider.end_call(call.call_id, outcome)
 
-        # Update patient record
-        if patient:
-            patient_provider = get_patient_provider()
-            await patient_provider.update_patient_after_call(
-                patient.patient_id,
-                outcome.value,
-            )
+            # Update patient record
+            if patient:
+                patient_provider = get_patient_provider()
+                await patient_provider.update_patient_after_call(
+                    patient.patient_id,
+                    outcome.value,
+                )
 
-        # Disconnect voice service
-        if voice_service:
-            await voice_service.disconnect()
+            # Disconnect voice service
+            if voice_service:
+                await voice_service.disconnect()
 
-        if self.on_call_ended:
-            await self.on_call_ended(call)
+            if self.on_call_ended:
+                await self.on_call_ended(call)
 
-        if self.on_status_update:
-            await self.on_status_update("Call Ended")
-
-        self._call_mode = "web"
+            if self.on_status_update:
+                await self.on_status_update("Call Ended")
+        finally:
+            self._sms_locks.pop(call.call_id, None)
+            self._sms_sent_call_ids.discard(call.call_id)
+            self._call_mode = "web"
 
     async def send_audio(self, audio_data: bytes):
         """Send audio from the patient (browser) to OpenAI."""

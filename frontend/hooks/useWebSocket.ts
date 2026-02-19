@@ -37,6 +37,7 @@ interface UseDashboardWSReturn {
 }
 
 export function useDashboardWS(): UseDashboardWSReturn {
+  const isDev = process.env.NODE_ENV !== "production";
   const [connected, setConnected] = useState(false);
   const [queueState, setQueueState] = useState<QueueState | null>(null);
   const [activeCall, setActiveCall] = useState<CallLog | null>(null);
@@ -46,6 +47,18 @@ export function useDashboardWS(): UseDashboardWSReturn {
   const [dispatcherEvents, setDispatcherEvents] = useState<DispatcherDecision[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isMountedRef = useRef(false);
+  const allowReconnectRef = useRef(true);
+
+  const appendEvent = useCallback((event: DispatcherDecision) => {
+    setDispatcherEvents((prev) => {
+      const latest = prev[0];
+      if (latest && latest.decision === event.decision && latest.detail === event.detail) {
+        return prev;
+      }
+      return [event, ...prev].slice(0, 50);
+    });
+  }, []);
 
   const clearDispatch = useCallback(() => {
     setDispatchedPatient(null);
@@ -58,12 +71,12 @@ export function useDashboardWS(): UseDashboardWSReturn {
       detail,
       state: "frontend",
     };
-    setDispatcherEvents((prev) => [event, ...prev].slice(0, 50));
-  }, []);
+    appendEvent(event);
+  }, [appendEvent]);
 
   const connect = useCallback(() => {
     // Reuse a singleton socket across dev hot-reloads to avoid rapid flap
-    if (typeof window !== "undefined" && window.__DASHBOARD_WS__ && window.__DASHBOARD_WS__.readyState === WebSocket.OPEN) {
+    if (isDev && typeof window !== "undefined" && window.__DASHBOARD_WS__ && window.__DASHBOARD_WS__.readyState === WebSocket.OPEN) {
       wsRef.current = window.__DASHBOARD_WS__;
       setConnected(true);
       return;
@@ -79,6 +92,7 @@ export function useDashboardWS(): UseDashboardWSReturn {
 
     ws.onclose = () => {
       setConnected(false);
+      if (!allowReconnectRef.current || !isMountedRef.current) return;
       console.log("Dashboard WS disconnected, reconnecting...");
       reconnectTimeoutRef.current = setTimeout(connect, 3000);
     };
@@ -108,7 +122,26 @@ export function useDashboardWS(): UseDashboardWSReturn {
             break;
 
           case "status_update":
-            setLastStatus(message.status as string);
+            {
+              const status = message.status as string;
+              setLastStatus(status);
+              const normalized = status.toLowerCase();
+              if (normalized.includes("sms sent")) {
+                appendEvent({
+                  timestamp: new Date().toISOString(),
+                  decision: "sms_sent",
+                  detail: status,
+                  state: "backend",
+                });
+              } else if (normalized.includes("sms failed")) {
+                appendEvent({
+                  timestamp: new Date().toISOString(),
+                  decision: "sms_failed",
+                  detail: status,
+                  state: "backend",
+                });
+              }
+            }
             break;
 
           case "transcript":
@@ -137,7 +170,7 @@ export function useDashboardWS(): UseDashboardWSReturn {
               if (!decision.timestamp) {
                 decision.timestamp = new Date().toISOString();
               }
-              setDispatcherEvents((prev) => [decision, ...prev].slice(0, 50));
+              appendEvent(decision);
             }
             break;
 
@@ -161,21 +194,30 @@ export function useDashboardWS(): UseDashboardWSReturn {
     };
 
     wsRef.current = ws;
-    if (typeof window !== "undefined") {
+    if (isDev && typeof window !== "undefined") {
       window.__DASHBOARD_WS__ = ws;
     }
-  }, []);
+  }, [appendEvent, isDev]);
 
   useEffect(() => {
+    isMountedRef.current = true;
+    allowReconnectRef.current = true;
     connect();
 
     return () => {
+      isMountedRef.current = false;
+      allowReconnectRef.current = false;
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
       }
-      // Do not forcibly close the singleton on unmount; leave it for reuse
+      // In production always close; in dev close only non-singleton sockets.
+      if (!isDev) {
+        wsRef.current?.close();
+      } else if (typeof window !== "undefined" && wsRef.current && wsRef.current !== window.__DASHBOARD_WS__) {
+        wsRef.current.close();
+      }
     };
-  }, [connect]);
+  }, [connect, isDev]);
 
   return { connected, queueState, activeCall, statistics, lastStatus, dispatchedPatient, clearDispatch, dispatcherEvents, pushEvent };
 }

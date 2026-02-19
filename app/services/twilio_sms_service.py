@@ -3,35 +3,32 @@ import os
 from twilio.rest import Client
 
 
-DEFAULT_CALLBACK_NUMBER = "1-800-555-7226"
-
-
 def get_callback_number() -> str:
     """Return callback number shown in SMS messages."""
-    return os.getenv("PRECISE_CALLBACK_NUMBER", DEFAULT_CALLBACK_NUMBER)
+    return os.getenv("PRECISE_CALLBACK_NUMBER", "").strip()
 
 
 def get_main_number() -> str:
     """Return main office number shown in SMS messages."""
-    return os.getenv("PRECISE_MAIN_NUMBER", get_callback_number())
+    return os.getenv("PRECISE_MAIN_NUMBER", "").strip()
 
 
 def build_sms_message(message_type: str) -> str:
     """Build a non-PHI SMS message body."""
     callback_number = get_callback_number()
     main_number = get_main_number()
+    contact_number = callback_number or main_number
+    contact_line = (
+        f"Please call us back at {contact_number}."
+        if contact_number
+        else "Please call our office using the number previously shared with you."
+    )
 
     if message_type == "appointment_reminder":
-        return (
-            "Precise Imaging reminder: please contact us to review scheduling details. "
-            f"Callback: {callback_number}."
-        )
+        return f"Precise Imaging reminder: please contact us to review scheduling details. {contact_line}"
 
     # Default and callback_info: concise, no PHI.
-    return (
-        "This is Precise Imaging. We were unable to complete your scheduling call. "
-        f"Please call us back at {callback_number}. Main office: {main_number}."
-    )
+    return f"This is Precise Imaging. We were unable to complete your scheduling call. {contact_line}"
 
 
 def send_sms(to_number: str, message_body: str) -> str:
