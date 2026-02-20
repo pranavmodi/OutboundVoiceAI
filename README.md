@@ -103,6 +103,13 @@ OPENAI_API_KEY=sk-...          # Required for voice AI
 TWILIO_ACCOUNT_SID=AC...       # Optional, for real calls
 TWILIO_AUTH_TOKEN=...          # Optional, for real calls
 TWILIO_FROM_NUMBER=+1...       # Optional, for real calls
+EMAIL_NOTIFICATION_RECIPIENT=nehapipada39@gmail.com      # Optional override
+SMTP_HOST=smtp.example.com     # Required for email notifications
+SMTP_PORT=587                  # Optional (default: 587)
+SMTP_USERNAME=...              # Optional (required if SMTP auth is enabled)
+SMTP_PASSWORD=...              # Optional (required if SMTP auth is enabled)
+SMTP_FROM_EMAIL=noreply@...    # Required (or falls back to SMTP_USERNAME)
+SMTP_USE_TLS=true              # Optional (default: true)
 ```
 
 ### Frontend (frontend/.env.local)

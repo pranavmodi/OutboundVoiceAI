@@ -2,12 +2,17 @@
 import asyncio
 import logging
 import os
+import re
 from typing import Optional, Callable, Any
 from datetime import datetime
 
 from app.models import CallLog, CallOutcome, Patient
 from app.providers import get_queue_provider, get_patient_provider, get_call_log_provider, get_settings_provider
 from app.services.realtime_voice import RealtimeVoiceService
+from app.services.email_notification_service import (
+    send_wrong_number_email,
+    send_disconnected_number_email,
+)
 from app.services.twilio_sms_service import build_sms_message, send_sms
 
 logger = logging.getLogger(__name__)
@@ -25,6 +30,7 @@ class CallOrchestrator:
         # SMS idempotency guards keyed by call_id.
         self._sms_sent_call_ids: set[str] = set()
         self._sms_locks: dict[str, asyncio.Lock] = {}
+        self._email_sent_call_ids: set[str] = set()
 
         # Callbacks for UI updates
         self.on_call_started: Optional[Callable[[CallLog], Any]] = None
@@ -100,6 +106,84 @@ class CallOrchestrator:
                 if self.on_status_update:
                     await self.on_status_update(f"SMS failed ({reason}): {str(e)}")
                 return False
+
+    async def _log_call_event(self, call_id: str, message: str):
+        """Persist non-audio operational events to the call transcript."""
+        call_log_provider = get_call_log_provider()
+        await call_log_provider.add_transcript(call_id, "system", message)
+
+    @staticmethod
+    def _looks_like_disconnected_or_invalid(error_text: str) -> bool:
+        text = (error_text or "").lower()
+        keywords = (
+            "disconnected",
+            "invalid",
+            "not in service",
+            "unreachable",
+            "failed to route",
+            "does not exist",
+            "cannot be completed",
+        )
+        return any(k in text for k in keywords)
+
+    @staticmethod
+    def _looks_like_wrong_number_signal(text: str) -> bool:
+        """Best-effort detection of wrong-number intent in patient utterances."""
+        lowered = (text or "").lower()
+        if "wrong number" in lowered or "wrong person" in lowered:
+            return True
+        patterns = (
+            r"\bnot me\b",
+            r"\bthis is(?:n't| not) [a-z]+\b",
+            r"\byou have the wrong\b",
+            r"\bno one (?:by|with) (?:that|this) name\b",
+            r"\bdon'?t know (?:who|them|that person)\b",
+        )
+        return any(re.search(p, lowered) for p in patterns)
+
+    async def _recent_patient_indicates_wrong_number(self, call_id: str) -> bool:
+        """Inspect recent patient transcript lines for wrong-number cues."""
+        call_log_provider = get_call_log_provider()
+        row = await call_log_provider.get_call(call_id)
+        if not row or not row.transcript:
+            return False
+        recent = row.transcript[-8:]
+        for entry in recent:
+            if entry.speaker == "patient" and self._looks_like_wrong_number_signal(entry.text):
+                return True
+        return False
+
+    async def _maybe_send_issue_email(self, call: CallLog, outcome: CallOutcome):
+        """Send required call-issue email notifications based on outcome/status."""
+        if call.call_id in self._email_sent_call_ids:
+            return
+
+        status_text = call.error_message or outcome.value
+
+        try:
+            if outcome == CallOutcome.WRONG_NUMBER:
+                message_id = await asyncio.to_thread(send_wrong_number_email, call)
+                self._email_sent_call_ids.add(call.call_id)
+                await self._log_call_event(call.call_id, f"Email sent (wrong_number) [message_id={message_id or 'n/a'}]")
+                if self.on_status_update:
+                    await self.on_status_update("Email sent (wrong_number) to scheduling team")
+                return
+
+            if outcome == CallOutcome.DISCONNECTED or (
+                outcome == CallOutcome.FAILED and self._looks_like_disconnected_or_invalid(status_text)
+            ):
+                message_id = await asyncio.to_thread(send_disconnected_number_email, call, status_text)
+                self._email_sent_call_ids.add(call.call_id)
+                await self._log_call_event(
+                    call.call_id,
+                    f"Email sent (invalid_disconnected) [message_id={message_id or 'n/a'}] status={status_text}",
+                )
+                if self.on_status_update:
+                    await self.on_status_update("Email sent (invalid/disconnected) to scheduling team")
+        except Exception as e:
+            await self._log_call_event(call.call_id, f"Email failed: {str(e)}")
+            if self.on_status_update:
+                await self.on_status_update(f"Email failed: {str(e)}")
 
     async def start_call(self, patient_id: str, call_mode: str = "web") -> Optional[CallLog]:
         """Start an outbound call to a patient."""
@@ -280,6 +364,9 @@ class CallOrchestrator:
         call_mode = self._call_mode
 
         try:
+            # Required notifications for wrong number / disconnected outcomes.
+            await self._maybe_send_issue_email(call, outcome)
+
             # Auto-send callback SMS for all non-transferred ended calls.
             if outcome != CallOutcome.TRANSFERRED:
                 await self._send_sms_for_call(
@@ -318,6 +405,7 @@ class CallOrchestrator:
         finally:
             self._sms_locks.pop(call.call_id, None)
             self._sms_sent_call_ids.discard(call.call_id)
+            self._email_sent_call_ids.discard(call.call_id)
             self._call_mode = "web"
 
     async def send_audio(self, audio_data: bytes):
@@ -369,6 +457,12 @@ class CallOrchestrator:
                     transfer_attempted=True,
                 )
 
+                if await self._recent_patient_indicates_wrong_number(self._current_call.call_id):
+                    if self.on_status_update:
+                        await self.on_status_update("Transfer canceled - possible wrong number detected")
+                    await self.end_call(CallOutcome.WRONG_NUMBER)
+                    return
+
                 if queue_state.outbound_allowed and queue_state.global_agents_available >= 1:
                     # Transfer would succeed
                     await call_log_provider.update_call(
@@ -413,6 +507,15 @@ class CallOrchestrator:
 
     async def _handle_voice_error(self, error: str):
         """Handle errors from voice service."""
+        if self._current_call:
+            call_log_provider = get_call_log_provider()
+            await call_log_provider.update_call(
+                self._current_call.call_id,
+                error_code="voice_error",
+                error_message=error,
+            )
+            self._current_call.error_code = "voice_error"
+            self._current_call.error_message = error
         if self.on_error:
             await self.on_error(error)
 

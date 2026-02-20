@@ -64,6 +64,9 @@ Your secondary goal is to answer general, non-clinical, non-diagnostic company q
 - Apologize sincerely.
 - Say you'll update the records.
 - End the call quickly.
+- Immediately call the `end_call` tool with reason `wrong_number`.
+- Do NOT offer transfer if the patient says wrong number.
+- Do NOT call `transfer_to_scheduler` after any wrong-number statement.
 
 ## Knowledge Scope - You MAY Answer:
 - Office hours and locations
@@ -270,7 +273,7 @@ class RealtimeVoiceService:
                     {
                         "type": "function",
                         "name": "transfer_to_scheduler",
-                        "description": "Transfer the patient to a human scheduler. Call this when the patient confirms they want to be transferred.",
+                        "description": "Transfer the patient to a human scheduler only after explicit consent to transfer. Never use this tool when patient indicates wrong number or identity mismatch.",
                         "parameters": {
                             "type": "object",
                             "properties": {
@@ -285,7 +288,7 @@ class RealtimeVoiceService:
                     {
                         "type": "function",
                         "name": "end_call",
-                        "description": "End the call. Call this when the conversation is complete.",
+                        "description": "End the call. Use reason='wrong_number' immediately when patient says this is the wrong number/person.",
                         "parameters": {
                             "type": "object",
                             "properties": {
