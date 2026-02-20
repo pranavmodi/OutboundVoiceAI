@@ -133,6 +133,10 @@ class BasePatientProvider(ABC):
     async def update_patient_after_call(self, patient_id: str, outcome: str, increment_attempt: bool = True):
         ...
 
+    @abstractmethod
+    async def mark_patient_invalid_number(self, patient_id: str, reason: str):
+        ...
+
 
 # ---------------------------------------------------------------------------
 # Simulation (DB-backed) provider
@@ -164,6 +168,10 @@ class SimulationPatientProvider(BasePatientProvider):
                 select(PatientRow)
                 .where(PatientRow.attempt_count < max_attempts)
                 .where(
+                    (PatientRow.last_outcome == None) |  # noqa: E711
+                    (PatientRow.last_outcome != "invalid_number")
+                )
+                .where(
                     (PatientRow.last_attempt_at == None) |  # noqa: E711
                     (PatientRow.last_attempt_at <= cutoff)
                 )
@@ -185,6 +193,10 @@ class SimulationPatientProvider(BasePatientProvider):
             stmt = (
                 select(PatientRow)
                 .where(PatientRow.attempt_count < max_attempts)
+                .where(
+                    (PatientRow.last_outcome == None) |  # noqa: E711
+                    (PatientRow.last_outcome != "invalid_number")
+                )
                 .where(
                     (PatientRow.last_attempt_at == None) |  # noqa: E711
                     (PatientRow.last_attempt_at <= cutoff)
@@ -222,6 +234,20 @@ class SimulationPatientProvider(BasePatientProvider):
                     row.has_abandoned_before, row.ai_called_before, row.has_called_in_before
                 )
                 await session.commit()
+
+    async def mark_patient_invalid_number(self, patient_id: str, reason: str):
+        """Flag patient as invalid number to prevent retries."""
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(PatientRow).where(PatientRow.patient_id == patient_id)
+            )
+            row = result.scalar_one_or_none()
+            if row:
+                row.last_outcome = "invalid_number"
+                row.ai_called_before = True
+                row.last_attempt_at = datetime.now(timezone.utc)
+                await session.commit()
+                logger.info("Patient %s flagged invalid_number: %s", patient_id, reason)
 
     # -- Simulation-only methods --
 
@@ -387,6 +413,14 @@ class LivePatientProvider(BasePatientProvider):
     ):
         # Live mode: no local persistence for patient state
         logger.info("Live mode: call outcome for %s = %s (not persisted to API)", patient_id, outcome)
+
+    async def mark_patient_invalid_number(self, patient_id: str, reason: str):
+        # Live mode: no local persistence for patient state
+        logger.info(
+            "Live mode: patient %s flagged invalid_number (not persisted to API): %s",
+            patient_id,
+            reason,
+        )
 
 
 # ---------------------------------------------------------------------------

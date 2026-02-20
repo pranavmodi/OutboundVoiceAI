@@ -130,6 +130,54 @@ class CallOrchestrator:
         return any(k in text for k in keywords)
 
     @staticmethod
+    def _parse_int_or_none(value: str) -> Optional[int]:
+        try:
+            return int(str(value).strip())
+        except Exception:
+            return None
+
+    @staticmethod
+    def _map_twilio_failure_reason(
+        call_status: str,
+        error_code: Optional[int],
+        sip_response_code: Optional[int],
+    ) -> str:
+        code_map = {
+            32009: "invalid number",
+            32005: "disconnected/unreachable number",
+        }
+        if error_code in code_map:
+            detail = code_map[error_code]
+        elif error_code is not None and 32000 <= error_code <= 32999:
+            detail = "carrier failure"
+        else:
+            detail = "call failed"
+
+        parts = [f"Twilio {call_status}", detail]
+        if error_code is not None:
+            parts.append(f"error_code={error_code}")
+        if sip_response_code is not None:
+            parts.append(f"sip_response_code={sip_response_code}")
+        return " | ".join(parts)
+
+    @staticmethod
+    def _is_carrier_failure(
+        call_status: str,
+        error_code: Optional[int],
+        sip_response_code: Optional[int],
+    ) -> bool:
+        status = (call_status or "").strip().lower()
+        if status == "failed":
+            return True
+        if status in {"busy", "no-answer"} and (error_code is not None or sip_response_code is not None):
+            return True
+        return False
+
+    @staticmethod
+    def _is_known_invalid_number_code(error_code: Optional[int]) -> bool:
+        return error_code in {32009}
+
+    @staticmethod
     def _looks_like_wrong_number_signal(text: str) -> bool:
         """Best-effort detection of wrong-number intent in patient utterances."""
         lowered = (text or "").lower()
@@ -258,6 +306,48 @@ class CallOrchestrator:
                     await self.on_status_update(f"Voicemail playback failed: {str(e)}")
 
             await self.end_call(CallOutcome.VOICEMAIL)
+
+    async def handle_twilio_call_status(
+        self,
+        call_sid: str,
+        call_status: str,
+        error_code_raw: str = "",
+        sip_response_code_raw: str = "",
+    ):
+        """Handle Twilio failed/busy/no-answer callback statuses with carrier code mapping."""
+        if not self._current_call or not call_sid or call_sid != self._twilio_call_sid:
+            return
+
+        error_code = self._parse_int_or_none(error_code_raw)
+        sip_response_code = self._parse_int_or_none(sip_response_code_raw)
+        status = (call_status or "").strip().lower()
+        if not status:
+            return
+        if not self._is_carrier_failure(status, error_code, sip_response_code):
+            return
+
+        reason = self._map_twilio_failure_reason(status, error_code, sip_response_code)
+        code_str = str(error_code) if error_code is not None else f"twilio_{status}"
+
+        call_log_provider = get_call_log_provider()
+        await call_log_provider.update_call(
+            self._current_call.call_id,
+            error_code=code_str,
+            error_message=reason,
+        )
+        self._current_call.error_code = code_str
+        self._current_call.error_message = reason
+        await self._log_call_event(self._current_call.call_id, f"Carrier failure detected: {reason}")
+
+        if self._is_known_invalid_number_code(error_code) and self._current_patient:
+            patient_provider = get_patient_provider()
+            await patient_provider.mark_patient_invalid_number(self._current_patient.patient_id, reason)
+            if self.on_status_update:
+                await self.on_status_update("Patient flagged as invalid number (no retry)")
+
+        if self.on_status_update:
+            await self.on_status_update(f"Twilio carrier failure: {reason}")
+        await self.end_call(CallOutcome.FAILED)
 
     async def start_call(self, patient_id: str, call_mode: str = "web") -> Optional[CallLog]:
         """Start an outbound call to a patient."""

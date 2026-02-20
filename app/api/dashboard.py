@@ -438,11 +438,23 @@ async def twilio_status_callback(
     CallSid: str = Form(""),
     CallStatus: str = Form(""),
     AnsweredBy: str = Form(""),
+    ErrorCode: str = Form(""),
+    SipResponseCode: str = Form(""),
 ):
     """Handle Twilio call status callbacks, including AMD AnsweredBy values."""
     try:
+        orchestrator = get_orchestrator()
         if AnsweredBy:
-            asyncio.create_task(get_orchestrator().handle_twilio_amd_status(CallSid, AnsweredBy))
+            asyncio.create_task(orchestrator.handle_twilio_amd_status(CallSid, AnsweredBy))
+        if CallStatus:
+            asyncio.create_task(
+                orchestrator.handle_twilio_call_status(
+                    call_sid=CallSid,
+                    call_status=CallStatus,
+                    error_code_raw=ErrorCode,
+                    sip_response_code_raw=SipResponseCode,
+                )
+            )
     except Exception as e:
         logger.warning("Twilio status callback handling failed: %s", e)
     return {"status": "ok"}
