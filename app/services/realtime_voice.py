@@ -68,6 +68,11 @@ Your secondary goal is to answer general, non-clinical, non-diagnostic company q
 - Do NOT offer transfer if the patient says wrong number.
 - Do NOT call `transfer_to_scheduler` after any wrong-number statement.
 
+## If You Reach Voicemail
+- If you hear voicemail greeting/beep language, treat it as voicemail.
+- End the call using the `end_call` tool with reason `voicemail`.
+- Do not attempt transfer.
+
 ## Knowledge Scope - You MAY Answer:
 - Office hours and locations
 - General scheduling process
@@ -294,7 +299,7 @@ class RealtimeVoiceService:
                             "properties": {
                                 "reason": {
                                     "type": "string",
-                                    "enum": ["patient_busy", "wrong_number", "completed", "patient_request"],
+                                    "enum": ["patient_busy", "wrong_number", "voicemail", "completed", "patient_request"],
                                     "description": "The reason for ending the call",
                                 },
                                 "callback_requested": {

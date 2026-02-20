@@ -1,6 +1,7 @@
 """Twilio outbound call + media stream bridge to OpenAI Realtime API."""
 import asyncio
 import base64
+import html
 import json
 import logging
 import os
@@ -110,6 +111,7 @@ class TwilioMediaBridge:
 def place_twilio_call(
     to_number: str,
     twiml_url: str,
+    status_callback_url: Optional[str] = None,
 ) -> str:
     """Place an outbound call via Twilio REST API. Returns Call SID.
 
@@ -125,14 +127,42 @@ def place_twilio_call(
     from_number = os.getenv("TWILIO_FROM_NUMBER", "")
 
     client = Client(account_sid, auth_token)
-    call = client.calls.create(
-        to=to_number,
-        from_=from_number,
-        url=twiml_url,
-    )
+    create_kwargs = {
+        "to": to_number,
+        "from_": from_number,
+        "url": twiml_url,
+        # Requirement: enable AMD for voicemail detection.
+        "machine_detection": "DetectMessageEnd",
+    }
+    if status_callback_url:
+        create_kwargs["status_callback"] = status_callback_url
+        create_kwargs["status_callback_method"] = "POST"
+        create_kwargs["status_callback_event"] = ["answered", "completed"]
+
+    call = client.calls.create(**create_kwargs)
     logger.info(f"Twilio call placed: SID={call.sid}, to={to_number}")
     return call.sid
 
 
 def generate_stream_id() -> str:
     return uuid.uuid4().hex[:12]
+
+
+def play_voicemail_and_hangup(call_sid: str, message: str):
+    """Update an in-progress Twilio call to play voicemail then hang up."""
+    account_sid = os.getenv("TWILIO_ACCOUNT_SID", "")
+    auth_token = os.getenv("TWILIO_AUTH_TOKEN", "")
+    if not account_sid or not auth_token:
+        raise RuntimeError("Twilio is not configured. Set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN.")
+
+    escaped = html.escape(message, quote=True)
+    twiml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        "<Response>"
+        f"<Say voice=\"alice\">{escaped}</Say>"
+        "<Hangup/>"
+        "</Response>"
+    )
+
+    client = Client(account_sid, auth_token)
+    client.calls(call_sid).update(twiml=twiml)

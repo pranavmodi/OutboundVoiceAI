@@ -1,11 +1,13 @@
 """REST API endpoints for dashboard."""
+import asyncio
 import os
 import logging
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Form
 from fastapi.responses import Response
 from typing import Optional
 
 from app.providers import get_queue_provider, get_mock_queue_provider, get_patient_provider, get_simulation_patient_provider, get_call_log_provider, get_settings_provider
+from app.services.call_orchestrator import get_orchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -429,6 +431,21 @@ async def twilio_twiml(stream_id: str):
 </Response>"""
 
     return Response(content=twiml, media_type="application/xml")
+
+
+@router.post("/twilio/status")
+async def twilio_status_callback(
+    CallSid: str = Form(""),
+    CallStatus: str = Form(""),
+    AnsweredBy: str = Form(""),
+):
+    """Handle Twilio call status callbacks, including AMD AnsweredBy values."""
+    try:
+        if AnsweredBy:
+            asyncio.create_task(get_orchestrator().handle_twilio_amd_status(CallSid, AnsweredBy))
+    except Exception as e:
+        logger.warning("Twilio status callback handling failed: %s", e)
+    return {"status": "ok"}
 
 
 @router.delete("/calls")

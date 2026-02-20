@@ -13,7 +13,7 @@ from app.services.email_notification_service import (
     send_wrong_number_email,
     send_disconnected_number_email,
 )
-from app.services.twilio_sms_service import build_sms_message, send_sms
+from app.services.twilio_sms_service import build_sms_message, send_sms, get_callback_number
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +31,9 @@ class CallOrchestrator:
         self._sms_sent_call_ids: set[str] = set()
         self._sms_locks: dict[str, asyncio.Lock] = {}
         self._email_sent_call_ids: set[str] = set()
+        self._twilio_call_sid: Optional[str] = None
+        self._voicemail_handled: bool = False
+        self._web_voicemail_simulated: bool = False
 
         # Callbacks for UI updates
         self.on_call_started: Optional[Callable[[CallLog], Any]] = None
@@ -141,6 +144,30 @@ class CallOrchestrator:
         )
         return any(re.search(p, lowered) for p in patterns)
 
+    @staticmethod
+    def _looks_like_voicemail_signal(text: str) -> bool:
+        """Detect voicemail-like phrases in web-mode simulated patient speech."""
+        lowered = (text or "").lower()
+        phrases = (
+            "leave a message",
+            "at the tone",
+            "after the beep",
+            "cannot take your call",
+            "not available right now",
+            "i'm not available",
+            "im not available",
+            "please leave your name",
+            "leave your name",
+            "leave your number",
+            "leave your name and number",
+            "voice mail",
+            "voicemail",
+        )
+        if any(p in lowered for p in phrases):
+            return True
+        # Broader fallback for variants like "leave your number and name".
+        return "leave your" in lowered and ("name" in lowered or "number" in lowered)
+
     async def _recent_patient_indicates_wrong_number(self, call_id: str) -> bool:
         """Inspect recent patient transcript lines for wrong-number cues."""
         call_log_provider = get_call_log_provider()
@@ -184,6 +211,53 @@ class CallOrchestrator:
             await self._log_call_event(call.call_id, f"Email failed: {str(e)}")
             if self.on_status_update:
                 await self.on_status_update(f"Email failed: {str(e)}")
+
+    async def handle_twilio_amd_status(self, call_sid: str, answered_by: str):
+        """Handle Twilio AMD callback values (machine/human)."""
+        if not self._current_call or not call_sid or call_sid != self._twilio_call_sid:
+            return
+        if self._voicemail_handled:
+            return
+
+        normalized = (answered_by or "").strip().lower()
+        if not normalized:
+            return
+
+        if normalized.startswith("human"):
+            if self.on_status_update:
+                await self.on_status_update("Twilio AMD: human detected")
+            return
+
+        if normalized.startswith("machine"):
+            self._voicemail_handled = True
+            call = self._current_call
+            call_log_provider = get_call_log_provider()
+            await call_log_provider.update_call(call.call_id, voicemail_left=True)
+            call.voicemail_left = True
+            if self.on_status_update:
+                await self.on_status_update(f"Twilio AMD: voicemail detected ({answered_by})")
+
+            callback_number = get_callback_number().strip()
+            if callback_number:
+                message = (
+                    "Hi, this is a call from Precise Imaging regarding scheduling. "
+                    f"Please call us back at {callback_number}."
+                )
+            else:
+                message = (
+                    "Hi, this is a call from Precise Imaging regarding scheduling. "
+                    "Please call us back at the number previously provided."
+                )
+
+            try:
+                from app.services.twilio_voice_service import play_voicemail_and_hangup
+                await asyncio.to_thread(play_voicemail_and_hangup, call_sid, message)
+            except Exception as e:
+                logger.warning("Failed to play voicemail for call %s: %s", call.call_id, e)
+                if self.on_status_update:
+                    await self.on_status_update(f"Voicemail playback failed: {str(e)}")
+
+            await self.end_call(CallOutcome.VOICEMAIL)
 
     async def start_call(self, patient_id: str, call_mode: str = "web") -> Optional[CallLog]:
         """Start an outbound call to a patient."""
@@ -229,6 +303,7 @@ class CallOrchestrator:
         self._current_call = call
         self._current_patient = patient
         self._call_mode = call_mode
+        self._web_voicemail_simulated = False
 
         if self.on_status_update:
             mode_label = "Twilio" if call_mode == "twilio" else "Web"
@@ -326,7 +401,14 @@ class CallOrchestrator:
                 if self.on_status_update:
                     await self.on_status_update(f"Calling {patient.phone} via Twilio...")
 
-                place_twilio_call(to_number=patient.phone, twiml_url=twiml_url)
+                status_callback_url = f"{backend_host}/api/twilio/status"
+                call_sid = place_twilio_call(
+                    to_number=patient.phone,
+                    twiml_url=twiml_url,
+                    status_callback_url=status_callback_url,
+                )
+                self._twilio_call_sid = call_sid
+                self._voicemail_handled = False
 
             except Exception as e:
                 logger.error(f"Failed to place Twilio call: {e}")
@@ -406,6 +488,9 @@ class CallOrchestrator:
             self._sms_locks.pop(call.call_id, None)
             self._sms_sent_call_ids.discard(call.call_id)
             self._email_sent_call_ids.discard(call.call_id)
+            self._twilio_call_sid = None
+            self._voicemail_handled = False
+            self._web_voicemail_simulated = False
             self._call_mode = "web"
 
     async def send_audio(self, audio_data: bytes):
@@ -429,6 +514,18 @@ class CallOrchestrator:
             await call_log_provider.add_transcript(self._current_call.call_id, "patient", text)
             if self.on_transcript_update:
                 await self.on_transcript_update("patient", text)
+            # Web-mode simulation of voicemail detection (Feature 3 parity).
+            if (
+                self._call_mode == "web"
+                and not self._web_voicemail_simulated
+                and self._looks_like_voicemail_signal(text)
+            ):
+                self._web_voicemail_simulated = True
+                await call_log_provider.update_call(self._current_call.call_id, voicemail_left=True)
+                self._current_call.voicemail_left = True
+                if self.on_status_update:
+                    await self.on_status_update("Web simulation: voicemail detected from transcript")
+                await self.end_call(CallOutcome.VOICEMAIL)
         elif speaker == "ai":
             # Streaming delta - just forward for real-time display
             if self.on_transcript_update:
@@ -486,6 +583,7 @@ class CallOrchestrator:
             outcome_map = {
                 "patient_busy": CallOutcome.CALLBACK_REQUESTED,
                 "wrong_number": CallOutcome.WRONG_NUMBER,
+                "voicemail": CallOutcome.VOICEMAIL,
                 "completed": CallOutcome.COMPLETED,
                 "patient_request": CallOutcome.COMPLETED,
             }
