@@ -3,6 +3,41 @@ import os
 from twilio.rest import Client
 
 
+TWILIO_OPTOUT_ERROR_CODE = 21610
+
+
+def normalize_phone_number(phone: str) -> str:
+    """Normalize a phone number for list membership checks."""
+    return "".join(c for c in (phone or "").strip() if c.isdigit() or c == "+")
+
+
+def get_opted_out_numbers() -> set[str]:
+    """Numbers configured as opted-out (comma-separated env var)."""
+    raw = os.getenv("SMS_OPTOUT_NUMBERS", "")
+    if not raw.strip():
+        return set()
+    return {
+        normalized
+        for part in raw.split(",")
+        if (normalized := normalize_phone_number(part))
+    }
+
+
+def is_number_opted_out(phone: str) -> bool:
+    """Return whether number is configured as opted-out."""
+    normalized = normalize_phone_number(phone)
+    return bool(normalized) and normalized in get_opted_out_numbers()
+
+
+def is_twilio_opt_out_error(error: Exception) -> bool:
+    """Best-effort check for Twilio STOP/opt-out delivery failures."""
+    code = getattr(error, "code", None)
+    if code == TWILIO_OPTOUT_ERROR_CODE:
+        return True
+    text = str(error).lower()
+    return "21610" in text or "opted out" in text or "stop" in text
+
+
 def get_callback_number() -> str:
     """Return callback number shown in SMS messages."""
     return os.getenv("PRECISE_CALLBACK_NUMBER", "").strip()

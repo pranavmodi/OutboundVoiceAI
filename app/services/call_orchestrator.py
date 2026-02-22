@@ -13,7 +13,13 @@ from app.services.email_notification_service import (
     send_wrong_number_email,
     send_disconnected_number_email,
 )
-from app.services.twilio_sms_service import build_sms_message, send_sms, get_callback_number
+from app.services.twilio_sms_service import (
+    build_sms_message,
+    send_sms,
+    get_callback_number,
+    is_number_opted_out,
+    is_twilio_opt_out_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +65,7 @@ class CallOrchestrator:
     ) -> bool:
         """Send SMS for a call and update call log/status."""
         if not patient or not patient.phone:
+            await self._log_call_event(call.call_id, f"SMS skipped ({reason}): patient phone unavailable")
             if self.on_status_update:
                 await self.on_status_update(f"SMS failed ({reason}): patient phone unavailable")
             return False
@@ -67,6 +74,7 @@ class CallOrchestrator:
         async with lock:
             # Fast in-memory checks first for repeated tool calls in the same process/session.
             if call.sms_sent or call.call_id in self._sms_sent_call_ids:
+                await self._log_call_event(call.call_id, f"SMS skipped ({reason}): already sent")
                 if self.on_status_update:
                     await self.on_status_update(f"SMS already sent for call {call.call_id[:8]}")
                 return True
@@ -75,18 +83,31 @@ class CallOrchestrator:
             if await self._has_sms_been_sent(call.call_id):
                 call.sms_sent = True
                 self._sms_sent_call_ids.add(call.call_id)
+                await self._log_call_event(call.call_id, f"SMS skipped ({reason}): already sent")
                 if self.on_status_update:
                     await self.on_status_update(f"SMS already sent for call {call.call_id[:8]}")
                 return True
 
             mode = call_mode or self._call_mode or "web"
             call_log_provider = get_call_log_provider()
+            if is_number_opted_out(patient.phone):
+                await self._log_call_event(
+                    call.call_id,
+                    f"SMS blocked ({reason}): recipient opted out [{patient.phone}]",
+                )
+                if self.on_status_update:
+                    await self.on_status_update(f"SMS blocked ({reason}): recipient opted out")
+                return False
 
             # In web/browser mode, simulate SMS delivery (no external Twilio send).
             if mode == "web":
                 await call_log_provider.update_call(call.call_id, sms_sent=True)
                 call.sms_sent = True
                 self._sms_sent_call_ids.add(call.call_id)
+                await self._log_call_event(
+                    call.call_id,
+                    f"SMS delivered ({reason}) mode=web simulated=true to={patient.phone}",
+                )
                 if self.on_status_update:
                     await self.on_status_update(
                         f"SMS sent ({reason}) in web mode (simulated) to {patient.phone}"
@@ -99,6 +120,10 @@ class CallOrchestrator:
                 await call_log_provider.update_call(call.call_id, sms_sent=True)
                 call.sms_sent = True
                 self._sms_sent_call_ids.add(call.call_id)
+                await self._log_call_event(
+                    call.call_id,
+                    f"SMS delivered ({reason}) mode=twilio sid={sid} to={patient.phone}",
+                )
                 if self.on_status_update:
                     await self.on_status_update(
                         f"SMS sent ({reason}) in twilio mode to {patient.phone} [sid={sid}]"
@@ -106,6 +131,15 @@ class CallOrchestrator:
                 return True
             except Exception as e:
                 logger.warning("SMS send failed for call %s: %s", call.call_id, e)
+                if is_twilio_opt_out_error(e):
+                    await self._log_call_event(
+                        call.call_id,
+                        f"SMS blocked ({reason}): Twilio recipient opt-out to={patient.phone}",
+                    )
+                    if self.on_status_update:
+                        await self.on_status_update(f"SMS blocked ({reason}): recipient opted out")
+                    return False
+                await self._log_call_event(call.call_id, f"SMS failed ({reason}): {str(e)}")
                 if self.on_status_update:
                     await self.on_status_update(f"SMS failed ({reason}): {str(e)}")
                 return False
@@ -175,7 +209,26 @@ class CallOrchestrator:
 
     @staticmethod
     def _is_known_invalid_number_code(error_code: Optional[int]) -> bool:
-        return error_code in {32009}
+        # Twilio known invalid/disconnected style codes
+        return error_code in {32005, 32009}
+
+    @staticmethod
+    def _is_known_invalid_number_sip_code(sip_response_code: Optional[int]) -> bool:
+        # Common SIP responses that indicate invalid/unroutable numbers.
+        return sip_response_code in {404, 410, 484, 604}
+
+    @classmethod
+    def _should_flag_invalid_number(
+        cls,
+        error_code: Optional[int],
+        sip_response_code: Optional[int],
+        reason_text: str,
+    ) -> bool:
+        if cls._is_known_invalid_number_code(error_code):
+            return True
+        if cls._is_known_invalid_number_sip_code(sip_response_code):
+            return True
+        return cls._looks_like_disconnected_or_invalid(reason_text)
 
     @staticmethod
     def _looks_like_wrong_number_signal(text: str) -> bool:
@@ -339,11 +392,15 @@ class CallOrchestrator:
         self._current_call.error_message = reason
         await self._log_call_event(self._current_call.call_id, f"Carrier failure detected: {reason}")
 
-        if self._is_known_invalid_number_code(error_code) and self._current_patient:
+        if self._should_flag_invalid_number(error_code, sip_response_code, reason) and self._current_patient:
             patient_provider = get_patient_provider()
             await patient_provider.mark_patient_invalid_number(self._current_patient.patient_id, reason)
+            await self._log_call_event(
+                self._current_call.call_id,
+                f"Patient flagged invalid_number (no retry): {reason}",
+            )
             if self.on_status_update:
-                await self.on_status_update("Patient flagged as invalid number (no retry)")
+                await self.on_status_update("Patient flagged as invalid/disconnected number (no retry)")
 
         if self.on_status_update:
             await self.on_status_update(f"Twilio carrier failure: {reason}")
