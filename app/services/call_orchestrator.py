@@ -1,26 +1,20 @@
 """Call orchestrator service managing the call lifecycle."""
 import asyncio
-import json
 import logging
 import os
-import re
 from typing import Optional, Callable, Any
-from datetime import datetime
 
 from app.models import CallLog, CallOutcome, Patient
 from app.providers import get_queue_provider, get_patient_provider, get_call_log_provider, get_settings_provider
 from app.services.realtime_voice import RealtimeVoiceService
-from app.services.email_notification_service import (
-    send_wrong_number_email,
-    send_disconnected_number_email,
+from app.services.notification_service import CallNotificationService
+from app.services.carrier_failure_service import CarrierFailureHandler
+from app.services.transfer_service import (
+    TransferService,
+    normalize_language_code,
+    looks_like_voicemail_signal,
 )
-from app.services.twilio_sms_service import (
-    build_sms_message,
-    send_sms,
-    get_callback_number,
-    is_number_opted_out,
-    is_twilio_opt_out_error,
-)
+from app.services.twilio_sms_service import get_callback_number
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +28,6 @@ class CallOrchestrator:
         self._current_patient: Optional[Patient] = None
         self._twilio_bridge = None  # TwilioMediaBridge when in twilio mode
         self._call_mode: str = "web"  # "web" or "twilio"
-        # SMS idempotency guards keyed by call_id.
-        self._sms_sent_call_ids: set[str] = set()
-        self._sms_locks: dict[str, asyncio.Lock] = {}
-        self._email_sent_call_ids: set[str] = set()
         self._twilio_call_sid: Optional[str] = None
         self._voicemail_handled: bool = False
         self._web_voicemail_simulated: bool = False
@@ -50,327 +40,21 @@ class CallOrchestrator:
         self.on_status_update: Optional[Callable[[str], Any]] = None
         self.on_error: Optional[Callable[[str], Any]] = None
 
-    async def _has_sms_been_sent(self, call_id: str) -> bool:
-        """Check persisted call state to avoid duplicate SMS sends."""
-        call_log_provider = get_call_log_provider()
-        row = await call_log_provider.get_call(call_id)
-        return bool(row and row.sms_sent)
-
-    async def _send_sms_for_call(
-        self,
-        call: CallLog,
-        patient: Optional[Patient],
-        message_type: str = "callback_info",
-        reason: str = "manual",
-        call_mode: Optional[str] = None,
-    ) -> bool:
-        """Send SMS for a call and update call log/status."""
-        if not patient or not patient.phone:
-            await self._log_call_event(call.call_id, f"SMS skipped ({reason}): patient phone unavailable")
-            if self.on_status_update:
-                await self.on_status_update(f"SMS failed ({reason}): patient phone unavailable")
-            return False
-
-        lock = self._sms_locks.setdefault(call.call_id, asyncio.Lock())
-        async with lock:
-            # Fast in-memory checks first for repeated tool calls in the same process/session.
-            if call.sms_sent or call.call_id in self._sms_sent_call_ids:
-                await self._log_call_event(call.call_id, f"SMS skipped ({reason}): already sent")
-                if self.on_status_update:
-                    await self.on_status_update(f"SMS already sent for call {call.call_id[:8]}")
-                return True
-
-            # Persisted fallback check.
-            if await self._has_sms_been_sent(call.call_id):
-                call.sms_sent = True
-                self._sms_sent_call_ids.add(call.call_id)
-                await self._log_call_event(call.call_id, f"SMS skipped ({reason}): already sent")
-                if self.on_status_update:
-                    await self.on_status_update(f"SMS already sent for call {call.call_id[:8]}")
-                return True
-
-            mode = call_mode or self._call_mode or "web"
-            call_log_provider = get_call_log_provider()
-            if is_number_opted_out(patient.phone):
-                await self._log_call_event(
-                    call.call_id,
-                    f"SMS blocked ({reason}): recipient opted out [{patient.phone}]",
-                )
-                if self.on_status_update:
-                    await self.on_status_update(f"SMS blocked ({reason}): recipient opted out")
-                return False
-
-            # In web/browser mode, simulate SMS delivery (no external Twilio send).
-            if mode == "web":
-                await call_log_provider.update_call(call.call_id, sms_sent=True)
-                call.sms_sent = True
-                self._sms_sent_call_ids.add(call.call_id)
-                await self._log_call_event(
-                    call.call_id,
-                    f"SMS delivered ({reason}) mode=web simulated=true to={patient.phone}",
-                )
-                if self.on_status_update:
-                    await self.on_status_update(
-                        f"SMS sent ({reason}) in web mode (simulated) to {patient.phone}"
-                    )
-                return True
-
-            body = build_sms_message(message_type)
-            try:
-                sid = await asyncio.to_thread(send_sms, patient.phone, body)
-                await call_log_provider.update_call(call.call_id, sms_sent=True)
-                call.sms_sent = True
-                self._sms_sent_call_ids.add(call.call_id)
-                await self._log_call_event(
-                    call.call_id,
-                    f"SMS delivered ({reason}) mode=twilio sid={sid} to={patient.phone}",
-                )
-                if self.on_status_update:
-                    await self.on_status_update(
-                        f"SMS sent ({reason}) in twilio mode to {patient.phone} [sid={sid}]"
-                    )
-                return True
-            except Exception as e:
-                logger.warning("SMS send failed for call %s: %s", call.call_id, e)
-                if is_twilio_opt_out_error(e):
-                    await self._log_call_event(
-                        call.call_id,
-                        f"SMS blocked ({reason}): Twilio recipient opt-out to={patient.phone}",
-                    )
-                    if self.on_status_update:
-                        await self.on_status_update(f"SMS blocked ({reason}): recipient opted out")
-                    return False
-                await self._log_call_event(call.call_id, f"SMS failed ({reason}): {str(e)}")
-                if self.on_status_update:
-                    await self.on_status_update(f"SMS failed ({reason}): {str(e)}")
-                return False
-
-    async def _log_call_event(self, call_id: str, message: str):
-        """Persist non-audio operational events to the call transcript."""
-        call_log_provider = get_call_log_provider()
-        await call_log_provider.add_transcript(call_id, "system", message)
-
-    @staticmethod
-    def _looks_like_disconnected_or_invalid(error_text: str) -> bool:
-        text = (error_text or "").lower()
-        keywords = (
-            "disconnected",
-            "invalid",
-            "not in service",
-            "unreachable",
-            "failed to route",
-            "does not exist",
-            "cannot be completed",
+        # Delegate services
+        self._notifications = CallNotificationService()
+        self._transfer = TransferService()
+        self._carrier_failure = CarrierFailureHandler(
+            get_current_call=lambda: self._current_call,
+            get_current_patient=lambda: self._current_patient,
+            get_twilio_call_sid=lambda: self._twilio_call_sid,
+            end_call_fn=self.end_call,
         )
-        return any(k in text for k in keywords)
 
-    @staticmethod
-    def _parse_int_or_none(value: str) -> Optional[int]:
-        try:
-            return int(str(value).strip())
-        except Exception:
-            return None
-
-    @staticmethod
-    def _map_twilio_failure_reason(
-        call_status: str,
-        error_code: Optional[int],
-        sip_response_code: Optional[int],
-    ) -> str:
-        code_map = {
-            32009: "invalid number",
-            32005: "disconnected/unreachable number",
-        }
-        if error_code in code_map:
-            detail = code_map[error_code]
-        elif error_code is not None and 32000 <= error_code <= 32999:
-            detail = "carrier failure"
-        else:
-            detail = "call failed"
-
-        parts = [f"Twilio {call_status}", detail]
-        if error_code is not None:
-            parts.append(f"error_code={error_code}")
-        if sip_response_code is not None:
-            parts.append(f"sip_response_code={sip_response_code}")
-        return " | ".join(parts)
-
-    @staticmethod
-    def _is_carrier_failure(
-        call_status: str,
-        error_code: Optional[int],
-        sip_response_code: Optional[int],
-    ) -> bool:
-        status = (call_status or "").strip().lower()
-        if status == "failed":
-            return True
-        if status in {"busy", "no-answer"} and (error_code is not None or sip_response_code is not None):
-            return True
-        return False
-
-    @staticmethod
-    def _is_known_invalid_number_code(error_code: Optional[int]) -> bool:
-        # Twilio known invalid/disconnected style codes
-        return error_code in {32005, 32009}
-
-    @staticmethod
-    def _is_known_invalid_number_sip_code(sip_response_code: Optional[int]) -> bool:
-        # Common SIP responses that indicate invalid/unroutable numbers.
-        return sip_response_code in {404, 410, 484, 604}
-
-    @classmethod
-    def _should_flag_invalid_number(
-        cls,
-        error_code: Optional[int],
-        sip_response_code: Optional[int],
-        reason_text: str,
-    ) -> bool:
-        if cls._is_known_invalid_number_code(error_code):
-            return True
-        if cls._is_known_invalid_number_sip_code(sip_response_code):
-            return True
-        return cls._looks_like_disconnected_or_invalid(reason_text)
-
-    @staticmethod
-    def _looks_like_wrong_number_signal(text: str) -> bool:
-        """Best-effort detection of wrong-number intent in patient utterances."""
-        lowered = (text or "").lower()
-        if "wrong number" in lowered or "wrong person" in lowered:
-            return True
-        patterns = (
-            r"\bnot me\b",
-            r"\bthis is(?:n't| not) [a-z]+\b",
-            r"\byou have the wrong\b",
-            r"\bno one (?:by|with) (?:that|this) name\b",
-            r"\bdon'?t know (?:who|them|that person)\b",
-        )
-        return any(re.search(p, lowered) for p in patterns)
-
-    @staticmethod
-    def _looks_like_voicemail_signal(text: str) -> bool:
-        """Detect voicemail-like phrases in web-mode simulated patient speech."""
-        lowered = (text or "").lower()
-        phrases = (
-            "leave a message",
-            "at the tone",
-            "after the beep",
-            "cannot take your call",
-            "not available right now",
-            "i'm not available",
-            "im not available",
-            "please leave your name",
-            "leave your name",
-            "leave your number",
-            "leave your name and number",
-            "voice mail",
-            "voicemail",
-        )
-        if any(p in lowered for p in phrases):
-            return True
-        # Broader fallback for variants like "leave your number and name".
-        return "leave your" in lowered and ("name" in lowered or "number" in lowered)
-
-    @staticmethod
-    def _normalize_language_code(language: Optional[object]) -> str:
-        if language is None:
-            return "en"
-        value = getattr(language, "value", language)
-        normalized = str(value).strip().lower()
-        return normalized or "en"
-
-    @staticmethod
-    def _load_json_object_env(var_name: str) -> dict[str, str]:
-        raw = os.getenv(var_name, "").strip()
-        if not raw:
-            return {}
-        try:
-            parsed = json.loads(raw)
-            if isinstance(parsed, dict):
-                return {
-                    str(k).strip().lower(): str(v).strip()
-                    for k, v in parsed.items()
-                    if str(v).strip()
-                }
-        except Exception:
-            logger.warning("Invalid JSON in %s; expected an object map", var_name)
-        return {}
-
-    @classmethod
-    def _resolve_transfer_queue_for_language(cls, language: Optional[object]) -> str:
-        language_code = cls._normalize_language_code(language)
-
-        default_map = {
-            "en": "scheduling_en",
-            "es": "scheduling_es",
-            # Default non-mapped languages to English queue.
-            "zh": "scheduling_en",
-        }
-        configured_map = cls._load_json_object_env("LANGUAGE_QUEUE_MAP")
-        mapping = {**default_map, **configured_map}
-        return mapping.get(language_code) or mapping.get("en", "scheduling_en")
-
-    @classmethod
-    def _resolve_transfer_destination_for_queue(cls, queue_name: str) -> Optional[str]:
-        configured_targets = cls._load_json_object_env("QUEUE_TRANSFER_TARGETS")
-        if queue_name in configured_targets:
-            return configured_targets[queue_name]
-        # Optional per-queue environment override, e.g. TRANSFER_TARGET_SCHEDULING_EN.
-        env_name = f"TRANSFER_TARGET_{queue_name.upper()}"
-        value = os.getenv(env_name, "").strip()
-        if value:
-            return value
-        return None
-
-    @staticmethod
-    def _find_queue_by_name(queue_state, queue_name: str):
-        for queue in queue_state.queues:
-            if (queue.Queue or "").strip().lower() == queue_name.strip().lower():
-                return queue
-        return None
-
-    async def _recent_patient_indicates_wrong_number(self, call_id: str) -> bool:
-        """Inspect recent patient transcript lines for wrong-number cues."""
-        call_log_provider = get_call_log_provider()
-        row = await call_log_provider.get_call(call_id)
-        if not row or not row.transcript:
-            return False
-        recent = row.transcript[-8:]
-        for entry in recent:
-            if entry.speaker == "patient" and self._looks_like_wrong_number_signal(entry.text):
-                return True
-        return False
-
-    async def _maybe_send_issue_email(self, call: CallLog, outcome: CallOutcome):
-        """Send required call-issue email notifications based on outcome/status."""
-        if call.call_id in self._email_sent_call_ids:
-            return
-
-        status_text = call.error_message or outcome.value
-
-        try:
-            if outcome == CallOutcome.WRONG_NUMBER:
-                message_id = await asyncio.to_thread(send_wrong_number_email, call)
-                self._email_sent_call_ids.add(call.call_id)
-                await self._log_call_event(call.call_id, f"Email sent (wrong_number) [message_id={message_id or 'n/a'}]")
-                if self.on_status_update:
-                    await self.on_status_update("Email sent (wrong_number) to scheduling team")
-                return
-
-            if outcome == CallOutcome.DISCONNECTED or (
-                outcome == CallOutcome.FAILED and self._looks_like_disconnected_or_invalid(status_text)
-            ):
-                message_id = await asyncio.to_thread(send_disconnected_number_email, call, status_text)
-                self._email_sent_call_ids.add(call.call_id)
-                await self._log_call_event(
-                    call.call_id,
-                    f"Email sent (invalid_disconnected) [message_id={message_id or 'n/a'}] status={status_text}",
-                )
-                if self.on_status_update:
-                    await self.on_status_update("Email sent (invalid/disconnected) to scheduling team")
-        except Exception as e:
-            await self._log_call_event(call.call_id, f"Email failed: {str(e)}")
-            if self.on_status_update:
-                await self.on_status_update(f"Email failed: {str(e)}")
+    def _sync_status_callback(self):
+        """Propagate on_status_update to delegate services."""
+        self._notifications.on_status_update = self.on_status_update
+        self._transfer.on_status_update = self.on_status_update
+        self._carrier_failure.on_status_update = self.on_status_update
 
     async def handle_twilio_amd_status(self, call_sid: str, answered_by: str):
         """Handle Twilio AMD callback values (machine/human)."""
@@ -426,77 +110,31 @@ class CallOrchestrator:
         error_code_raw: str = "",
         sip_response_code_raw: str = "",
     ):
-        """Handle Twilio failed/busy/no-answer callback statuses with carrier code mapping."""
-        if not self._current_call or not call_sid or call_sid != self._twilio_call_sid:
-            return
-
-        error_code = self._parse_int_or_none(error_code_raw)
-        sip_response_code = self._parse_int_or_none(sip_response_code_raw)
-        status = (call_status or "").strip().lower()
-        if not status:
-            return
-        if not self._is_carrier_failure(status, error_code, sip_response_code):
-            return
-
-        reason = self._map_twilio_failure_reason(status, error_code, sip_response_code)
-        code_str = str(error_code) if error_code is not None else f"twilio_{status}"
-
-        call_log_provider = get_call_log_provider()
-        await call_log_provider.update_call(
-            self._current_call.call_id,
-            error_code=code_str,
-            error_message=reason,
+        """Delegate to CarrierFailureHandler."""
+        self._sync_status_callback()
+        await self._carrier_failure.handle_twilio_call_status(
+            call_sid, call_status, error_code_raw, sip_response_code_raw,
         )
-        self._current_call.error_code = code_str
-        self._current_call.error_message = reason
-        await self._log_call_event(self._current_call.call_id, f"Carrier failure detected: {reason}")
-
-        if self._should_flag_invalid_number(error_code, sip_response_code, reason) and self._current_patient:
-            patient_provider = get_patient_provider()
-            await patient_provider.mark_patient_invalid_number(self._current_patient.patient_id, reason)
-            await self._log_call_event(
-                self._current_call.call_id,
-                f"Patient flagged invalid_number (no retry): {reason}",
-            )
-            if self.on_status_update:
-                await self.on_status_update("Patient flagged as invalid/disconnected number (no retry)")
-
-        if self.on_status_update:
-            await self.on_status_update(f"Twilio carrier failure: {reason}")
-        await self.end_call(CallOutcome.FAILED)
 
     async def start_call(self, patient_id: str, call_mode: str = "web") -> Optional[CallLog]:
         """Start an outbound call to a patient."""
-        # Check if call already in progress
         call_log_provider = get_call_log_provider()
         if call_log_provider.has_active_call():
             if self.on_error:
                 await self.on_error("A call is already in progress")
             return None
 
-        # Get patient
         patient_provider = get_patient_provider()
         patient = await patient_provider.get_patient(patient_id)
-
-        # Debug: log all patients in the queue
-        all_patients = await patient_provider.get_all_patients()
-        print(f"[START_CALL] Looking for patient_id={patient_id}")
-        print(f"[START_CALL] All patients in PatientRow table ({len(all_patients)}):")
-        for p in all_patients:
-            print(f"[START_CALL]   - {p.patient_id}: {p.name}, {p.phone}")
 
         if not patient:
             if self.on_error:
                 await self.on_error(f"Patient {patient_id} not found")
             return None
 
-        print(f"[START_CALL] Found patient: {patient.name}, phone={patient.phone}")
-
-        # Check queue state
         queue_provider = get_queue_provider()
         queue_state = queue_provider.get_state()
 
-        # Create call log
         call = await call_log_provider.create_call(
             patient_id=patient.patient_id,
             patient_name=patient.name,
@@ -515,10 +153,8 @@ class CallOrchestrator:
             mode_label = "Twilio" if call_mode == "twilio" else "Web"
             await self.on_status_update(f"Connecting ({mode_label})...")
 
-        # Choose audio format based on mode
         audio_format = "g711_ulaw" if call_mode == "twilio" else "pcm16"
 
-        # Initialize voice service
         self._voice_service = RealtimeVoiceService(audio_format=audio_format)
         self._voice_service.on_transcript = self._handle_transcript
         self._voice_service.on_audio = self._handle_audio
@@ -526,11 +162,10 @@ class CallOrchestrator:
         self._voice_service.on_error = self._handle_voice_error
         self._voice_service.on_session_ended = self._handle_session_ended
 
-        # Connect to OpenAI
         success = await self._voice_service.connect(
             call.call_id,
             patient.name,
-            self._normalize_language_code(patient.language),
+            normalize_language_code(patient.language),
         )
         if not success:
             await call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
@@ -539,9 +174,7 @@ class CallOrchestrator:
             self._current_patient = None
             return None
 
-        # In Twilio mode, check safeguards then place the actual phone call
         if call_mode == "twilio":
-            # Safeguard: check DB-level allow_live_calls setting
             settings_provider = get_settings_provider()
             settings = await settings_provider.get_settings()
             if not settings.allow_live_calls:
@@ -556,7 +189,6 @@ class CallOrchestrator:
                 self._current_patient = None
                 return None
 
-            # Safeguard: check phone number allowlist
             if not settings.allowed_phones:
                 error_msg = "No phone numbers in allowlist. Add allowed numbers in settings first."
                 logger.warning(f"Twilio call blocked: {error_msg}")
@@ -569,7 +201,6 @@ class CallOrchestrator:
                 self._current_patient = None
                 return None
 
-            # Normalize phone numbers for comparison (remove spaces, dashes, parentheses)
             def normalize_phone(p: str) -> str:
                 return ''.join(c for c in p if c.isdigit() or c == '+')
 
@@ -601,10 +232,8 @@ class CallOrchestrator:
                 register_bridge(stream_id, bridge)
                 self._twilio_bridge = bridge
 
-                # Build TwiML URL — the backend serves the TwiML
                 backend_host = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
                 if not backend_host:
-                    # Fallback to CORS origin or localhost
                     backend_host = os.getenv("NEXT_PUBLIC_API_URL", "http://localhost:8000").rstrip("/")
                 twiml_url = f"{backend_host}/api/twilio/twiml/{stream_id}"
 
@@ -638,7 +267,6 @@ class CallOrchestrator:
         if self.on_call_started:
             await self.on_call_started(call)
 
-        # Start the conversation (AI greeting)
         await self._voice_service.start_conversation()
 
         return call
@@ -648,20 +276,18 @@ class CallOrchestrator:
         if not self._current_call:
             return
 
-        # Capture and clear references first to prevent re-entrant calls
-        # (disconnect -> on_session_ended -> end_call again)
         call = self._current_call
         patient = self._current_patient
         voice_service = self._voice_service
         call_mode = self._call_mode
 
-        try:
-            # Required notifications for wrong number / disconnected outcomes.
-            await self._maybe_send_issue_email(call, outcome)
+        self._sync_status_callback()
 
-            # Auto-send callback SMS for all non-transferred ended calls.
+        try:
+            await self._notifications.maybe_send_issue_email(call, outcome)
+
             if outcome != CallOutcome.TRANSFERRED:
-                await self._send_sms_for_call(
+                await self._notifications.send_sms_for_call(
                     call=call,
                     patient=patient,
                     message_type="callback_info",
@@ -677,7 +303,6 @@ class CallOrchestrator:
             call_log_provider = get_call_log_provider()
             await call_log_provider.end_call(call.call_id, outcome)
 
-            # Update patient record
             if patient:
                 patient_provider = get_patient_provider()
                 await patient_provider.update_patient_after_call(
@@ -685,7 +310,6 @@ class CallOrchestrator:
                     outcome.value,
                 )
 
-            # Disconnect voice service
             if voice_service:
                 await voice_service.disconnect()
 
@@ -695,9 +319,7 @@ class CallOrchestrator:
             if self.on_status_update:
                 await self.on_status_update("Call Ended")
         finally:
-            self._sms_locks.pop(call.call_id, None)
-            self._sms_sent_call_ids.discard(call.call_id)
-            self._email_sent_call_ids.discard(call.call_id)
+            self._notifications.cleanup_call(call.call_id)
             self._twilio_call_sid = None
             self._voicemail_handled = False
             self._web_voicemail_simulated = False
@@ -715,7 +337,6 @@ class CallOrchestrator:
 
         call_log_provider = get_call_log_provider()
 
-        # Only log complete transcripts
         if speaker == "ai_complete":
             await call_log_provider.add_transcript(self._current_call.call_id, "ai", text)
             if self.on_transcript_update:
@@ -724,11 +345,10 @@ class CallOrchestrator:
             await call_log_provider.add_transcript(self._current_call.call_id, "patient", text)
             if self.on_transcript_update:
                 await self.on_transcript_update("patient", text)
-            # Web-mode simulation of voicemail detection (Feature 3 parity).
             if (
                 self._call_mode == "web"
                 and not self._web_voicemail_simulated
-                and self._looks_like_voicemail_signal(text)
+                and looks_like_voicemail_signal(text)
             ):
                 self._web_voicemail_simulated = True
                 await call_log_provider.update_call(self._current_call.call_id, voicemail_left=True)
@@ -737,7 +357,6 @@ class CallOrchestrator:
                     await self.on_status_update("Web simulation: voicemail detected from transcript")
                 await self.end_call(CallOutcome.VOICEMAIL)
         elif speaker == "ai":
-            # Streaming delta - just forward for real-time display
             if self.on_transcript_update:
                 await self.on_transcript_update("ai_delta", text)
 
@@ -751,166 +370,18 @@ class CallOrchestrator:
         if not self._current_call:
             return
 
-        call_log_provider = get_call_log_provider()
+        self._sync_status_callback()
 
         if name == "transfer_to_scheduler":
             if args.get("confirmed"):
-                # Check queue state before transfer
-                queue_provider = get_queue_provider()
-                queue_state = queue_provider.get_state()
-
-                await call_log_provider.update_call(
-                    self._current_call.call_id,
-                    transfer_attempted=True,
+                outcome = await self._transfer.execute_transfer(
+                    call=self._current_call,
+                    patient=self._current_patient,
+                    call_mode=self._call_mode,
+                    twilio_call_sid=self._twilio_call_sid,
+                    notification_service=self._notifications,
                 )
-
-                if await self._recent_patient_indicates_wrong_number(self._current_call.call_id):
-                    if self.on_status_update:
-                        await self.on_status_update("Transfer canceled - possible wrong number detected")
-                    await self.end_call(CallOutcome.WRONG_NUMBER)
-                    return
-
-                patient_language = self._normalize_language_code(
-                    self._current_patient.language if self._current_patient else None
-                )
-                target_queue = self._resolve_transfer_queue_for_language(
-                    self._current_patient.language if self._current_patient else None
-                )
-                queue_info = self._find_queue_by_name(queue_state, target_queue)
-
-                if queue_info is None:
-                    await self._log_call_event(
-                        self._current_call.call_id,
-                        f"Transfer blocked: target queue '{target_queue}' not found for language '{patient_language}'",
-                    )
-                    if self.on_status_update:
-                        await self.on_status_update(
-                            f"Transfer unavailable for language '{patient_language}' (queue not configured)"
-                        )
-                    await self._send_sms_for_call(
-                        call=self._current_call,
-                        patient=self._current_patient,
-                        message_type="callback_info",
-                        reason="transfer_queue_missing",
-                        call_mode=self._call_mode,
-                    )
-                    await self.end_call(CallOutcome.CALLBACK_REQUESTED)
-                    return
-
-                queue_has_capacity = (
-                    queue_state.outbound_allowed
-                    and queue_info.AvailableAgents >= 1
-                )
-                if queue_has_capacity:
-                    transfer_context = (
-                        f"lang={patient_language} queue={target_queue} "
-                        f"available_agents={queue_info.AvailableAgents}"
-                    )
-                    await self._log_call_event(
-                        self._current_call.call_id,
-                        f"Transfer target resolved: {transfer_context}",
-                    )
-
-                    if self._call_mode == "twilio":
-                        destination = self._resolve_transfer_destination_for_queue(target_queue)
-                        if not destination:
-                            await self._log_call_event(
-                                self._current_call.call_id,
-                                f"Transfer blocked: no destination configured for queue '{target_queue}'",
-                            )
-                            if self.on_status_update:
-                                await self.on_status_update(
-                                    f"Transfer unavailable for queue '{target_queue}' (missing destination config)"
-                                )
-                            await self._send_sms_for_call(
-                                call=self._current_call,
-                                patient=self._current_patient,
-                                message_type="callback_info",
-                                reason="transfer_destination_missing",
-                                call_mode=self._call_mode,
-                            )
-                            await self.end_call(CallOutcome.CALLBACK_REQUESTED)
-                            return
-
-                        if not self._twilio_call_sid:
-                            await self._log_call_event(
-                                self._current_call.call_id,
-                                "Transfer blocked: active Twilio call SID unavailable",
-                            )
-                            if self.on_status_update:
-                                await self.on_status_update("Transfer unavailable right now; callback SMS sent")
-                            await self._send_sms_for_call(
-                                call=self._current_call,
-                                patient=self._current_patient,
-                                message_type="callback_info",
-                                reason="transfer_missing_twilio_sid",
-                                call_mode=self._call_mode,
-                            )
-                            await self.end_call(CallOutcome.CALLBACK_REQUESTED)
-                            return
-
-                        try:
-                            from app.services.twilio_voice_service import transfer_call_to_destination
-                            await asyncio.to_thread(
-                                transfer_call_to_destination,
-                                self._twilio_call_sid,
-                                destination,
-                            )
-                            await self._log_call_event(
-                                self._current_call.call_id,
-                                f"Twilio transfer initiated to queue '{target_queue}' destination='{destination}'",
-                            )
-                        except Exception as e:
-                            await self._log_call_event(
-                                self._current_call.call_id,
-                                f"Transfer failed for queue '{target_queue}': {str(e)}",
-                            )
-                            if self.on_status_update:
-                                await self.on_status_update(
-                                    f"Transfer failed for queue '{target_queue}'; callback SMS sent"
-                                )
-                            await self._send_sms_for_call(
-                                call=self._current_call,
-                                patient=self._current_patient,
-                                message_type="callback_info",
-                                reason="transfer_failed",
-                                call_mode=self._call_mode,
-                            )
-                            await self.end_call(CallOutcome.CALLBACK_REQUESTED)
-                            return
-
-                    # Transfer would succeed
-                    await call_log_provider.update_call(
-                        self._current_call.call_id,
-                        transfer_success=True,
-                    )
-                    if self.on_status_update:
-                        await self.on_status_update(
-                            f"Transferring to scheduler queue '{target_queue}' ({patient_language})..."
-                        )
-
-                    # End call as transferred
-                    await self.end_call(CallOutcome.TRANSFERRED)
-                else:
-                    # Transfer not safe
-                    await self._log_call_event(
-                        self._current_call.call_id,
-                        (
-                            f"Transfer unavailable: queue '{target_queue}' has no capacity "
-                            f"(available_agents={queue_info.AvailableAgents}, "
-                            f"outbound_allowed={queue_state.outbound_allowed})"
-                        ),
-                    )
-                    if self.on_status_update:
-                        await self.on_status_update("Transfer not available - target language queue busy")
-                    await self._send_sms_for_call(
-                        call=self._current_call,
-                        patient=self._current_patient,
-                        message_type="callback_info",
-                        reason="transfer_queue_unavailable",
-                        call_mode=self._call_mode,
-                    )
-                    await self.end_call(CallOutcome.CALLBACK_REQUESTED)
+                await self.end_call(outcome)
 
         elif name == "end_call":
             reason = args.get("reason", "completed")
@@ -931,7 +402,7 @@ class CallOrchestrator:
             await self.end_call(outcome)
 
         elif name == "send_sms":
-            await self._send_sms_for_call(
+            await self._notifications.send_sms_for_call(
                 call=self._current_call,
                 patient=self._current_patient,
                 message_type=args.get("message_type", "callback_info"),

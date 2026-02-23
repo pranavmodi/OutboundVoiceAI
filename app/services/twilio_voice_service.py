@@ -15,6 +15,22 @@ from app.services.realtime_voice import RealtimeVoiceService
 
 logger = logging.getLogger(__name__)
 
+# Lazily-cached Twilio REST client (one per process).
+_twilio_client: Optional[Client] = None
+
+
+def _get_twilio_client() -> Client:
+    """Return a cached Twilio Client, creating one on first use."""
+    global _twilio_client
+    if _twilio_client is None:
+        account_sid = os.getenv("TWILIO_ACCOUNT_SID", "")
+        auth_token = os.getenv("TWILIO_AUTH_TOKEN", "")
+        if not account_sid or not auth_token:
+            raise RuntimeError("Twilio is not configured. Set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN.")
+        _twilio_client = Client(account_sid, auth_token)
+    return _twilio_client
+
+
 # Registry of pending Twilio streams keyed by stream_id.
 # When the orchestrator places a call it registers a bridge here;
 # when Twilio connects the media stream WS, we look it up.
@@ -122,11 +138,9 @@ def place_twilio_call(
             "Twilio calls are disabled. Set ALLOW_TWILIO_CALLS=true to enable."
         )
 
-    account_sid = os.getenv("TWILIO_ACCOUNT_SID", "")
-    auth_token = os.getenv("TWILIO_AUTH_TOKEN", "")
     from_number = os.getenv("TWILIO_FROM_NUMBER", "")
 
-    client = Client(account_sid, auth_token)
+    client = _get_twilio_client()
     create_kwargs = {
         "to": to_number,
         "from_": from_number,
@@ -150,11 +164,6 @@ def generate_stream_id() -> str:
 
 def play_voicemail_and_hangup(call_sid: str, message: str):
     """Update an in-progress Twilio call to play voicemail then hang up."""
-    account_sid = os.getenv("TWILIO_ACCOUNT_SID", "")
-    auth_token = os.getenv("TWILIO_AUTH_TOKEN", "")
-    if not account_sid or not auth_token:
-        raise RuntimeError("Twilio is not configured. Set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN.")
-
     escaped = html.escape(message, quote=True)
     twiml = (
         '<?xml version="1.0" encoding="UTF-8"?>'
@@ -164,48 +173,36 @@ def play_voicemail_and_hangup(call_sid: str, message: str):
         "</Response>"
     )
 
-    client = Client(account_sid, auth_token)
+    client = _get_twilio_client()
     client.calls(call_sid).update(twiml=twiml)
 
 
 def transfer_call_to_destination(call_sid: str, destination: str):
     """Transfer an in-progress Twilio call to a PSTN/SIP destination."""
-    account_sid = os.getenv("TWILIO_ACCOUNT_SID", "")
-    auth_token = os.getenv("TWILIO_AUTH_TOKEN", "")
     from_number = os.getenv("TWILIO_FROM_NUMBER", "")
-    if not account_sid or not auth_token:
-        raise RuntimeError("Twilio is not configured. Set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN.")
     if not destination or not destination.strip():
         raise RuntimeError("Missing transfer destination")
 
     destination = destination.strip()
     escaped_destination = html.escape(destination, quote=True)
 
-    # Support SIP endpoints (e.g., sip:queue@pbx.local) and normal numbers/DIDs.
+    # Build inner target: <Sip> for SIP endpoints, <Number> for PSTN.
     if destination.lower().startswith("sip:"):
-        dial_target = f"<Sip>{escaped_destination}</Sip>"
+        inner = f"<Sip>{escaped_destination}</Sip>"
+        dial_attrs = ""
     else:
-        caller_id_attr = ""
+        inner = f"<Number>{escaped_destination}</Number>"
+        dial_attrs = ""
         if from_number:
             escaped_caller_id = html.escape(from_number, quote=True)
-            caller_id_attr = f' callerId="{escaped_caller_id}"'
-        dial_target = f"<Number>{escaped_destination}</Number>"
-        dial_target = f"<Dial{caller_id_attr}>{dial_target}</Dial>"
+            dial_attrs = f' callerId="{escaped_caller_id}"'
 
-    if destination.lower().startswith("sip:"):
-        twiml = (
-            '<?xml version="1.0" encoding="UTF-8"?>'
-            "<Response>"
-            f"<Dial>{dial_target}</Dial>"
-            "</Response>"
-        )
-    else:
-        twiml = (
-            '<?xml version="1.0" encoding="UTF-8"?>'
-            "<Response>"
-            f"{dial_target}"
-            "</Response>"
-        )
+    twiml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        "<Response>"
+        f"<Dial{dial_attrs}>{inner}</Dial>"
+        "</Response>"
+    )
 
-    client = Client(account_sid, auth_token)
+    client = _get_twilio_client()
     client.calls(call_sid).update(twiml=twiml)

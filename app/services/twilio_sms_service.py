@@ -1,9 +1,27 @@
 """Twilio SMS helper for outbound callback notifications."""
 import os
+from typing import Optional
 from twilio.rest import Client
 
 
 TWILIO_OPTOUT_ERROR_CODE = 21610
+
+# Lazily-cached Twilio REST client (one per process).
+_twilio_client: Optional[Client] = None
+
+
+def _get_twilio_client() -> Client:
+    """Return a cached Twilio Client, creating one on first use."""
+    global _twilio_client
+    if _twilio_client is None:
+        account_sid = os.getenv("TWILIO_ACCOUNT_SID", "")
+        auth_token = os.getenv("TWILIO_AUTH_TOKEN", "")
+        if not account_sid or not auth_token:
+            raise RuntimeError(
+                "Twilio SMS is not configured. Set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN."
+            )
+        _twilio_client = Client(account_sid, auth_token)
+    return _twilio_client
 
 
 def normalize_phone_number(phone: str) -> str:
@@ -72,17 +90,13 @@ def send_sms(to_number: str, message_body: str) -> str:
     Raises:
         RuntimeError: If Twilio credentials/config are missing.
     """
-    account_sid = os.getenv("TWILIO_ACCOUNT_SID", "")
-    auth_token = os.getenv("TWILIO_AUTH_TOKEN", "")
     from_number = os.getenv("TWILIO_SMS_FROM_NUMBER", "") or os.getenv("TWILIO_FROM_NUMBER", "")
-
-    if not account_sid or not auth_token or not from_number:
+    if not from_number:
         raise RuntimeError(
-            "Twilio SMS is not configured. Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, "
-            "and TWILIO_SMS_FROM_NUMBER (or TWILIO_FROM_NUMBER)."
+            "Twilio SMS is not configured. Set TWILIO_SMS_FROM_NUMBER (or TWILIO_FROM_NUMBER)."
         )
 
-    client = Client(account_sid, auth_token)
+    client = _get_twilio_client()
     message = client.messages.create(
         to=to_number,
         from_=from_number,

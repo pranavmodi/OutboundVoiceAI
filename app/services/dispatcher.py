@@ -302,7 +302,12 @@ class AutoCallDispatcher:
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                loop.create_task(self._persist_event(decision, detail))
+                from app.services import safe_create_task
+                safe_create_task(
+                    self._persist_event(decision, detail),
+                    logger,
+                    f"dispatcher_persist_event decision={decision}",
+                )
         except RuntimeError:
             pass
 

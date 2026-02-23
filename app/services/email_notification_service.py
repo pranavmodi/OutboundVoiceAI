@@ -8,9 +8,6 @@ from typing import Optional
 from app.models import CallLog
 
 
-DEFAULT_RECIPIENT = "nehapipada39@gmail.com"
-
-
 def _is_truthy(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
@@ -52,7 +49,9 @@ def send_disconnected_number_email(call: CallLog, status: str) -> str:
 
 
 def _send_email(subject: str, body: str) -> str:
-    recipient = os.getenv("EMAIL_NOTIFICATION_RECIPIENT", DEFAULT_RECIPIENT).strip()
+    recipient = os.getenv("EMAIL_NOTIFICATION_RECIPIENT", "").strip()
+    if not recipient:
+        raise RuntimeError("Email recipient is not configured. Set EMAIL_NOTIFICATION_RECIPIENT.")
     smtp_host = os.getenv("SMTP_HOST", "").strip()
     smtp_port = int(os.getenv("SMTP_PORT", "587").strip() or "587")
     smtp_user = os.getenv("SMTP_USERNAME", "").strip()
