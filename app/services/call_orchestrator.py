@@ -1,5 +1,6 @@
 """Call orchestrator service managing the call lifecycle."""
 import asyncio
+import json
 import logging
 import os
 import re
@@ -269,6 +270,64 @@ class CallOrchestrator:
         # Broader fallback for variants like "leave your number and name".
         return "leave your" in lowered and ("name" in lowered or "number" in lowered)
 
+    @staticmethod
+    def _normalize_language_code(language: Optional[object]) -> str:
+        if language is None:
+            return "en"
+        value = getattr(language, "value", language)
+        normalized = str(value).strip().lower()
+        return normalized or "en"
+
+    @staticmethod
+    def _load_json_object_env(var_name: str) -> dict[str, str]:
+        raw = os.getenv(var_name, "").strip()
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return {
+                    str(k).strip().lower(): str(v).strip()
+                    for k, v in parsed.items()
+                    if str(v).strip()
+                }
+        except Exception:
+            logger.warning("Invalid JSON in %s; expected an object map", var_name)
+        return {}
+
+    @classmethod
+    def _resolve_transfer_queue_for_language(cls, language: Optional[object]) -> str:
+        language_code = cls._normalize_language_code(language)
+
+        default_map = {
+            "en": "scheduling_en",
+            "es": "scheduling_es",
+            # Default non-mapped languages to English queue.
+            "zh": "scheduling_en",
+        }
+        configured_map = cls._load_json_object_env("LANGUAGE_QUEUE_MAP")
+        mapping = {**default_map, **configured_map}
+        return mapping.get(language_code) or mapping.get("en", "scheduling_en")
+
+    @classmethod
+    def _resolve_transfer_destination_for_queue(cls, queue_name: str) -> Optional[str]:
+        configured_targets = cls._load_json_object_env("QUEUE_TRANSFER_TARGETS")
+        if queue_name in configured_targets:
+            return configured_targets[queue_name]
+        # Optional per-queue environment override, e.g. TRANSFER_TARGET_SCHEDULING_EN.
+        env_name = f"TRANSFER_TARGET_{queue_name.upper()}"
+        value = os.getenv(env_name, "").strip()
+        if value:
+            return value
+        return None
+
+    @staticmethod
+    def _find_queue_by_name(queue_state, queue_name: str):
+        for queue in queue_state.queues:
+            if (queue.Queue or "").strip().lower() == queue_name.strip().lower():
+                return queue
+        return None
+
     async def _recent_patient_indicates_wrong_number(self, call_id: str) -> bool:
         """Inspect recent patient transcript lines for wrong-number cues."""
         call_log_provider = get_call_log_provider()
@@ -468,7 +527,11 @@ class CallOrchestrator:
         self._voice_service.on_session_ended = self._handle_session_ended
 
         # Connect to OpenAI
-        success = await self._voice_service.connect(call.call_id, patient.name)
+        success = await self._voice_service.connect(
+            call.call_id,
+            patient.name,
+            self._normalize_language_code(patient.language),
+        )
         if not success:
             await call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
             self._voice_service = None
@@ -707,21 +770,147 @@ class CallOrchestrator:
                     await self.end_call(CallOutcome.WRONG_NUMBER)
                     return
 
-                if queue_state.outbound_allowed and queue_state.global_agents_available >= 1:
+                patient_language = self._normalize_language_code(
+                    self._current_patient.language if self._current_patient else None
+                )
+                target_queue = self._resolve_transfer_queue_for_language(
+                    self._current_patient.language if self._current_patient else None
+                )
+                queue_info = self._find_queue_by_name(queue_state, target_queue)
+
+                if queue_info is None:
+                    await self._log_call_event(
+                        self._current_call.call_id,
+                        f"Transfer blocked: target queue '{target_queue}' not found for language '{patient_language}'",
+                    )
+                    if self.on_status_update:
+                        await self.on_status_update(
+                            f"Transfer unavailable for language '{patient_language}' (queue not configured)"
+                        )
+                    await self._send_sms_for_call(
+                        call=self._current_call,
+                        patient=self._current_patient,
+                        message_type="callback_info",
+                        reason="transfer_queue_missing",
+                        call_mode=self._call_mode,
+                    )
+                    await self.end_call(CallOutcome.CALLBACK_REQUESTED)
+                    return
+
+                queue_has_capacity = (
+                    queue_state.outbound_allowed
+                    and queue_info.AvailableAgents >= 1
+                )
+                if queue_has_capacity:
+                    transfer_context = (
+                        f"lang={patient_language} queue={target_queue} "
+                        f"available_agents={queue_info.AvailableAgents}"
+                    )
+                    await self._log_call_event(
+                        self._current_call.call_id,
+                        f"Transfer target resolved: {transfer_context}",
+                    )
+
+                    if self._call_mode == "twilio":
+                        destination = self._resolve_transfer_destination_for_queue(target_queue)
+                        if not destination:
+                            await self._log_call_event(
+                                self._current_call.call_id,
+                                f"Transfer blocked: no destination configured for queue '{target_queue}'",
+                            )
+                            if self.on_status_update:
+                                await self.on_status_update(
+                                    f"Transfer unavailable for queue '{target_queue}' (missing destination config)"
+                                )
+                            await self._send_sms_for_call(
+                                call=self._current_call,
+                                patient=self._current_patient,
+                                message_type="callback_info",
+                                reason="transfer_destination_missing",
+                                call_mode=self._call_mode,
+                            )
+                            await self.end_call(CallOutcome.CALLBACK_REQUESTED)
+                            return
+
+                        if not self._twilio_call_sid:
+                            await self._log_call_event(
+                                self._current_call.call_id,
+                                "Transfer blocked: active Twilio call SID unavailable",
+                            )
+                            if self.on_status_update:
+                                await self.on_status_update("Transfer unavailable right now; callback SMS sent")
+                            await self._send_sms_for_call(
+                                call=self._current_call,
+                                patient=self._current_patient,
+                                message_type="callback_info",
+                                reason="transfer_missing_twilio_sid",
+                                call_mode=self._call_mode,
+                            )
+                            await self.end_call(CallOutcome.CALLBACK_REQUESTED)
+                            return
+
+                        try:
+                            from app.services.twilio_voice_service import transfer_call_to_destination
+                            await asyncio.to_thread(
+                                transfer_call_to_destination,
+                                self._twilio_call_sid,
+                                destination,
+                            )
+                            await self._log_call_event(
+                                self._current_call.call_id,
+                                f"Twilio transfer initiated to queue '{target_queue}' destination='{destination}'",
+                            )
+                        except Exception as e:
+                            await self._log_call_event(
+                                self._current_call.call_id,
+                                f"Transfer failed for queue '{target_queue}': {str(e)}",
+                            )
+                            if self.on_status_update:
+                                await self.on_status_update(
+                                    f"Transfer failed for queue '{target_queue}'; callback SMS sent"
+                                )
+                            await self._send_sms_for_call(
+                                call=self._current_call,
+                                patient=self._current_patient,
+                                message_type="callback_info",
+                                reason="transfer_failed",
+                                call_mode=self._call_mode,
+                            )
+                            await self.end_call(CallOutcome.CALLBACK_REQUESTED)
+                            return
+
                     # Transfer would succeed
                     await call_log_provider.update_call(
                         self._current_call.call_id,
                         transfer_success=True,
                     )
                     if self.on_status_update:
-                        await self.on_status_update("Transferring to scheduler...")
+                        await self.on_status_update(
+                            f"Transferring to scheduler queue '{target_queue}' ({patient_language})..."
+                        )
 
                     # End call as transferred
                     await self.end_call(CallOutcome.TRANSFERRED)
                 else:
                     # Transfer not safe
+                    await self._log_call_event(
+                        self._current_call.call_id,
+                        (
+                            f"Transfer unavailable: queue '{target_queue}' has no capacity "
+                            f"(available_agents={queue_info.AvailableAgents}, "
+                            f"outbound_allowed={queue_state.outbound_allowed})"
+                        ),
+                    )
                     if self.on_status_update:
-                        await self.on_status_update("Transfer not available - queue busy")
+                        await self.on_status_update("Transfer not available - target language queue busy")
+                    await self._send_sms_for_call(
+                        call=self._current_call,
+                        patient=self._current_patient,
+                        message_type="callback_info",
+                        reason="transfer_queue_unavailable",
+                        call_mode=self._call_mode,
+                    )
+                    await self.end_call(CallOutcome.CALLBACK_REQUESTED)
 
         elif name == "end_call":
             reason = args.get("reason", "completed")

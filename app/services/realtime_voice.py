@@ -195,7 +195,32 @@ class RealtimeVoiceService:
         self.on_error: Optional[Callable[[str], Any]] = None
         self.on_function_call: Optional[Callable[[str, dict], Any]] = None
 
-    async def connect(self, call_id: str, patient_name: str) -> bool:
+    @staticmethod
+    def _normalize_language_code(language: Optional[str]) -> str:
+        value = (language or "en").strip().lower()
+        return value if value else "en"
+
+    @classmethod
+    def _language_instruction(cls, language: Optional[str]) -> str:
+        code = cls._normalize_language_code(language)
+        if code == "es":
+            return (
+                "IMPORTANT LANGUAGE RULE: The patient preference is Spanish ('es'). "
+                "Speak in natural Spanish for the entire call, including greeting, questions, and transfer/callback phrasing. "
+                "Only switch to English if the patient explicitly asks you to."
+            )
+        if code == "zh":
+            return (
+                "IMPORTANT LANGUAGE RULE: The patient preference is Chinese ('zh'). "
+                "Speak in simple, clear Mandarin Chinese for the entire call when possible. "
+                "If Mandarin is not possible for a specific phrase, use very simple English and offer transfer."
+            )
+        return (
+            "IMPORTANT LANGUAGE RULE: The patient preference is English ('en'). "
+            "Conduct the call in English."
+        )
+
+    async def connect(self, call_id: str, patient_name: str, patient_language: str = "en") -> bool:
         """Connect to OpenAI Realtime API and start a session."""
         # Validate API key first
         if not self._api_key:
@@ -230,7 +255,7 @@ class RealtimeVoiceService:
             )
 
             # Configure the session
-            await self._configure_session(patient_name)
+            await self._configure_session(patient_name, patient_language)
 
             # Start listening for messages
             asyncio.create_task(self._listen())
@@ -254,14 +279,18 @@ class RealtimeVoiceService:
                 await self.on_error(error_msg)
             return False
 
-    async def _configure_session(self, patient_name: str):
+    async def _configure_session(self, patient_name: str, patient_language: str = "en"):
         """Configure the realtime session."""
+        language_instruction = self._language_instruction(patient_language)
         # Update session with instructions
         config = {
             "type": "session.update",
             "session": {
                 "modalities": ["text", "audio"],
-                "instructions": SYSTEM_INSTRUCTIONS.replace("{patient_name}", patient_name),
+                "instructions": (
+                    f"{SYSTEM_INSTRUCTIONS.replace('{patient_name}', patient_name)}\n\n"
+                    f"{language_instruction}"
+                ),
                 "voice": "alloy",
                 "input_audio_format": self._audio_format,
                 "output_audio_format": self._audio_format,

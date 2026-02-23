@@ -166,3 +166,46 @@ def play_voicemail_and_hangup(call_sid: str, message: str):
 
     client = Client(account_sid, auth_token)
     client.calls(call_sid).update(twiml=twiml)
+
+
+def transfer_call_to_destination(call_sid: str, destination: str):
+    """Transfer an in-progress Twilio call to a PSTN/SIP destination."""
+    account_sid = os.getenv("TWILIO_ACCOUNT_SID", "")
+    auth_token = os.getenv("TWILIO_AUTH_TOKEN", "")
+    from_number = os.getenv("TWILIO_FROM_NUMBER", "")
+    if not account_sid or not auth_token:
+        raise RuntimeError("Twilio is not configured. Set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN.")
+    if not destination or not destination.strip():
+        raise RuntimeError("Missing transfer destination")
+
+    destination = destination.strip()
+    escaped_destination = html.escape(destination, quote=True)
+
+    # Support SIP endpoints (e.g., sip:queue@pbx.local) and normal numbers/DIDs.
+    if destination.lower().startswith("sip:"):
+        dial_target = f"<Sip>{escaped_destination}</Sip>"
+    else:
+        caller_id_attr = ""
+        if from_number:
+            escaped_caller_id = html.escape(from_number, quote=True)
+            caller_id_attr = f' callerId="{escaped_caller_id}"'
+        dial_target = f"<Number>{escaped_destination}</Number>"
+        dial_target = f"<Dial{caller_id_attr}>{dial_target}</Dial>"
+
+    if destination.lower().startswith("sip:"):
+        twiml = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            "<Response>"
+            f"<Dial>{dial_target}</Dial>"
+            "</Response>"
+        )
+    else:
+        twiml = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            "<Response>"
+            f"{dial_target}"
+            "</Response>"
+        )
+
+    client = Client(account_sid, auth_token)
+    client.calls(call_sid).update(twiml=twiml)
