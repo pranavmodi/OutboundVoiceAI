@@ -493,7 +493,7 @@ export default function Dashboard() {
               <LayoutDashboard className="h-4 w-4" />
               Dashboard
             </TabsTrigger>
-            <TabsTrigger value="history" className="hidden flex items-center gap-2 rounded-md px-4 text-sm">
+            <TabsTrigger value="history" className="flex items-center gap-2 rounded-md px-4 text-sm">
               <History className="h-4 w-4" />
               History
             </TabsTrigger>

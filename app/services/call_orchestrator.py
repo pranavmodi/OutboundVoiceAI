@@ -386,6 +386,7 @@ class CallOrchestrator:
         elif name == "end_call":
             reason = args.get("reason", "completed")
             callback = args.get("callback_requested", False)
+            preferred_callback_time = str(args.get("preferred_callback_time", "") or "").strip()
 
             outcome_map = {
                 "patient_busy": CallOutcome.CALLBACK_REQUESTED,
@@ -398,6 +399,19 @@ class CallOrchestrator:
 
             if callback:
                 outcome = CallOutcome.CALLBACK_REQUESTED
+
+            if preferred_callback_time:
+                call_log_provider = get_call_log_provider()
+                await call_log_provider.update_call(
+                    self._current_call.call_id,
+                    preferred_callback_time=preferred_callback_time,
+                )
+                self._current_call.preferred_callback_time = preferred_callback_time
+                await call_log_provider.add_transcript(
+                    self._current_call.call_id,
+                    "system",
+                    f"Preferred callback captured: {preferred_callback_time}",
+                )
 
             await self.end_call(outcome)
 

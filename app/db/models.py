@@ -58,6 +58,7 @@ class CallLogRow(Base):
     transfer_success: Mapped[bool] = mapped_column(Boolean, default=False)
     voicemail_left: Mapped[bool] = mapped_column(Boolean, default=False)
     sms_sent: Mapped[bool] = mapped_column(Boolean, default=False)
+    preferred_callback_time: Mapped[str | None] = mapped_column(String(255), nullable=True)
     queue_snapshot: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     transcript: Mapped[list] = mapped_column(JSONB, default=list)
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)

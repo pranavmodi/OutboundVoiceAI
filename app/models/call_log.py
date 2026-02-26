@@ -54,6 +54,7 @@ class CallLog:
     transfer_success: bool = False
     voicemail_left: bool = False
     sms_sent: bool = False
+    preferred_callback_time: Optional[str] = None
 
     # Queue state at dial time
     queue_snapshot: Optional[dict] = None
@@ -92,6 +93,7 @@ class CallLog:
             "transfer_success": self.transfer_success,
             "voicemail_left": self.voicemail_left,
             "sms_sent": self.sms_sent,
+            "preferred_callback_time": self.preferred_callback_time,
             "queue_snapshot": self.queue_snapshot,
             "transcript": [t.to_dict() for t in self.transcript],
             "error_code": self.error_code,

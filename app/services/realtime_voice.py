@@ -58,6 +58,7 @@ Your secondary goal is to answer general, non-clinical, non-diagnostic company q
 ## If Patient is Busy
 - Ask for permission to note a better callback time.
 - Offer to send a text message with the callback number.
+- If the patient gives a preferred callback time, include it in `end_call.preferred_callback_time`.
 - Thank them and end politely.
 
 ## If Patient Says Wrong Number
@@ -334,6 +335,10 @@ class RealtimeVoiceService:
                                 "callback_requested": {
                                     "type": "boolean",
                                     "description": "Whether the patient requested a callback",
+                                },
+                                "preferred_callback_time": {
+                                    "type": "string",
+                                    "description": "Optional preferred callback preference, e.g. 'tomorrow 3 PM' or 'after 1 hour'.",
                                 },
                             },
                             "required": ["reason"],

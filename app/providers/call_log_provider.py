@@ -32,6 +32,7 @@ def _row_to_call_log(row: CallLogRow) -> CallLog:
     cl.transfer_success = row.transfer_success
     cl.voicemail_left = row.voicemail_left
     cl.sms_sent = row.sms_sent
+    cl.preferred_callback_time = row.preferred_callback_time
     cl.queue_snapshot = row.queue_snapshot
     cl.error_code = row.error_code
     cl.error_message = row.error_message
@@ -106,6 +107,7 @@ class CallLogProvider:
         cl.transfer_success = False
         cl.voicemail_left = False
         cl.sms_sent = False
+        cl.preferred_callback_time = None
         cl.queue_snapshot = queue_snapshot
         cl.transcript = []
         cl.error_code = None
@@ -182,6 +184,7 @@ class CallLogProvider:
         transfer_success: Optional[bool] = None,
         voicemail_left: Optional[bool] = None,
         sms_sent: Optional[bool] = None,
+        preferred_callback_time: Optional[str] = None,
         error_code: Optional[str] = None,
         error_message: Optional[str] = None,
     ):
@@ -199,6 +202,8 @@ class CallLogProvider:
                     row.voicemail_left = voicemail_left
                 if sms_sent is not None:
                     row.sms_sent = sms_sent
+                if preferred_callback_time is not None:
+                    row.preferred_callback_time = preferred_callback_time
                 if error_code is not None:
                     row.error_code = error_code
                 if error_message is not None:

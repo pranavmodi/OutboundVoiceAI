@@ -65,6 +65,7 @@ export interface CallLog {
   transfer_success: boolean;
   voicemail_left: boolean;
   sms_sent: boolean;
+  preferred_callback_time?: string | null;
   queue_snapshot: QueueState | null;
   transcript: TranscriptEntry[];
   error_code: string | null;
