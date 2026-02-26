@@ -310,8 +310,8 @@ class CallOrchestrator:
         try:
             await self._notifications.maybe_send_issue_email(call, outcome)
 
-            # Skip SMS for outcomes where the number is known-bad or transfer handled it
-            sms_skip_outcomes = (CallOutcome.TRANSFERRED, CallOutcome.WRONG_NUMBER, CallOutcome.DISCONNECTED)
+            # Skip SMS for outcomes where the number is known-bad, call failed, or transfer handled it
+            sms_skip_outcomes = (CallOutcome.TRANSFERRED, CallOutcome.WRONG_NUMBER, CallOutcome.DISCONNECTED, CallOutcome.FAILED)
             if outcome not in sms_skip_outcomes:
                 print(f"[CallOrchestrator] Sending SMS (callback_info) for call {call.call_id} to {patient.phone if patient else 'unknown'}")
                 await self._notifications.send_sms_for_call(

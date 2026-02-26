@@ -165,6 +165,8 @@ class AutoCallDispatcher:
                 self._dispatched_at = None
                 self._dispatched_patient_id = None
                 tick_decision = self._log_decision("self_healed", "Call ended (missed notification), returning to idle")
+                # Broadcast so the frontend refreshes call history
+                await broadcast_to_dashboards({"type": "call_ended", "call": {}})
             else:
                 tick_decision = {"decision": "call_active", "detail": "Call in progress, skipping", "state": self._state.value}
 
@@ -248,6 +250,29 @@ class AutoCallDispatcher:
                             f"Starting call to {candidate.name} ({candidate.phone}, mode={call_mode})")
 
                         orchestrator = get_orchestrator()
+
+                        # Wire up orchestrator callbacks so call_ended and
+                        # status updates reach dashboards even without a
+                        # voice-WS client (i.e. Twilio-driven calls).
+                        if not orchestrator.on_call_ended:
+                            async def _dispatcher_on_call_ended(call):
+                                self.notify_call_ended()
+                                await broadcast_to_dashboards({
+                                    "type": "call_ended",
+                                    "call": call.to_dict(),
+                                })
+
+                            orchestrator.on_call_ended = _dispatcher_on_call_ended
+
+                        if not orchestrator.on_status_update:
+                            async def _dispatcher_on_status(status):
+                                await broadcast_to_dashboards({
+                                    "type": "status_update",
+                                    "status": status,
+                                })
+
+                            orchestrator.on_status_update = _dispatcher_on_status
+
                         call = await orchestrator.start_call(candidate.patient_id, call_mode=call_mode)
 
                         if call is None:

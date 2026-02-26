@@ -17,7 +17,7 @@ if _env_path.exists():
 
 
 OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime"
-OPENAI_MODEL = "gpt-4o-realtime-preview-2024-12-17"
+OPENAI_MODEL = os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-2025-08-28")
 
 
 @dataclass
