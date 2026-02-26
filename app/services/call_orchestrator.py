@@ -28,6 +28,8 @@ class CallOrchestrator:
         self._current_patient: Optional[Patient] = None
         self._twilio_bridge = None  # TwilioMediaBridge when in twilio mode
         self._call_mode: str = "web"  # "web" or "twilio"
+        self._mock_mode: bool = False
+        self._mock_phone: str = ""
         self._twilio_call_sid: Optional[str] = None
         self._voicemail_handled: bool = False
         self._web_voicemail_simulated: bool = False
@@ -182,6 +184,8 @@ class CallOrchestrator:
         if call_mode == "twilio":
             settings_provider = get_settings_provider()
             settings = await settings_provider.get_settings()
+            self._mock_mode = settings.mock_mode
+            self._mock_phone = settings.mock_phone if settings.mock_mode else ""
             if not settings.allow_live_calls:
                 error_msg = "Live calls are disabled in system settings. Enable 'Allow Live Calls' first."
                 logger.warning(f"Twilio call blocked: {error_msg}")
@@ -224,6 +228,12 @@ class CallOrchestrator:
                 self._current_patient = None
                 return None
 
+            # In mock mode, redirect the Twilio call to the mock phone number
+            dial_number = patient.phone
+            if settings.mock_mode and settings.mock_phone:
+                dial_number = settings.mock_phone
+                print(f"[CallOrchestrator] MOCK MODE — redirecting call from {patient.phone} to mock_phone={dial_number}")
+
             try:
                 from app.services.twilio_voice_service import (
                     TwilioMediaBridge,
@@ -242,22 +252,24 @@ class CallOrchestrator:
                     backend_host = os.getenv("NEXT_PUBLIC_API_URL", "http://localhost:8000").rstrip("/")
                 twiml_url = f"{backend_host}/api/twilio/twiml/{stream_id}"
 
-                print(f"[CallOrchestrator] Placing Twilio call for {call.call_id} to {patient.phone}, twiml_url={twiml_url}")
+                mock_label = " [MOCK]" if settings.mock_mode else ""
+                print(f"[CallOrchestrator] Placing Twilio call{mock_label} for {call.call_id} to {dial_number}, twiml_url={twiml_url}")
                 if self.on_status_update:
-                    await self.on_status_update(f"Calling {patient.phone} via Twilio...")
+                    status_msg = f"Mock mode — calling {dial_number} (instead of {patient.phone})" if settings.mock_mode else f"Calling {patient.phone} via Twilio..."
+                    await self.on_status_update(status_msg)
 
                 status_callback_url = f"{backend_host}/api/twilio/status"
                 call_sid = place_twilio_call(
-                    to_number=patient.phone,
+                    to_number=dial_number,
                     twiml_url=twiml_url,
                     status_callback_url=status_callback_url,
                 )
                 self._twilio_call_sid = call_sid
                 self._voicemail_handled = False
-                print(f"[CallOrchestrator] Twilio call placed successfully: SID={call_sid}, call_id={call.call_id}, to={patient.phone}")
+                print(f"[CallOrchestrator] Twilio call placed successfully{mock_label}: SID={call_sid}, call_id={call.call_id}, to={dial_number}")
 
             except Exception as e:
-                print(f"[CallOrchestrator] Twilio call FAILED for {call.call_id} to {patient.phone}: {e}")
+                print(f"[CallOrchestrator] Twilio call FAILED for {call.call_id} to {dial_number}: {e}")
                 if self.on_error:
                     await self.on_error(f"Twilio call failed: {str(e)}")
                 await call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
@@ -289,6 +301,7 @@ class CallOrchestrator:
         patient = self._current_patient
         voice_service = self._voice_service
         call_mode = self._call_mode
+        twilio_call_sid = self._twilio_call_sid
 
         print(f"[CallOrchestrator] Ending call {call.call_id} with outcome={outcome.value} (mode={call_mode})")
 
@@ -297,7 +310,9 @@ class CallOrchestrator:
         try:
             await self._notifications.maybe_send_issue_email(call, outcome)
 
-            if outcome != CallOutcome.TRANSFERRED:
+            # Skip SMS for outcomes where the number is known-bad or transfer handled it
+            sms_skip_outcomes = (CallOutcome.TRANSFERRED, CallOutcome.WRONG_NUMBER, CallOutcome.DISCONNECTED)
+            if outcome not in sms_skip_outcomes:
                 print(f"[CallOrchestrator] Sending SMS (callback_info) for call {call.call_id} to {patient.phone if patient else 'unknown'}")
                 await self._notifications.send_sms_for_call(
                     call=call,
@@ -305,7 +320,20 @@ class CallOrchestrator:
                     message_type="callback_info",
                     reason="auto_end_not_transferred",
                     call_mode=call_mode,
+                    mock_mode=self._mock_mode,
+                    mock_phone=self._mock_phone,
                 )
+            else:
+                print(f"[CallOrchestrator] Skipping SMS for call {call.call_id} — outcome={outcome.value}")
+
+            # Hang up the Twilio phone call (skip for transfers/voicemail which handle it themselves)
+            if call_mode == "twilio" and twilio_call_sid and outcome not in (CallOutcome.TRANSFERRED, CallOutcome.VOICEMAIL):
+                try:
+                    from app.services.twilio_voice_service import hangup_twilio_call
+                    print(f"[CallOrchestrator] Hanging up Twilio call SID={twilio_call_sid}")
+                    await asyncio.to_thread(hangup_twilio_call, twilio_call_sid)
+                except Exception as e:
+                    logger.warning("Failed to hang up Twilio call %s: %s", twilio_call_sid, e)
 
             self._current_call = None
             self._current_patient = None
@@ -336,6 +364,8 @@ class CallOrchestrator:
             self._voicemail_handled = False
             self._web_voicemail_simulated = False
             self._call_mode = "web"
+            self._mock_mode = False
+            self._mock_phone = ""
 
     async def send_audio(self, audio_data: bytes):
         """Send audio from the patient (browser) to OpenAI."""
@@ -392,6 +422,8 @@ class CallOrchestrator:
                     call_mode=self._call_mode,
                     twilio_call_sid=self._twilio_call_sid,
                     notification_service=self._notifications,
+                    mock_mode=self._mock_mode,
+                    mock_phone=self._mock_phone,
                 )
                 await self.end_call(outcome)
 
@@ -434,6 +466,8 @@ class CallOrchestrator:
                 message_type=args.get("message_type", "callback_info"),
                 reason="ai_tool",
                 call_mode=self._call_mode,
+                mock_mode=self._mock_mode,
+                mock_phone=self._mock_phone,
             )
 
     async def _handle_voice_error(self, error: str):

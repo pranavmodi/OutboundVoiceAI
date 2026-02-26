@@ -123,6 +123,17 @@ export default function Dashboard() {
     if (dashboard.queueState) setQueueState(dashboard.queueState);
   }, [dashboard.queueState]);
 
+  // Refresh call history and patient list when a call ends (via dashboard WS)
+  useEffect(() => {
+    dashboard.onCallEnded.current = () => {
+      api.getCalls().then(setCalls);
+      api.getOutboundQueue().then((list) => {
+        setPatients(list);
+        setPatientsLastUpdated(new Date());
+      });
+    };
+  }, [api, dashboard.onCallEnded]);
+
   // Store refs to always have latest functions
   const voiceRef = useRef(voice);
   const audioRef = useRef(audio);
@@ -371,6 +382,11 @@ export default function Dashboard() {
     if (newSettings) setSettings(newSettings);
   }, [api]);
 
+  const handleSetMockMode = useCallback(async (enabled: boolean, mockPhone: string) => {
+    const newSettings = await api.setMockMode(enabled, mockPhone);
+    if (newSettings) setSettings(newSettings);
+  }, [api]);
+
   const handleUpdateAllowedPhones = useCallback(async (phones: string[]) => {
     const newSettings = await api.updateAllowedPhones(phones);
     if (newSettings) setSettings(newSettings);
@@ -556,6 +572,7 @@ export default function Dashboard() {
                       onUpdateQueueThresholds={handleUpdateQueueThresholds}
                       onUpdateDispatcherSettings={handleUpdateDispatcherSettings}
                       onSetAllowLiveCalls={handleSetAllowLiveCalls}
+                      onSetMockMode={handleSetMockMode}
                       onUpdateAllowedPhones={handleUpdateAllowedPhones}
                       onSetQueueSource={handleSetQueueSource}
                       onSetPatientSource={handleSetPatientSource}

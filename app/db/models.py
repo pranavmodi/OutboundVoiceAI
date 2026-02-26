@@ -87,6 +87,8 @@ class SystemSettingsRow(Base):
         String(64), ForeignKey("simulation_scenarios.id", ondelete="SET NULL"), nullable=True
     )
     call_mode: Mapped[str] = mapped_column(String(20), default="web")
+    mock_mode: Mapped[bool] = mapped_column(Boolean, default=False)
+    mock_phone: Mapped[str] = mapped_column(String(32), default="")
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=_utcnow, onupdate=_utcnow)
 
     __table_args__ = (

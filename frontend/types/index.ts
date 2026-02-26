@@ -186,6 +186,8 @@ export interface SystemSettings {
   patient_source: string;
   active_scenario_id: string | null;
   call_mode: string;
+  mock_mode: boolean;
+  mock_phone: string;
   can_make_calls: boolean;
   is_within_business_hours: boolean;
 }

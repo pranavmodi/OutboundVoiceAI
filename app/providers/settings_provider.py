@@ -104,6 +104,8 @@ def _row_to_settings(row: SystemSettingsRow) -> SystemSettings:
     settings.patient_source = row.patient_source if row.patient_source is not None else "simulation"
     settings.active_scenario_id = row.active_scenario_id
     settings.call_mode = row.call_mode if row.call_mode is not None else "web"
+    settings.mock_mode = row.mock_mode if row.mock_mode is not None else False
+    settings.mock_phone = row.mock_phone if row.mock_phone is not None else ""
     return settings
 
 
@@ -156,6 +158,8 @@ class SettingsProvider:
             row.allowed_phones = settings.allowed_phones
             row.queue_source = settings.queue_source
             row.patient_source = settings.patient_source
+            row.mock_mode = settings.mock_mode
+            row.mock_phone = settings.mock_phone
             await session.commit()
             return settings
 
@@ -371,6 +375,18 @@ class SettingsProvider:
                 row = SystemSettingsRow(id=1, business_hours={}, queue_thresholds={})
                 session.add(row)
             row.call_mode = call_mode
+            await session.commit()
+            return _row_to_settings(row)
+
+    async def set_mock_mode(self, enabled: bool, mock_phone: str = "") -> SystemSettings:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(SystemSettingsRow).where(SystemSettingsRow.id == 1))
+            row = result.scalar_one_or_none()
+            if row is None:
+                row = SystemSettingsRow(id=1, business_hours={}, queue_thresholds={})
+                session.add(row)
+            row.mock_mode = enabled
+            row.mock_phone = mock_phone
             await session.commit()
             return _row_to_settings(row)
 

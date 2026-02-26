@@ -34,6 +34,7 @@ interface UseDashboardWSReturn {
   clearDispatch: () => void;
   dispatcherEvents: DispatcherDecision[];
   pushEvent: (decision: string, detail: string) => void;
+  onCallEnded: React.MutableRefObject<(() => void) | null>;
 }
 
 export function useDashboardWS(): UseDashboardWSReturn {
@@ -44,6 +45,7 @@ export function useDashboardWS(): UseDashboardWSReturn {
   const [statistics, setStatistics] = useState<Statistics | null>(null);
   const [lastStatus, setLastStatus] = useState<string | null>(null);
   const [dispatchedPatient, setDispatchedPatient] = useState<DispatchedPatient | null>(null);
+  const onCallEndedRef = useRef<(() => void) | null>(null);
   const [dispatcherEvents, setDispatcherEvents] = useState<DispatcherDecision[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -118,7 +120,7 @@ export function useDashboardWS(): UseDashboardWSReturn {
 
           case "call_ended":
             setActiveCall(null);
-            // Refresh statistics
+            onCallEndedRef.current?.();
             break;
 
           case "status_update":
@@ -219,7 +221,7 @@ export function useDashboardWS(): UseDashboardWSReturn {
     };
   }, [connect, isDev]);
 
-  return { connected, queueState, activeCall, statistics, lastStatus, dispatchedPatient, clearDispatch, dispatcherEvents, pushEvent };
+  return { connected, queueState, activeCall, statistics, lastStatus, dispatchedPatient, clearDispatch, dispatcherEvents, pushEvent, onCallEnded: onCallEndedRef };
 }
 
 interface UseVoiceWSReturn {

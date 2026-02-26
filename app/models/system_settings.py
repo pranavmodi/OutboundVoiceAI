@@ -52,3 +52,5 @@ class SystemSettings:
     patient_source: str = "simulation"
     active_scenario_id: Optional[str] = None
     call_mode: str = "web"  # "web" or "twilio"
+    mock_mode: bool = False
+    mock_phone: str = ""  # redirect Twilio calls/SMS here when mock_mode=True

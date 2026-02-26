@@ -162,6 +162,13 @@ def generate_stream_id() -> str:
     return uuid.uuid4().hex[:12]
 
 
+def hangup_twilio_call(call_sid: str):
+    """Hang up an in-progress Twilio call by setting its status to completed."""
+    client = _get_twilio_client()
+    client.calls(call_sid).update(status="completed")
+    logger.info(f"Twilio call hung up: SID={call_sid}")
+
+
 def play_voicemail_and_hangup(call_sid: str, message: str):
     """Update an in-progress Twilio call to play voicemail then hang up."""
     escaped = html.escape(message, quote=True)

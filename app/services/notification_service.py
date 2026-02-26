@@ -45,6 +45,8 @@ class CallNotificationService:
         message_type: str = "callback_info",
         reason: str = "manual",
         call_mode: Optional[str] = None,
+        mock_mode: bool = False,
+        mock_phone: str = "",
     ) -> bool:
         """Send SMS for a call and update call log/status."""
         if not patient or not patient.phone:
@@ -96,18 +98,21 @@ class CallNotificationService:
                 return True
 
             body = build_sms_message(message_type)
+            sms_to = mock_phone if mock_mode and mock_phone else patient.phone
             try:
-                sid = await asyncio.to_thread(send_sms, patient.phone, body)
+                sid = await asyncio.to_thread(send_sms, sms_to, body)
                 await call_log_provider.update_call(call.call_id, sms_sent=True)
                 call.sms_sent = True
                 self._sms_sent_call_ids.add(call.call_id)
+                mock_label = f" mock_mode=true redirect={sms_to}" if mock_mode and mock_phone else ""
                 await self._log_call_event(
                     call.call_id,
-                    f"SMS delivered ({reason}) mode=twilio sid={sid} to={patient.phone} | body: {body}",
+                    f"SMS delivered ({reason}) mode=twilio sid={sid} to={sms_to}{mock_label} patient={patient.phone} | body: {body}",
                 )
                 if self.on_status_update:
+                    status_detail = f" (mock -> {sms_to})" if mock_mode and mock_phone else ""
                     await self.on_status_update(
-                        f"SMS sent ({reason}) in twilio mode to {patient.phone} [sid={sid}]"
+                        f"SMS sent ({reason}) in twilio mode to {patient.phone}{status_detail} [sid={sid}]"
                     )
                 return True
             except Exception as e:
@@ -134,7 +139,9 @@ class CallNotificationService:
 
         try:
             if outcome == CallOutcome.WRONG_NUMBER:
+                print(f"[Notifications] Sending wrong_number email for call {call.call_id} (patient={call.patient_id})")
                 message_id = await asyncio.to_thread(send_wrong_number_email, call)
+                print(f"[Notifications] Email sent (wrong_number) for call {call.call_id} message_id={message_id or 'n/a'}")
                 self._email_sent_call_ids.add(call.call_id)
                 await self._log_call_event(call.call_id, f"Email sent (wrong_number) [message_id={message_id or 'n/a'}]")
                 if self.on_status_update:
@@ -144,7 +151,9 @@ class CallNotificationService:
             if outcome == CallOutcome.DISCONNECTED or (
                 outcome == CallOutcome.FAILED and _looks_like_disconnected_or_invalid(status_text)
             ):
+                print(f"[Notifications] Sending disconnected/invalid email for call {call.call_id} (patient={call.patient_id}, status={status_text})")
                 message_id = await asyncio.to_thread(send_disconnected_number_email, call, status_text)
+                print(f"[Notifications] Email sent (invalid_disconnected) for call {call.call_id} message_id={message_id or 'n/a'}")
                 self._email_sent_call_ids.add(call.call_id)
                 await self._log_call_event(
                     call.call_id,
@@ -153,6 +162,7 @@ class CallNotificationService:
                 if self.on_status_update:
                     await self.on_status_update("Email sent (invalid/disconnected) to scheduling team")
         except Exception as e:
+            print(f"[Notifications] Email failed for call {call.call_id}: {e}")
             await self._log_call_event(call.call_id, f"Email failed: {str(e)}")
             if self.on_status_update:
                 await self.on_status_update(f"Email failed: {str(e)}")

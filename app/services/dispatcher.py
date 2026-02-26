@@ -156,9 +156,17 @@ class AutoCallDispatcher:
                     else:
                         tick_decision = {"decision": "waiting", "detail": "Waiting for voice client or prerequisites", "state": self._state.value}
 
-        # 4. If CALL_ACTIVE, skip
+        # 4. If CALL_ACTIVE, verify the call is still running
         elif self._state == DispatcherState.CALL_ACTIVE:
-            tick_decision = {"decision": "call_active", "detail": "Call in progress, skipping", "state": self._state.value}
+            call_log_provider = get_call_log_provider()
+            if not call_log_provider.has_active_call():
+                # Call ended but notify_call_ended was missed — self-heal
+                self._state = DispatcherState.IDLE
+                self._dispatched_at = None
+                self._dispatched_patient_id = None
+                tick_decision = self._log_decision("self_healed", "Call ended (missed notification), returning to idle")
+            else:
+                tick_decision = {"decision": "call_active", "detail": "Call in progress, skipping", "state": self._state.value}
 
         # 5. If not IDLE, skip
         elif self._state != DispatcherState.IDLE:

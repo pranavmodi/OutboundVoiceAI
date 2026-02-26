@@ -54,6 +54,7 @@ interface OperatorConsoleProps {
   onUpdateQueueThresholds: (thresholds: QueueThresholds) => Promise<void>;
   onUpdateDispatcherSettings: (dispatcherSettings: DispatcherSettings) => Promise<void>;
   onSetAllowLiveCalls: (allowed: boolean) => Promise<void>;
+  onSetMockMode: (enabled: boolean, mockPhone: string) => Promise<void>;
   onUpdateAllowedPhones: (phones: string[]) => Promise<void>;
   onSetQueueSource: (source: string) => Promise<void>;
   onSetPatientSource: (source: string) => Promise<void>;
@@ -71,6 +72,7 @@ export function OperatorConsole({
   onUpdateQueueThresholds,
   onUpdateDispatcherSettings,
   onSetAllowLiveCalls,
+  onSetMockMode,
   onUpdateAllowedPhones,
   onSetQueueSource,
   onSetPatientSource,
@@ -101,6 +103,7 @@ export function OperatorConsole({
   });
 
   const [newPhone, setNewPhone] = useState("");
+  const [mockPhoneInput, setMockPhoneInput] = useState(settings?.mock_phone || "");
   const [holidayEditorOpen, setHolidayEditorOpen] = useState(false);
 
   useEffect(() => {
@@ -108,6 +111,7 @@ export function OperatorConsole({
       setBusinessHoursForm(settings.business_hours);
       setThresholdsForm(settings.queue_thresholds);
       setDispatcherForm(settings.dispatcher_settings);
+      setMockPhoneInput(settings.mock_phone || "");
     }
   }, [settings]);
 
@@ -407,6 +411,42 @@ export function OperatorConsole({
             checked={settings.allow_live_calls}
             onCheckedChange={onSetAllowLiveCalls}
           />
+        </div>
+
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <div>
+              <Label htmlFor="mock-mode" className="text-sm flex items-center gap-1.5">
+                Mock Mode
+                <InfoTooltip content="When enabled, all Twilio calls and SMS are redirected to the mock phone number below instead of the patient's real number. Useful for end-to-end testing without calling patients." />
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                Redirect all outbound calls and SMS to a test number
+              </p>
+            </div>
+            <Switch
+              id="mock-mode"
+              checked={settings.mock_mode}
+              onCheckedChange={(checked) => onSetMockMode(checked, settings.mock_phone)}
+            />
+          </div>
+          {settings.mock_mode && (
+            <div className="space-y-1">
+              <Label htmlFor="mock-phone" className="text-xs text-muted-foreground flex items-center gap-1.5">
+                Mock Phone Number
+                <InfoTooltip content="All Twilio calls and SMS will be sent to this number instead of the patient's real number. Use E.164 format (+1...)." />
+              </Label>
+              <Input
+                id="mock-phone"
+                placeholder="+15551234567"
+                value={mockPhoneInput}
+                onChange={(e) => setMockPhoneInput(e.target.value)}
+                onBlur={() => { if (mockPhoneInput !== settings.mock_phone) onSetMockMode(settings.mock_mode, mockPhoneInput); }}
+                onKeyDown={(e) => { if (e.key === "Enter" && mockPhoneInput !== settings.mock_phone) onSetMockMode(settings.mock_mode, mockPhoneInput); }}
+                className="h-9"
+              />
+            </div>
+          )}
         </div>
 
         <div className="space-y-2">

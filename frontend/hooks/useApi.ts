@@ -429,6 +429,18 @@ export function useApi() {
     }
   }, []);
 
+  const setMockMode = useCallback(async (enabled: boolean, mock_phone: string): Promise<SystemSettings | null> => {
+    try {
+      return await fetchApi<SystemSettings>("/api/settings/mock-mode", {
+        method: "PUT",
+        body: JSON.stringify({ enabled, mock_phone }),
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
   const deleteAllCalls = useCallback(async (): Promise<boolean> => {
     try {
       await fetchApi("/api/calls", { method: "DELETE" });
@@ -483,6 +495,7 @@ export function useApi() {
     setQueueSource,
     setPatientSource,
     setCallMode,
+    setMockMode,
     getTimezones,
     deleteAllCalls,
   }), [
@@ -520,6 +533,7 @@ export function useApi() {
     setQueueSource,
     setPatientSource,
     setCallMode,
+    setMockMode,
     getTimezones,
     deleteAllCalls,
   ]);

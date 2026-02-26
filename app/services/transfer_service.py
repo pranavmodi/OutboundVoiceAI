@@ -146,6 +146,8 @@ class TransferService:
         call_mode: str,
         twilio_call_sid: Optional[str],
         notification_service,
+        mock_mode: bool = False,
+        mock_phone: str = "",
     ) -> CallOutcome:
         """Execute the full transfer flow. Returns the resulting CallOutcome."""
         call_log_provider = get_call_log_provider()
@@ -180,6 +182,8 @@ class TransferService:
                 call=call, patient=patient,
                 message_type="callback_info", reason="transfer_queue_missing",
                 call_mode=call_mode,
+                mock_mode=mock_mode,
+                mock_phone=mock_phone,
             )
             return CallOutcome.CALLBACK_REQUESTED
 
@@ -198,6 +202,8 @@ class TransferService:
                 call=call, patient=patient,
                 message_type="callback_info", reason="transfer_queue_unavailable",
                 call_mode=call_mode,
+                mock_mode=mock_mode,
+                mock_phone=mock_phone,
             )
             return CallOutcome.CALLBACK_REQUESTED
 
@@ -222,6 +228,8 @@ class TransferService:
                     call=call, patient=patient,
                     message_type="callback_info", reason="transfer_destination_missing",
                     call_mode=call_mode,
+                    mock_mode=mock_mode,
+                    mock_phone=mock_phone,
                 )
                 return CallOutcome.CALLBACK_REQUESTED
 
@@ -236,6 +244,8 @@ class TransferService:
                     call=call, patient=patient,
                     message_type="callback_info", reason="transfer_missing_twilio_sid",
                     call_mode=call_mode,
+                    mock_mode=mock_mode,
+                    mock_phone=mock_phone,
                 )
                 return CallOutcome.CALLBACK_REQUESTED
 
@@ -263,6 +273,8 @@ class TransferService:
                     call=call, patient=patient,
                     message_type="callback_info", reason="transfer_failed",
                     call_mode=call_mode,
+                    mock_mode=mock_mode,
+                    mock_phone=mock_phone,
                 )
                 return CallOutcome.CALLBACK_REQUESTED
 

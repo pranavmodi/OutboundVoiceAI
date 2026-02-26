@@ -93,33 +93,42 @@ async def voice_websocket(websocket: WebSocket):
 
     # Set up callbacks to forward to WebSocket
     async def on_call_started(call):
-        await websocket.send_json({
-            "type": "call_started",
-            "call": call.to_dict(),
-        })
+        get_dispatcher().notify_call_started(call.patient_id)
+        try:
+            await websocket.send_json({
+                "type": "call_started",
+                "call": call.to_dict(),
+            })
+        except Exception:
+            logger.warning("Voice WS send failed on call_started (client may have disconnected)")
         await broadcast_to_dashboards({
             "type": "call_started",
             "call": call.to_dict(),
         })
-        get_dispatcher().notify_call_started(call.patient_id)
 
     async def on_call_ended(call):
-        await websocket.send_json({
-            "type": "call_ended",
-            "call": call.to_dict(),
-        })
+        get_dispatcher().notify_call_ended()
+        try:
+            await websocket.send_json({
+                "type": "call_ended",
+                "call": call.to_dict(),
+            })
+        except Exception:
+            logger.warning("Voice WS send failed on call_ended (client may have disconnected)")
         await broadcast_to_dashboards({
             "type": "call_ended",
             "call": call.to_dict(),
         })
-        get_dispatcher().notify_call_ended()
 
     async def on_transcript_update(speaker, text):
-        await websocket.send_json({
-            "type": "transcript",
-            "speaker": speaker,
-            "text": text,
-        })
+        try:
+            await websocket.send_json({
+                "type": "transcript",
+                "speaker": speaker,
+                "text": text,
+            })
+        except Exception:
+            pass
         # Only broadcast complete transcripts to dashboard
         if speaker in ("ai", "patient"):
             await broadcast_to_dashboards({
@@ -130,27 +139,36 @@ async def voice_websocket(websocket: WebSocket):
 
     async def on_audio_output(audio_data):
         # Send audio as base64
-        audio_b64 = base64.b64encode(audio_data).decode("utf-8")
-        await websocket.send_json({
-            "type": "audio",
-            "data": audio_b64,
-        })
+        try:
+            audio_b64 = base64.b64encode(audio_data).decode("utf-8")
+            await websocket.send_json({
+                "type": "audio",
+                "data": audio_b64,
+            })
+        except Exception:
+            pass
 
     async def on_status_update(status):
-        await websocket.send_json({
-            "type": "status",
-            "status": status,
-        })
+        try:
+            await websocket.send_json({
+                "type": "status",
+                "status": status,
+            })
+        except Exception:
+            pass
         await broadcast_to_dashboards({
             "type": "status_update",
             "status": status,
         })
 
     async def on_error(error):
-        await websocket.send_json({
-            "type": "error",
-            "message": error,
-        })
+        try:
+            await websocket.send_json({
+                "type": "error",
+                "message": error,
+            })
+        except Exception:
+            pass
 
     # Attach callbacks
     orchestrator.on_call_started = on_call_started

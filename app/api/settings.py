@@ -81,6 +81,8 @@ class SystemSettingsResponse(BaseModel):
     patient_source: str
     active_scenario_id: str | None
     call_mode: str
+    mock_mode: bool
+    mock_phone: str
     can_make_calls: bool
     is_within_business_hours: bool
 
@@ -91,6 +93,11 @@ class ActiveScenarioRequest(BaseModel):
 
 class CallModeRequest(BaseModel):
     call_mode: str  # "web" or "twilio"
+
+
+class MockModeRequest(BaseModel):
+    enabled: bool
+    mock_phone: str = ""
 
 
 async def settings_to_response(provider) -> SystemSettingsResponse:
@@ -130,6 +137,8 @@ async def settings_to_response(provider) -> SystemSettingsResponse:
         patient_source=settings.patient_source,
         active_scenario_id=settings.active_scenario_id,
         call_mode=settings.call_mode,
+        mock_mode=settings.mock_mode,
+        mock_phone=settings.mock_phone,
         can_make_calls=await provider.can_make_outbound_call(),
         is_within_business_hours=await provider.is_within_business_hours(),
     )
@@ -422,6 +431,14 @@ async def set_call_mode(request: CallModeRequest):
 
     provider = get_settings_provider()
     await provider.set_call_mode(request.call_mode)
+    return await settings_to_response(provider)
+
+
+@router.put("/mock-mode", response_model=SystemSettingsResponse)
+async def set_mock_mode(request: MockModeRequest):
+    """Toggle mock mode and set the redirect phone number for Twilio calls/SMS."""
+    provider = get_settings_provider()
+    await provider.set_mock_mode(request.enabled, request.mock_phone)
     return await settings_to_response(provider)
 
 
