@@ -149,8 +149,10 @@ class CallOrchestrator:
         self._call_mode = call_mode
         self._web_voicemail_simulated = False
 
+        mode_label = "Twilio" if call_mode == "twilio" else "Web"
+        print(f"[CallOrchestrator] Starting call {call.call_id} to {patient.name} ({patient.phone}) in {mode_label} mode")
+
         if self.on_status_update:
-            mode_label = "Twilio" if call_mode == "twilio" else "Web"
             await self.on_status_update(f"Connecting ({mode_label})...")
 
         audio_format = "g711_ulaw" if call_mode == "twilio" else "pcm16"
@@ -162,17 +164,20 @@ class CallOrchestrator:
         self._voice_service.on_error = self._handle_voice_error
         self._voice_service.on_session_ended = self._handle_session_ended
 
+        print(f"[CallOrchestrator] Connecting to OpenAI Realtime for call {call.call_id}...")
         success = await self._voice_service.connect(
             call.call_id,
             patient.name,
             normalize_language_code(patient.language),
         )
         if not success:
+            print(f"[CallOrchestrator] OpenAI Realtime connection FAILED for call {call.call_id}")
             await call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
             self._voice_service = None
             self._current_call = None
             self._current_patient = None
             return None
+        print(f"[CallOrchestrator] OpenAI Realtime connected for call {call.call_id}")
 
         if call_mode == "twilio":
             settings_provider = get_settings_provider()
@@ -208,8 +213,8 @@ class CallOrchestrator:
             normalized_allowlist = [normalize_phone(p) for p in settings.allowed_phones]
 
             if normalized_patient_phone not in normalized_allowlist:
-                error_msg = f"Phone number {patient.phone} is not in the allowlist."
-                logger.warning(f"Twilio call blocked: {error_msg}")
+                error_msg = f"Phone number {patient.phone} is not in the allowlist. Allowed: {settings.allowed_phones}"
+                print(f"[CallOrchestrator] Twilio call blocked for call {call.call_id}: {error_msg}")
                 if self.on_error:
                     await self.on_error(error_msg)
                 await call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
@@ -237,6 +242,7 @@ class CallOrchestrator:
                     backend_host = os.getenv("NEXT_PUBLIC_API_URL", "http://localhost:8000").rstrip("/")
                 twiml_url = f"{backend_host}/api/twilio/twiml/{stream_id}"
 
+                print(f"[CallOrchestrator] Placing Twilio call for {call.call_id} to {patient.phone}, twiml_url={twiml_url}")
                 if self.on_status_update:
                     await self.on_status_update(f"Calling {patient.phone} via Twilio...")
 
@@ -248,9 +254,10 @@ class CallOrchestrator:
                 )
                 self._twilio_call_sid = call_sid
                 self._voicemail_handled = False
+                print(f"[CallOrchestrator] Twilio call placed successfully: SID={call_sid}, call_id={call.call_id}, to={patient.phone}")
 
             except Exception as e:
-                logger.error(f"Failed to place Twilio call: {e}")
+                print(f"[CallOrchestrator] Twilio call FAILED for {call.call_id} to {patient.phone}: {e}")
                 if self.on_error:
                     await self.on_error(f"Twilio call failed: {str(e)}")
                 await call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
@@ -261,6 +268,7 @@ class CallOrchestrator:
                 self._twilio_bridge = None
                 return None
         else:
+            print(f"[CallOrchestrator] Web mode — no Twilio phone call placed. call_id={call.call_id}, phone={patient.phone}")
             if self.on_status_update:
                 await self.on_status_update("Connected - AI Speaking")
 
@@ -268,6 +276,7 @@ class CallOrchestrator:
             await self.on_call_started(call)
 
         await self._voice_service.start_conversation()
+        print(f"[CallOrchestrator] Conversation started for call {call.call_id}")
 
         return call
 
@@ -281,12 +290,15 @@ class CallOrchestrator:
         voice_service = self._voice_service
         call_mode = self._call_mode
 
+        print(f"[CallOrchestrator] Ending call {call.call_id} with outcome={outcome.value} (mode={call_mode})")
+
         self._sync_status_callback()
 
         try:
             await self._notifications.maybe_send_issue_email(call, outcome)
 
             if outcome != CallOutcome.TRANSFERRED:
+                print(f"[CallOrchestrator] Sending SMS (callback_info) for call {call.call_id} to {patient.phone if patient else 'unknown'}")
                 await self._notifications.send_sms_for_call(
                     call=call,
                     patient=patient,

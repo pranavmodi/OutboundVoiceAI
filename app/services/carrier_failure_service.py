@@ -119,10 +119,12 @@ class CarrierFailureHandler:
         if not status:
             return
         if not is_carrier_failure(status, error_code, sip_response_code):
+            print(f"[TwilioCallStatus] Call {current_call.call_id}: status={status} (not a failure)")
             return
 
         reason = map_twilio_failure_reason(status, error_code, sip_response_code)
         code_str = str(error_code) if error_code is not None else f"twilio_{status}"
+        print(f"[CarrierFailure] Call {current_call.call_id}: {reason}")
 
         call_log_provider = get_call_log_provider()
         await call_log_provider.update_call(

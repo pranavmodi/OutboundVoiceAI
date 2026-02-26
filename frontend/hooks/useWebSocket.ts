@@ -226,7 +226,7 @@ interface UseVoiceWSReturn {
   connected: boolean;
   connect: () => void;
   disconnect: () => void;
-  startCall: (patientId: string, callMode?: string) => void;
+  startCall: (patientId: string) => void;
   endCall: (outcome?: string) => void;
   sendAudio: (audioData: ArrayBuffer) => void;
   callStatus: string | null;
@@ -330,9 +330,9 @@ export function useVoiceWS(): UseVoiceWSReturn {
     setConnected(false);
   }, []);
 
-  const startCall = useCallback((patientId: string, callMode: string = "web") => {
+  const startCall = useCallback((patientId: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: "start_call", patient_id: patientId, call_mode: callMode }));
+      wsRef.current.send(JSON.stringify({ type: "start_call", patient_id: patientId }));
     }
   }, []);
 

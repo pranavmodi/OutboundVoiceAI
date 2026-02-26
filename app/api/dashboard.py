@@ -414,6 +414,7 @@ async def get_statistics():
 @router.get("/twilio/twiml/{stream_id}")
 async def twilio_twiml(stream_id: str):
     """Return TwiML that connects Twilio to our media stream WebSocket."""
+    print(f"[TwiML] Twilio fetched TwiML for stream_id={stream_id}")
     # Build the WebSocket URL for Twilio to connect to
     public_url = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
     if not public_url:
@@ -442,6 +443,15 @@ async def twilio_status_callback(
     SipResponseCode: str = Form(""),
 ):
     """Handle Twilio call status callbacks, including AMD AnsweredBy values."""
+    parts = [f"[TwilioStatus] SID={CallSid} status={CallStatus}"]
+    if AnsweredBy:
+        parts.append(f"answered_by={AnsweredBy}")
+    if ErrorCode:
+        parts.append(f"error_code={ErrorCode}")
+    if SipResponseCode:
+        parts.append(f"sip_code={SipResponseCode}")
+    print(" | ".join(parts))
+
     try:
         orchestrator = get_orchestrator()
         if AnsweredBy:
@@ -462,7 +472,7 @@ async def twilio_status_callback(
                 f"twilio_call_status CallSid={CallSid}",
             )
     except Exception as e:
-        logger.warning("Twilio status callback handling failed: %s", e)
+        print(f"[TwilioStatus] Callback handling failed: {e}")
     return {"status": "ok"}
 
 

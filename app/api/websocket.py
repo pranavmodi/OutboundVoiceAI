@@ -173,7 +173,11 @@ async def voice_websocket(websocket: WebSocket):
 
                 if msg_type == "start_call":
                     patient_id = data.get("patient_id")
-                    call_mode = data.get("call_mode", "web")
+                    from app.providers import get_settings_provider
+                    settings_provider = get_settings_provider()
+                    settings = await settings_provider.get_settings()
+                    call_mode = settings.call_mode or "web"
+                    print(f"[WS] start_call: call_mode={call_mode} (from DB)")
                     if patient_id:
                         await orchestrator.start_call(patient_id, call_mode=call_mode)
 

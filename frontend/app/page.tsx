@@ -171,7 +171,7 @@ export default function Dashboard() {
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
 
-    voice.startCall(patientId, callMode);
+    voice.startCall(patientId);
   }, [voice, audio, patients, callMode, dashboard]);
 
   // Stop recording when call ends

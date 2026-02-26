@@ -81,12 +81,13 @@ class CallNotificationService:
                 return False
 
             if mode == "web":
+                body = build_sms_message(message_type)
                 await call_log_provider.update_call(call.call_id, sms_sent=True)
                 call.sms_sent = True
                 self._sms_sent_call_ids.add(call.call_id)
                 await self._log_call_event(
                     call.call_id,
-                    f"SMS delivered ({reason}) mode=web simulated=true to={patient.phone}",
+                    f"SMS delivered ({reason}) mode=web simulated=true to={patient.phone} | body: {body}",
                 )
                 if self.on_status_update:
                     await self.on_status_update(
@@ -102,7 +103,7 @@ class CallNotificationService:
                 self._sms_sent_call_ids.add(call.call_id)
                 await self._log_call_event(
                     call.call_id,
-                    f"SMS delivered ({reason}) mode=twilio sid={sid} to={patient.phone}",
+                    f"SMS delivered ({reason}) mode=twilio sid={sid} to={patient.phone} | body: {body}",
                 )
                 if self.on_status_update:
                     await self.on_status_update(

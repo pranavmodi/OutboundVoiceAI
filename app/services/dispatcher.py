@@ -132,6 +132,7 @@ class AutoCallDispatcher:
                     settings_provider = get_settings_provider()
                     settings = await settings_provider.get_settings()
                     call_mode = settings.call_mode or "web"
+                    print(f"[Dispatcher] DISPATCHED tick: call_mode={call_mode}, voice_clients={len(voice_clients)}, patient={self._dispatched_patient_id}")
                     if call_mode == "web" and voice_clients and self._dispatched_patient_id:
                         orchestrator = get_orchestrator()
                         call = await orchestrator.start_call(self._dispatched_patient_id, call_mode=call_mode)
@@ -213,6 +214,7 @@ class AutoCallDispatcher:
                     settings_provider = get_settings_provider()
                     settings = await settings_provider.get_settings()
                     call_mode = settings.call_mode or "web"
+                    print(f"[Dispatcher] Candidate found: {candidate.name} ({candidate.phone}), call_mode={call_mode}, voice_clients={len(voice_clients)}")
 
                     # In web mode, if no voice client is connected, pre-dispatch to trigger the frontend to connect voice
                     if call_mode == "web" and not voice_clients:
