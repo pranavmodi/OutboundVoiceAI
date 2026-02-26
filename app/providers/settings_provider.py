@@ -1,5 +1,5 @@
 """Settings provider for system configuration — DB-backed."""
-from datetime import datetime
+from datetime import datetime, date
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -7,7 +7,13 @@ from sqlalchemy import select
 
 from app.db import AsyncSessionLocal
 from app.db.models import SystemSettingsRow
-from app.models import BusinessHours, QueueThresholds, DispatcherSettings, SystemSettings
+from app.models import (
+    BusinessHours,
+    HolidayEntry,
+    QueueThresholds,
+    DispatcherSettings,
+    SystemSettings,
+)
 from typing import List
 
 
@@ -24,6 +30,49 @@ COMMON_TIMEZONES = [
 ]
 
 
+def _normalize_holidays(raw_holidays) -> List[HolidayEntry]:
+    items = raw_holidays if isinstance(raw_holidays, list) else []
+    normalized: List[HolidayEntry] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        date_str = str(item.get("date", "")).strip()
+        name = str(item.get("name", "")).strip()
+        if not date_str or not name:
+            continue
+        recurring = bool(item.get("recurring", True))
+        normalized.append(HolidayEntry(date=date_str, name=name, recurring=recurring))
+    return normalized
+
+
+def _is_holiday(today: date, holidays: List[HolidayEntry]) -> bool:
+    for holiday in holidays:
+        try:
+            holiday_date = datetime.strptime(holiday.date, "%Y-%m-%d").date()
+        except Exception:
+            continue
+        if holiday.recurring:
+            if holiday_date.month == today.month and holiday_date.day == today.day:
+                return True
+        elif holiday_date == today:
+            return True
+    return False
+
+
+def _matching_holiday(today: date, holidays: List[HolidayEntry]) -> Optional[HolidayEntry]:
+    for holiday in holidays:
+        try:
+            holiday_date = datetime.strptime(holiday.date, "%Y-%m-%d").date()
+        except Exception:
+            continue
+        if holiday.recurring:
+            if holiday_date.month == today.month and holiday_date.day == today.day:
+                return holiday
+        elif holiday_date == today:
+            return holiday
+    return None
+
+
 def _row_to_settings(row: SystemSettingsRow) -> SystemSettings:
     bh = row.business_hours
     qt = row.queue_thresholds
@@ -35,6 +84,7 @@ def _row_to_settings(row: SystemSettingsRow) -> SystemSettings:
         enabled=bh.get("enabled", False),
         timezone=bh.get("timezone", "America/New_York"),
         days_of_week=bh.get("days_of_week", [0, 1, 2, 3, 4]),  # Default Mon-Fri
+        holidays=_normalize_holidays(bh.get("holidays", [])),
     )
     settings.queue_thresholds = QueueThresholds(
         calls_waiting_threshold=qt.get("calls_waiting_threshold", 1),
@@ -81,6 +131,15 @@ class SettingsProvider:
                 "end_time": settings.business_hours.end_time,
                 "enabled": settings.business_hours.enabled,
                 "timezone": settings.business_hours.timezone,
+                "days_of_week": settings.business_hours.days_of_week,
+                "holidays": [
+                    {
+                        "date": h.date,
+                        "name": h.name,
+                        "recurring": h.recurring,
+                    }
+                    for h in settings.business_hours.holidays
+                ],
             }
             row.queue_thresholds = {
                 "calls_waiting_threshold": settings.queue_thresholds.calls_waiting_threshold,
@@ -132,6 +191,14 @@ class SettingsProvider:
                 "enabled": business_hours.enabled,
                 "timezone": business_hours.timezone,
                 "days_of_week": business_hours.days_of_week,
+                "holidays": [
+                    {
+                        "date": h.date,
+                        "name": h.name,
+                        "recurring": h.recurring,
+                    }
+                    for h in business_hours.holidays
+                ],
             }
             await session.commit()
             return _row_to_settings(row)
@@ -148,6 +215,8 @@ class SettingsProvider:
                         "end_time": "17:00",
                         "enabled": False,
                         "timezone": "America/New_York",
+                        "days_of_week": [0, 1, 2, 3, 4],
+                        "holidays": [],
                     },
                     queue_thresholds={},
                 )
@@ -172,6 +241,8 @@ class SettingsProvider:
                         "end_time": "17:00",
                         "enabled": False,
                         "timezone": "America/New_York",
+                        "days_of_week": [0, 1, 2, 3, 4],
+                        "holidays": [],
                     },
                     queue_thresholds={
                         "calls_waiting_threshold": 1,
@@ -220,24 +291,36 @@ class SettingsProvider:
         return phone in settings.allowed_phones
 
     async def is_within_business_hours(self) -> bool:
+        reason = await self.get_business_hours_block_reason()
+        return reason is None
+
+    async def get_business_hours_block_reason(self) -> Optional[str]:
         settings = await self.get_settings()
         bh = settings.business_hours
         if not bh.enabled:
-            return True
+            return None
         try:
             tz = ZoneInfo(bh.timezone)
             now = datetime.now(tz)
             current_time = now.strftime("%H:%M")
             current_day = now.weekday()  # 0=Monday, 6=Sunday
+            today = now.date()
+
+            # Check holiday calendar first (blocks even during valid weekday/time).
+            holiday = _matching_holiday(today, bh.holidays)
+            if holiday:
+                return f"Holiday configured: {holiday.name} ({holiday.date})"
 
             # Check if current day is in allowed days
             if current_day not in bh.days_of_week:
-                return False
+                return "Outside configured business days"
 
             # Check if current time is within hours
-            return bh.start_time <= current_time <= bh.end_time
+            if not (bh.start_time <= current_time <= bh.end_time):
+                return f"Outside business hours ({bh.start_time}-{bh.end_time} {bh.timezone})"
+            return None
         except Exception:
-            return True
+            return None
 
     async def can_make_outbound_call(self) -> bool:
         settings = await self.get_settings()

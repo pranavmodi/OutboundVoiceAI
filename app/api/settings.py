@@ -5,7 +5,7 @@ from typing import List
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from app.models import BusinessHours, QueueThresholds, DispatcherSettings, SystemSettings
+from app.models import BusinessHours, HolidayEntry, QueueThresholds, DispatcherSettings, SystemSettings
 from app.providers import get_settings_provider
 from app.providers.settings_provider import COMMON_TIMEZONES
 
@@ -16,12 +16,19 @@ router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 
 # Pydantic models for request/response
+class HolidayRequest(BaseModel):
+    date: str  # YYYY-MM-DD
+    name: str
+    recurring: bool = True
+
+
 class BusinessHoursRequest(BaseModel):
     start_time: str
     end_time: str
     enabled: bool
     timezone: str
     days_of_week: List[int] = [0, 1, 2, 3, 4]  # Mon-Fri (0=Mon, 6=Sun)
+    holidays: List[HolidayRequest] = []
 
 
 class QueueThresholdsRequest(BaseModel):
@@ -97,6 +104,14 @@ async def settings_to_response(provider) -> SystemSettingsResponse:
             enabled=settings.business_hours.enabled,
             timezone=settings.business_hours.timezone,
             days_of_week=settings.business_hours.days_of_week,
+            holidays=[
+                HolidayRequest(
+                    date=h.date,
+                    name=h.name,
+                    recurring=h.recurring,
+                )
+                for h in settings.business_hours.holidays
+            ],
         ),
         queue_thresholds=QueueThresholdsRequest(
             calls_waiting_threshold=settings.queue_thresholds.calls_waiting_threshold,
@@ -196,6 +211,14 @@ async def update_settings(request: SystemSettingsRequest):
             enabled=request.business_hours.enabled,
             timezone=request.business_hours.timezone,
             days_of_week=request.business_hours.days_of_week,
+            holidays=[
+                HolidayEntry(
+                    date=h.date,
+                    name=h.name,
+                    recurring=h.recurring,
+                )
+                for h in request.business_hours.holidays
+            ],
         ),
         queue_thresholds=QueueThresholds(
             calls_waiting_threshold=request.queue_thresholds.calls_waiting_threshold,
@@ -231,6 +254,14 @@ async def update_business_hours(request: BusinessHoursRequest):
         enabled=request.enabled,
         timezone=request.timezone,
         days_of_week=request.days_of_week,
+        holidays=[
+            HolidayEntry(
+                date=h.date,
+                name=h.name,
+                recurring=h.recurring,
+            )
+            for h in request.holidays
+        ],
     )
 
     await provider.update_business_hours(business_hours)

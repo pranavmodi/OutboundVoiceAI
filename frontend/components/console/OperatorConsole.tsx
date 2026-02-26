@@ -30,9 +30,18 @@ import {
   Radio,
   Users,
   Layers,
+  CalendarDays,
+  ChevronDown,
 } from "lucide-react";
 import { InfoTooltip } from "@/components/ui/info-tooltip";
-import type { SystemSettings, BusinessHours, QueueThresholds, DispatcherSettings, SimulationScenario } from "@/types";
+import type {
+  SystemSettings,
+  BusinessHours,
+  HolidayEntry,
+  QueueThresholds,
+  DispatcherSettings,
+  SimulationScenario,
+} from "@/types";
 
 interface OperatorConsoleProps {
   settings: SystemSettings | null;
@@ -73,6 +82,7 @@ export function OperatorConsole({
     enabled: false,
     timezone: "America/New_York",
     days_of_week: [0, 1, 2, 3, 4],  // Mon-Fri
+    holidays: [],
   });
 
   const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -91,6 +101,7 @@ export function OperatorConsole({
   });
 
   const [newPhone, setNewPhone] = useState("");
+  const [holidayEditorOpen, setHolidayEditorOpen] = useState(false);
 
   useEffect(() => {
     if (settings) {
@@ -118,6 +129,31 @@ export function OperatorConsole({
 
   const handleBusinessHoursSubmit = async () => {
     await onUpdateBusinessHours(businessHoursForm);
+  };
+
+  const handleAddHoliday = () => {
+    const next: HolidayEntry = {
+      date: "",
+      name: "",
+      recurring: true,
+    };
+    setBusinessHoursForm({
+      ...businessHoursForm,
+      holidays: [...(businessHoursForm.holidays || []), next],
+    });
+    setHolidayEditorOpen(true);
+  };
+
+  const handleUpdateHoliday = (index: number, patch: Partial<HolidayEntry>) => {
+    const holidays = [...(businessHoursForm.holidays || [])];
+    holidays[index] = { ...holidays[index], ...patch };
+    setBusinessHoursForm({ ...businessHoursForm, holidays });
+  };
+
+  const handleRemoveHoliday = (index: number) => {
+    const holidays = [...(businessHoursForm.holidays || [])];
+    holidays.splice(index, 1);
+    setBusinessHoursForm({ ...businessHoursForm, holidays });
   };
 
   const handleBusinessHoursEnabledChange = async (enabled: boolean) => {
@@ -532,6 +568,84 @@ export function OperatorConsole({
                 );
               })}
             </div>
+          </div>
+
+          <div className="space-y-2 rounded-lg border p-3">
+            <button
+              type="button"
+              onClick={() => setHolidayEditorOpen((v) => !v)}
+              className="w-full flex items-center justify-between text-left"
+            >
+              <div className="flex items-center gap-2">
+                <CalendarDays className="h-4 w-4 text-muted-foreground" />
+                <p className="text-sm font-medium flex items-center gap-1.5">
+                  Holiday Calendar
+                  <InfoTooltip content="Calls are blocked on matching holiday dates even when business hours/day rules are otherwise valid." />
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Badge variant="secondary" className="text-[10px]">
+                  {(businessHoursForm.holidays || []).length} holiday{(businessHoursForm.holidays || []).length !== 1 ? "s" : ""}
+                </Badge>
+                <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${holidayEditorOpen ? "rotate-180" : ""}`} />
+              </div>
+            </button>
+
+            {holidayEditorOpen && (
+              <div className="space-y-3 pt-2">
+                {(businessHoursForm.holidays || []).length === 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    No holidays configured. Add entries to block outbound calls on those dates.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {(businessHoursForm.holidays || []).map((holiday, idx) => (
+                      <div key={idx} className="grid grid-cols-12 gap-2 items-center rounded border p-2">
+                        <Input
+                          type="date"
+                          value={holiday.date}
+                          onChange={(e) => handleUpdateHoliday(idx, { date: e.target.value })}
+                          className="col-span-4 h-8"
+                        />
+                        <Input
+                          placeholder="Holiday name"
+                          value={holiday.name}
+                          onChange={(e) => handleUpdateHoliday(idx, { name: e.target.value })}
+                          className="col-span-5 h-8"
+                        />
+                        <div className="col-span-2 flex items-center justify-end gap-2">
+                          <Label className="text-[11px] text-muted-foreground">Yearly</Label>
+                          <Switch
+                            checked={holiday.recurring}
+                            onCheckedChange={(checked) => handleUpdateHoliday(idx, { recurring: checked })}
+                          />
+                        </div>
+                        <div className="col-span-1 flex justify-end">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            onClick={() => handleRemoveHoliday(idx)}
+                          >
+                            <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <Button type="button" size="sm" variant="outline" onClick={handleAddHoliday}>
+                  <Plus className="h-3.5 w-3.5 mr-1.5" />
+                  Add Holiday
+                </Button>
+                <Button type="button" size="sm" onClick={handleBusinessHoursSubmit}>
+                  <Save className="h-3.5 w-3.5 mr-1.5" />
+                  Save Holidays
+                </Button>
+              </div>
+            )}
           </div>
 
           <div className="flex items-center justify-between">

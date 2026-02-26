@@ -2,7 +2,13 @@
 from .queue_state import QueueInfo, GlobalQueueState
 from .patient import Patient, Language, IntakeStatus
 from .call_log import CallLog, CallOutcome, TranscriptEntry
-from .system_settings import BusinessHours, QueueThresholds, DispatcherSettings, SystemSettings
+from .system_settings import (
+    BusinessHours,
+    HolidayEntry,
+    QueueThresholds,
+    DispatcherSettings,
+    SystemSettings,
+)
 
 __all__ = [
     "QueueInfo",
@@ -14,6 +20,7 @@ __all__ = [
     "CallOutcome",
     "TranscriptEntry",
     "BusinessHours",
+    "HolidayEntry",
     "QueueThresholds",
     "DispatcherSettings",
     "SystemSettings",

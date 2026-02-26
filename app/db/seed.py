@@ -23,6 +23,7 @@ async def seed_default_settings(session: AsyncSession):
             "enabled": False,
             "timezone": "America/New_York",
             "days_of_week": [0, 1, 2, 3, 4],  # Mon-Fri
+            "holidays": [],
         },
         queue_thresholds={
             "calls_waiting_threshold": 1,

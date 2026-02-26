@@ -147,12 +147,19 @@ export interface WSError extends WSMessage {
 }
 
 // System Settings Types
+export interface HolidayEntry {
+  date: string; // YYYY-MM-DD
+  name: string;
+  recurring: boolean;
+}
+
 export interface BusinessHours {
   start_time: string;
   end_time: string;
   enabled: boolean;
   timezone: string;
   days_of_week: number[];  // 0=Mon, 6=Sun
+  holidays: HolidayEntry[];
 }
 
 export interface QueueThresholds {

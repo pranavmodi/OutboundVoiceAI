@@ -174,11 +174,8 @@ class AutoCallDispatcher:
                 tick_decision = self._log_decision("blocked", "System is disabled")
 
             # is_within_business_hours
-            elif not await settings_provider.is_within_business_hours():
-                bh = settings.business_hours
-                tick_decision = self._log_decision(
-                    "blocked",
-                    f"Outside business hours ({bh.start_time}-{bh.end_time} {bh.timezone})")
+            elif (business_hours_reason := await settings_provider.get_business_hours_block_reason()):
+                tick_decision = self._log_decision("blocked", business_hours_reason)
 
             # ami_connected (reflected in queue state)
             elif not queue_state.ami_connected:

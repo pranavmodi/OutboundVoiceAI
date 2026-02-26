@@ -4,6 +4,14 @@ from typing import List, Optional
 
 
 @dataclass
+class HolidayEntry:
+    """Holiday calendar entry."""
+    date: str  # YYYY-MM-DD
+    name: str
+    recurring: bool = True
+
+
+@dataclass
 class BusinessHours:
     """Business hours configuration."""
     start_time: str = "08:00"  # HH:MM format
@@ -11,6 +19,7 @@ class BusinessHours:
     enabled: bool = False
     timezone: str = "America/New_York"
     days_of_week: List[int] = field(default_factory=lambda: [0, 1, 2, 3, 4])  # Mon-Fri (0=Mon, 6=Sun)
+    holidays: List[HolidayEntry] = field(default_factory=list)
 
 
 @dataclass
