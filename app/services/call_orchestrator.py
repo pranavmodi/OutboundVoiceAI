@@ -287,6 +287,28 @@ class CallOrchestrator:
         if self.on_call_started:
             await self.on_call_started(call)
 
+        # In Twilio mode, wait for the media stream to connect before
+        # starting the conversation so the greeting audio isn't lost.
+        if call_mode == "twilio" and self._twilio_bridge:
+            if self.on_status_update:
+                await self.on_status_update("Waiting for call to connect...")
+            print(f"[CallOrchestrator] Waiting for Twilio media stream to connect for call {call.call_id}...")
+            connected = await self._twilio_bridge.wait_for_connection(timeout=30)
+            if not connected:
+                print(f"[CallOrchestrator] Twilio media stream did not connect in time for call {call.call_id}")
+                if self.on_error:
+                    await self.on_error("Twilio media stream connection timed out")
+                await call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
+                await self._voice_service.disconnect()
+                self._voice_service = None
+                self._current_call = None
+                self._current_patient = None
+                self._twilio_bridge = None
+                return None
+            print(f"[CallOrchestrator] Twilio media stream connected for call {call.call_id}")
+            if self.on_status_update:
+                await self.on_status_update("Connected - AI Speaking")
+
         await self._voice_service.start_conversation()
         print(f"[CallOrchestrator] Conversation started for call {call.call_id}")
 

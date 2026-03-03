@@ -67,13 +67,13 @@ export function useApi() {
     }
   }, []);
 
-  const getCalls = useCallback(async (limit: number = 50): Promise<CallLog[]> => {
+  const getCalls = useCallback(async (limit: number = 25, offset: number = 0): Promise<{ calls: CallLog[]; total: number }> => {
     try {
-      const data = await fetchApi<{ calls: CallLog[] }>(`/api/calls?limit=${limit}`);
-      return data.calls;
+      const data = await fetchApi<{ calls: CallLog[]; total: number }>(`/api/calls?limit=${limit}&offset=${offset}`);
+      return { calls: data.calls, total: data.total };
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unknown error");
-      return [];
+      return { calls: [], total: 0 };
     }
   }, []);
 

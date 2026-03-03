@@ -1,11 +1,17 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import {
   Dialog,
   DialogContent,
@@ -23,7 +29,16 @@ import {
   User,
   Bot,
   CalendarDays,
+  ChevronDown,
   NotebookPen,
+  Loader2,
+  FileText,
+  Clock,
+  X,
+  ArrowRightLeft,
+  ShieldAlert,
+  Mail,
+  Activity,
 } from "lucide-react";
 import { formatDate, formatTime, formatDuration } from "@/lib/utils";
 import type { CallLog } from "@/types";
@@ -31,21 +46,28 @@ import type { CallLog } from "@/types";
 interface CallHistoryCardProps {
   calls: CallLog[];
   onRefresh: () => void;
+  onLoadMore: () => void;
+  hasMore: boolean;
 }
 
 const outcomeConfig: Record<
   string,
-  { label: string; icon: typeof Phone; variant: "default" | "secondary" | "destructive" | "outline" | "success" | "warning" }
+  {
+    label: string;
+    icon: typeof Phone;
+    variant: "default" | "secondary" | "destructive" | "outline" | "success" | "warning";
+    color: string;
+  }
 > = {
-  transferred: { label: "Transferred", icon: PhoneForwarded, variant: "success" },
-  callback_requested: { label: "Callback", icon: MessageSquare, variant: "secondary" },
-  no_answer: { label: "No Answer", icon: PhoneMissed, variant: "warning" },
-  voicemail: { label: "Voicemail", icon: MessageSquare, variant: "warning" },
-  wrong_number: { label: "Wrong Number", icon: PhoneOff, variant: "destructive" },
-  disconnected: { label: "Disconnected", icon: PhoneOff, variant: "destructive" },
-  completed: { label: "Completed", icon: Phone, variant: "default" },
-  failed: { label: "Failed", icon: PhoneOff, variant: "destructive" },
-  in_progress: { label: "In Progress", icon: Phone, variant: "default" },
+  transferred: { label: "Transferred", icon: PhoneForwarded, variant: "success", color: "text-emerald-600 bg-emerald-50" },
+  callback_requested: { label: "Callback", icon: MessageSquare, variant: "secondary", color: "text-blue-600 bg-blue-50" },
+  no_answer: { label: "No Answer", icon: PhoneMissed, variant: "warning", color: "text-amber-600 bg-amber-50" },
+  voicemail: { label: "Voicemail", icon: MessageSquare, variant: "warning", color: "text-amber-600 bg-amber-50" },
+  wrong_number: { label: "Wrong Number", icon: PhoneOff, variant: "destructive", color: "text-red-600 bg-red-50" },
+  disconnected: { label: "Disconnected", icon: PhoneOff, variant: "destructive", color: "text-red-600 bg-red-50" },
+  completed: { label: "Completed", icon: Phone, variant: "default", color: "text-slate-600 bg-slate-50" },
+  failed: { label: "Failed", icon: PhoneOff, variant: "destructive", color: "text-red-600 bg-red-50" },
+  in_progress: { label: "In Progress", icon: Phone, variant: "default", color: "text-blue-600 bg-blue-50" },
 };
 
 interface GroupedCalls {
@@ -54,10 +76,11 @@ interface GroupedCalls {
   calls: CallLog[];
 }
 
+type DateFilter = "all" | "today" | "yesterday" | "7days" | "custom";
+
 function inferPreferredCallbackFromTranscript(call: CallLog): string | null {
   if (!call.transcript?.length) return null;
 
-  // Prefer explicit system capture message if present.
   const systemCapture = call.transcript.find(
     (entry) =>
       entry.speaker === "system" &&
@@ -67,7 +90,6 @@ function inferPreferredCallbackFromTranscript(call: CallLog): string | null {
     return systemCapture.text.split(":").slice(1).join(":").trim() || null;
   }
 
-  // Fallback: look at recent patient/AI text for callback-time language.
   const recent = call.transcript.slice(-8).map((t) => t.text.toLowerCase());
   const marker = recent.find(
     (t) =>
@@ -78,68 +100,120 @@ function inferPreferredCallbackFromTranscript(call: CallLog): string | null {
   return null;
 }
 
+function toDateKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 function getDateKeyFromCall(call: CallLog): string {
   const source = call.started_at || call.ended_at;
   if (!source) return "unknown-date";
-  const d = new Date(source);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
-    d.getDate()
-  ).padStart(2, "0")}`;
+  return toDateKey(new Date(source));
 }
 
 function getDateLabel(dateKey: string): string {
   if (dateKey === "unknown-date") return "Unknown Date";
   const date = new Date(`${dateKey}T00:00:00`);
   const today = new Date();
-  const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(
-    today.getDate()
-  ).padStart(2, "0")}`;
+  const todayKey = toDateKey(today);
   const yesterday = new Date(today);
   yesterday.setDate(today.getDate() - 1);
-  const yesterdayKey = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, "0")}-${String(
-    yesterday.getDate()
-  ).padStart(2, "0")}`;
+  const yesterdayKey = toDateKey(yesterday);
 
   if (dateKey === todayKey) return "Today";
   if (dateKey === yesterdayKey) return "Yesterday";
   return formatDate(date);
 }
 
-export function CallHistoryCard({ calls, onRefresh }: CallHistoryCardProps) {
-  const [selectedCall, setSelectedCall] = useState<CallLog | null>(null);
-  const groupedCalls: GroupedCalls[] = [];
-  const byDate = new Map<string, CallLog[]>();
-  for (const call of calls) {
-    const key = getDateKeyFromCall(call);
-    const existing = byDate.get(key) || [];
-    existing.push(call);
-    byDate.set(key, existing);
-  }
-  const sortedKeys = Array.from(byDate.keys()).sort((a, b) => (a < b ? 1 : -1));
-  for (const key of sortedKeys) {
-    groupedCalls.push({
-      dateKey: key,
-      dateLabel: getDateLabel(key),
-      calls: byDate.get(key) || [],
-    });
-  }
+export function CallHistoryCard({ calls, onRefresh, onLoadMore, hasMore }: CallHistoryCardProps) {
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [transcriptCall, setTranscriptCall] = useState<CallLog | null>(null);
+  const [eventsCall, setEventsCall] = useState<CallLog | null>(null);
+  const [dateFilter, setDateFilter] = useState<DateFilter>("all");
+  const [customDate, setCustomDate] = useState<string>("");
+  const [collapsedDates, setCollapsedDates] = useState<Set<string>>(new Set());
 
-  const callNotes: string[] = [];
-  const selectedPreferred =
-    selectedCall?.preferred_callback_time || (selectedCall ? inferPreferredCallbackFromTranscript(selectedCall) : null);
-  if (selectedPreferred) {
-    callNotes.push(`Patient preferred callback time: ${selectedPreferred}`);
-  } else if (selectedCall?.outcome === "callback_requested") {
-    callNotes.push("Patient requested a callback.");
-  }
-  if (selectedCall?.error_message) {
-    callNotes.push(`Call issue: ${selectedCall.error_message}`);
+  // Compute date boundaries
+  const todayKey = toDateKey(new Date());
+  const yesterdayDate = new Date();
+  yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+  const yesterdayKey = toDateKey(yesterdayDate);
+  const sevenDaysAgo = new Date();
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+  const sevenDaysKey = toDateKey(sevenDaysAgo);
+
+  // Group + filter calls by date
+  const groupedCalls = useMemo(() => {
+    const byDate = new Map<string, CallLog[]>();
+    for (const call of calls) {
+      const key = getDateKeyFromCall(call);
+
+      // Apply date filter
+      if (dateFilter === "today" && key !== todayKey) continue;
+      if (dateFilter === "yesterday" && key !== yesterdayKey) continue;
+      if (dateFilter === "7days" && key !== "unknown-date" && key < sevenDaysKey) continue;
+      if (dateFilter === "custom" && customDate && key !== customDate) continue;
+
+      const existing = byDate.get(key) || [];
+      existing.push(call);
+      byDate.set(key, existing);
+    }
+
+    const sortedKeys = Array.from(byDate.keys()).sort((a, b) => (a < b ? 1 : -1));
+    const groups: GroupedCalls[] = [];
+    for (const key of sortedKeys) {
+      groups.push({
+        dateKey: key,
+        dateLabel: getDateLabel(key),
+        calls: byDate.get(key) || [],
+      });
+    }
+    return groups;
+  }, [calls, dateFilter, customDate, todayKey, yesterdayKey, sevenDaysKey]);
+
+  const filteredCallCount = groupedCalls.reduce((sum, g) => sum + g.calls.length, 0);
+
+  const isExpanded = (dateKey: string, index: number) =>
+    index === 0 ? !collapsedDates.has(dateKey) : collapsedDates.has(dateKey);
+
+  const toggleDate = (dateKey: string) => {
+    setCollapsedDates((prev) => {
+      const next = new Set(prev);
+      next.has(dateKey) ? next.delete(dateKey) : next.add(dateKey);
+      return next;
+    });
+  };
+
+  const handleFilterChange = (filter: DateFilter) => {
+    setDateFilter(filter);
+    if (filter !== "custom") setCustomDate("");
+    setCollapsedDates(new Set());
+  };
+
+  const handleCustomDateChange = (value: string) => {
+    setCustomDate(value);
+    setDateFilter("custom");
+    setCollapsedDates(new Set());
+  };
+
+  // Notes for transcript modal
+  const transcriptNotes: string[] = [];
+  if (transcriptCall) {
+    const preferred =
+      transcriptCall.preferred_callback_time || inferPreferredCallbackFromTranscript(transcriptCall);
+    if (preferred) {
+      transcriptNotes.push(`Preferred callback: ${preferred}`);
+    } else if (transcriptCall.outcome === "callback_requested") {
+      transcriptNotes.push("Patient requested a callback.");
+    }
+    if (transcriptCall.error_message) {
+      transcriptNotes.push(`Call issue: ${transcriptCall.error_message}`);
+    }
   }
 
   return (
     <>
       <Card className="flex flex-col">
-        <CardHeader className="pb-3">
+        <CardHeader className="pb-2">
           <div className="flex items-center justify-between">
             <CardTitle className="flex items-center gap-2 text-lg">
               <History className="h-5 w-5" />
@@ -148,7 +222,10 @@ export function CallHistoryCard({ calls, onRefresh }: CallHistoryCardProps) {
             <div className="flex items-center gap-2">
               {calls.length > 0 && (
                 <span className="text-xs text-muted-foreground tabular-nums">
-                  {calls.length} call{calls.length !== 1 ? "s" : ""}
+                  {dateFilter !== "all"
+                    ? `${filteredCallCount} of ${calls.length}`
+                    : `${calls.length}`}{" "}
+                  call{(dateFilter !== "all" ? filteredCallCount : calls.length) !== 1 ? "s" : ""}
                 </span>
               )}
               <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onRefresh}>
@@ -156,205 +233,442 @@ export function CallHistoryCard({ calls, onRefresh }: CallHistoryCardProps) {
               </Button>
             </div>
           </div>
+
+          {/* Date filter toolbar */}
+          {calls.length > 0 && (
+            <div className="flex items-center gap-2 pt-2 flex-wrap">
+              <div className="flex items-center rounded-lg border bg-muted/30 p-0.5 gap-0.5">
+                {(
+                  [
+                    { key: "all", label: "All" },
+                    { key: "today", label: "Today" },
+                    { key: "yesterday", label: "Yesterday" },
+                    { key: "7days", label: "7 Days" },
+                  ] as const
+                ).map(({ key, label }) => (
+                  <button
+                    key={key}
+                    onClick={() => handleFilterChange(key)}
+                    className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                      dateFilter === key
+                        ? "bg-background text-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <div className="relative">
+                <Input
+                  type="date"
+                  value={customDate}
+                  onChange={(e) => handleCustomDateChange(e.target.value)}
+                  className="h-7 w-[150px] text-xs pl-2 pr-7"
+                  max={todayKey}
+                />
+                {dateFilter === "custom" && customDate && (
+                  <button
+                    onClick={() => handleFilterChange("all")}
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
         </CardHeader>
+
         <CardContent className="flex-1 p-0">
-          <ScrollArea className="h-[300px]">
-            <div className="space-y-1.5 px-6 pb-6">
+          <ScrollArea className="h-[520px]">
+            <div className="space-y-3 px-6 pb-6 pt-2">
               {calls.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
-                  <History className="h-10 w-10 mb-3 opacity-15" />
+                <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
+                  <History className="h-12 w-12 mb-3 opacity-10" />
                   <p className="text-sm font-medium">No calls yet</p>
                   <p className="text-xs mt-1">Completed calls will appear here</p>
                 </div>
+              ) : groupedCalls.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
+                  <CalendarDays className="h-12 w-12 mb-3 opacity-10" />
+                  <p className="text-sm font-medium">No calls for this date</p>
+                  <p className="text-xs mt-1">Try a different date or clear the filter</p>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="mt-3 text-xs"
+                    onClick={() => handleFilterChange("all")}
+                  >
+                    Show all calls
+                  </Button>
+                </div>
               ) : (
-                groupedCalls.map((group) => (
-                  <div key={group.dateKey} className="space-y-1.5">
-                    <div className="sticky top-0 z-10 bg-background/80 backdrop-blur px-1 py-1 rounded">
-                      <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-                        <CalendarDays className="h-3 w-3" />
-                        {group.dateLabel}
-                      </p>
-                    </div>
-                    {group.calls.map((call) => {
-                      const config = outcomeConfig[call.outcome] || outcomeConfig.completed;
-                      const Icon = config.icon;
+                groupedCalls.map((group, groupIndex) => (
+                  <Collapsible
+                    key={group.dateKey}
+                    open={isExpanded(group.dateKey, groupIndex)}
+                    onOpenChange={() => toggleDate(group.dateKey)}
+                  >
+                    {/* Date group header */}
+                    <CollapsibleTrigger className="flex w-full items-center justify-between rounded-lg border bg-muted/30 px-3 py-2 hover:bg-muted/50 transition-colors text-left group">
+                      <div className="flex items-center gap-2">
+                        <ChevronDown
+                          className={`h-3.5 w-3.5 text-muted-foreground shrink-0 transition-transform duration-200 ${
+                            isExpanded(group.dateKey, groupIndex) ? "" : "-rotate-90"
+                          }`}
+                        />
+                        <CalendarDays className="h-3.5 w-3.5 text-muted-foreground" />
+                        <span className="text-sm font-medium">{group.dateLabel}</span>
+                      </div>
+                      <Badge variant="outline" className="text-[10px] px-1.5 py-0 tabular-nums">
+                        {group.calls.length} call{group.calls.length !== 1 ? "s" : ""}
+                      </Badge>
+                    </CollapsibleTrigger>
 
-                      return (
-                        <button
-                          key={call.call_id}
-                          onClick={() => setSelectedCall(call)}
-                          className="w-full flex items-center justify-between rounded-lg bg-muted/40 px-3 py-2.5 hover:bg-muted/70 transition-colors text-left"
-                        >
-                          <div className="flex items-center gap-2.5">
-                            <div className="flex h-7 w-7 items-center justify-center rounded-full bg-background">
-                              <Icon className="h-3.5 w-3.5 text-muted-foreground" />
-                            </div>
-                            <div>
-                              <p className="text-sm font-medium">{call.patient_name}</p>
-                              <p className="text-xs text-muted-foreground tabular-nums">
-                                {call.started_at ? formatTime(call.started_at) : "—"} • {call.phone || "No phone"}
-                              </p>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2.5">
-                            <div className="text-right">
-                              <div className="flex items-center justify-end gap-2.5">
-                                <span className="text-xs text-muted-foreground tabular-nums">
-                                  {formatDuration(call.duration_seconds)}
-                                </span>
-                                <Badge variant={config.variant} className="text-[10px] px-1.5 py-0">
-                                  {config.label}
-                                </Badge>
+                    {/* Call rows */}
+                    <CollapsibleContent>
+                      <div className="space-y-1.5 pt-1.5 ml-2 border-l-2 border-muted pl-3">
+                        {group.calls.map((call) => {
+                          const config = outcomeConfig[call.outcome] || outcomeConfig.completed;
+                          const Icon = config.icon;
+                          const preferred =
+                            call.preferred_callback_time || inferPreferredCallbackFromTranscript(call);
+
+                          return (
+                            <div
+                              key={call.call_id}
+                              className="group/row rounded-lg border bg-card px-3 py-2.5 hover:shadow-sm transition-all"
+                            >
+                              <div className="flex items-center justify-between gap-3">
+                                {/* Left: icon + info */}
+                                <div className="flex items-center gap-3 min-w-0">
+                                  <div
+                                    className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${config.color}`}
+                                  >
+                                    <Icon className="h-3.5 w-3.5" />
+                                  </div>
+                                  <div className="min-w-0">
+                                    <div className="flex items-center gap-2">
+                                      <p className="text-sm font-medium truncate">
+                                        {call.patient_name}
+                                      </p>
+                                      <Badge
+                                        variant={config.variant}
+                                        className="text-[10px] px-1.5 py-0 shrink-0"
+                                      >
+                                        {config.label}
+                                      </Badge>
+                                    </div>
+                                    <div className="flex items-center gap-1.5 mt-0.5">
+                                      <span className="text-xs text-muted-foreground tabular-nums">
+                                        {call.started_at ? formatTime(call.started_at) : "—"}
+                                      </span>
+                                      <span className="text-muted-foreground/40">·</span>
+                                      <span className="text-xs text-muted-foreground tabular-nums">
+                                        {call.phone || "No phone"}
+                                      </span>
+                                      <span className="text-muted-foreground/40">·</span>
+                                      <span className="text-xs text-muted-foreground tabular-nums flex items-center gap-1">
+                                        <Clock className="h-3 w-3" />
+                                        {formatDuration(call.duration_seconds)}
+                                      </span>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Right: notes + transcript button */}
+                                <div className="flex items-center gap-2 shrink-0">
+                                  {preferred && (
+                                    <span className="hidden sm:flex items-center gap-1 text-[11px] text-muted-foreground max-w-[160px] truncate">
+                                      <NotebookPen className="h-3 w-3 shrink-0" />
+                                      {preferred}
+                                    </span>
+                                  )}
+                                  {call.transcript.some((e) => e.speaker === "system") && (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      className="h-7 gap-1.5 text-xs opacity-70 group-hover/row:opacity-100 transition-opacity"
+                                      onClick={() => setEventsCall(call)}
+                                    >
+                                      <NotebookPen className="h-3 w-3" />
+                                      <span className="hidden sm:inline">Events</span>
+                                    </Button>
+                                  )}
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="h-7 gap-1.5 text-xs opacity-70 group-hover/row:opacity-100 transition-opacity"
+                                    onClick={() => setTranscriptCall(call)}
+                                  >
+                                    <FileText className="h-3 w-3" />
+                                    <span className="hidden sm:inline">Transcript</span>
+                                  </Button>
+                                </div>
                               </div>
-                              {(call.preferred_callback_time || inferPreferredCallbackFromTranscript(call)) && (
-                                <p className="mt-1 text-[11px] text-muted-foreground flex items-center justify-end gap-1">
-                                  <NotebookPen className="h-3 w-3" />
-                                  Preferred callback: {call.preferred_callback_time || inferPreferredCallbackFromTranscript(call)}
-                                </p>
+
+                              {/* Action badges */}
+                              {(call.transfer_attempted || call.voicemail_left || call.sms_sent) && (
+                                <div className="flex gap-1.5 mt-2 ml-11">
+                                  {call.transfer_attempted && (
+                                    <Badge
+                                      variant={call.transfer_success ? "success" : "warning"}
+                                      className="text-[10px] px-1.5 py-0"
+                                    >
+                                      Transfer {call.transfer_success ? "OK" : "Tried"}
+                                    </Badge>
+                                  )}
+                                  {call.voicemail_left && (
+                                    <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                                      VM Left
+                                    </Badge>
+                                  )}
+                                  {call.sms_sent && (
+                                    <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                                      SMS Sent
+                                    </Badge>
+                                  )}
+                                </div>
                               )}
                             </div>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
+                          );
+                        })}
+                      </div>
+                    </CollapsibleContent>
+                  </Collapsible>
                 ))
+              )}
+              {hasMore && groupedCalls.length > 0 && (
+                <div className="flex justify-center pt-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-xs text-muted-foreground"
+                    disabled={loadingMore}
+                    onClick={async () => {
+                      setLoadingMore(true);
+                      try {
+                        await onLoadMore();
+                      } finally {
+                        setLoadingMore(false);
+                      }
+                    }}
+                  >
+                    {loadingMore ? <Loader2 className="h-3 w-3 mr-1.5 animate-spin" /> : null}
+                    Load older calls
+                  </Button>
+                </div>
               )}
             </div>
           </ScrollArea>
         </CardContent>
       </Card>
 
-      {/* Call Detail Dialog */}
-      <Dialog open={!!selectedCall} onOpenChange={() => setSelectedCall(null)}>
-        <DialogContent className="max-w-2xl max-h-[80vh] overflow-hidden flex flex-col">
-          <DialogHeader>
-            <DialogTitle className="text-lg">Call Details</DialogTitle>
-          </DialogHeader>
-          {selectedCall && (
-            <div className="flex-1 overflow-auto space-y-4">
-              {/* Call Info */}
-              <div className="grid grid-cols-2 gap-3">
-                <div className="rounded-lg bg-muted/50 p-3">
-                  <p className="text-xs text-muted-foreground">Patient</p>
-                  <p className="text-sm font-medium mt-0.5">{selectedCall.patient_name}</p>
-                </div>
-                <div className="rounded-lg bg-muted/50 p-3">
-                  <p className="text-xs text-muted-foreground">Patient ID</p>
-                  <p className="text-sm font-medium mt-0.5">{selectedCall.patient_id || "—"}</p>
-                </div>
-                <div className="rounded-lg bg-muted/50 p-3">
-                  <p className="text-xs text-muted-foreground">Phone</p>
-                  <p className="text-sm font-medium mt-0.5 tabular-nums">{selectedCall.phone}</p>
-                </div>
-                <div className="rounded-lg bg-muted/50 p-3">
-                  <p className="text-xs text-muted-foreground">Order ID</p>
-                  <p className="text-sm font-medium mt-0.5">{selectedCall.order_id || "—"}</p>
-                </div>
-                <div className="rounded-lg bg-muted/50 p-3">
-                  <p className="text-xs text-muted-foreground">Duration</p>
-                  <p className="text-sm font-medium mt-0.5 tabular-nums">{formatDuration(selectedCall.duration_seconds)}</p>
-                </div>
-                <div className="rounded-lg bg-muted/50 p-3">
-                  <p className="text-xs text-muted-foreground">Outcome</p>
-                  <div className="mt-1">
-                    <Badge variant={outcomeConfig[selectedCall.outcome]?.variant || "default"} className="text-xs">
-                      {outcomeConfig[selectedCall.outcome]?.label || selectedCall.outcome}
-                    </Badge>
-                  </div>
-                </div>
-                <div className="rounded-lg bg-muted/50 p-3">
-                  <p className="text-xs text-muted-foreground">Call Time</p>
-                  <p className="text-sm font-medium mt-0.5 tabular-nums">
-                    {selectedCall.started_at
-                      ? `${formatDate(selectedCall.started_at)} ${formatTime(selectedCall.started_at)}`
-                      : "—"}
-                  </p>
-                </div>
-                <div className="rounded-lg bg-muted/50 p-3">
-                  <p className="text-xs text-muted-foreground">Priority</p>
-                  <p className="text-sm font-medium mt-0.5">Bucket {selectedCall.priority_bucket}</p>
-                </div>
-              </div>
+      {/* Transcript Modal */}
+      <Dialog open={!!transcriptCall} onOpenChange={() => setTranscriptCall(null)}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-hidden flex flex-col gap-0">
+          {transcriptCall && (() => {
+            const config = outcomeConfig[transcriptCall.outcome] || outcomeConfig.completed;
+            const TIcon = config.icon;
+            return (
+              <>
+                {/* Header */}
+                <DialogHeader className="pb-3">
+                  <DialogTitle className="text-base font-semibold">Transcript</DialogTitle>
+                </DialogHeader>
 
-              {/* Call Notes */}
-              {callNotes.length > 0 && (
-                <div>
-                  <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
-                    Call Notes
-                  </h4>
-                  <div className="rounded-lg border bg-muted/20 p-3 space-y-1.5">
-                    {callNotes.map((note, idx) => (
-                      <p key={idx} className="text-sm">
-                        {note}
-                      </p>
-                    ))}
+                {/* Call summary bar */}
+                <div className="rounded-lg border bg-muted/30 px-4 py-3 mb-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className={`flex h-9 w-9 items-center justify-center rounded-full ${config.color}`}>
+                        <TIcon className="h-4 w-4" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-semibold">{transcriptCall.patient_name}</p>
+                        <p className="text-xs text-muted-foreground tabular-nums">
+                          {transcriptCall.phone}
+                          {transcriptCall.started_at && ` · ${formatDate(transcriptCall.started_at)} ${formatTime(transcriptCall.started_at)}`}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground tabular-nums flex items-center gap-1">
+                        <Clock className="h-3 w-3" />
+                        {formatDuration(transcriptCall.duration_seconds)}
+                      </span>
+                      <Badge variant={config.variant} className="text-xs">
+                        {config.label}
+                      </Badge>
+                    </div>
                   </div>
-                </div>
-              )}
 
-              {/* Actions Taken */}
-              {(selectedCall.transfer_attempted || selectedCall.voicemail_left || selectedCall.sms_sent) && (
-                <div className="flex gap-2">
-                  {selectedCall.transfer_attempted && (
-                    <Badge variant={selectedCall.transfer_success ? "success" : "warning"} className="text-xs">
-                      Transfer {selectedCall.transfer_success ? "Success" : "Attempted"}
-                    </Badge>
+                  {/* Notes + actions */}
+                  {(transcriptNotes.length > 0 || transcriptCall.transfer_attempted || transcriptCall.voicemail_left || transcriptCall.sms_sent) && (
+                    <>
+                      <Separator className="my-2.5" />
+                      <div className="space-y-1.5">
+                        {transcriptNotes.map((note, idx) => (
+                          <p key={idx} className="text-xs text-muted-foreground flex items-center gap-1.5">
+                            <NotebookPen className="h-3 w-3 shrink-0" />
+                            {note}
+                          </p>
+                        ))}
+                        {(transcriptCall.transfer_attempted || transcriptCall.voicemail_left || transcriptCall.sms_sent) && (
+                          <div className="flex gap-1.5 pt-0.5">
+                            {transcriptCall.transfer_attempted && (
+                              <Badge variant={transcriptCall.transfer_success ? "success" : "warning"} className="text-[10px]">
+                                Transfer {transcriptCall.transfer_success ? "Success" : "Attempted"}
+                              </Badge>
+                            )}
+                            {transcriptCall.voicemail_left && <Badge variant="secondary" className="text-[10px]">VM Left</Badge>}
+                            {transcriptCall.sms_sent && <Badge variant="secondary" className="text-[10px]">SMS Sent</Badge>}
+                          </div>
+                        )}
+                      </div>
+                    </>
                   )}
-                  {selectedCall.voicemail_left && <Badge variant="secondary" className="text-xs">VM Left</Badge>}
-                  {selectedCall.sms_sent && <Badge variant="secondary" className="text-xs">SMS Sent</Badge>}
                 </div>
-              )}
 
-              <Separator />
-
-              {/* Transcript */}
-              <div>
-                <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Transcript</h4>
-                <ScrollArea className="h-[250px] rounded-lg border bg-muted/20 p-3">
-                  <div className="space-y-2.5">
-                    {selectedCall.transcript.length === 0 ? (
-                      <p className="text-xs text-muted-foreground text-center py-6">
-                        No transcript available
-                      </p>
+                {/* Transcript messages */}
+                <div className="flex-1 min-h-0 overflow-y-auto rounded-lg border bg-muted/10">
+                  <div className="p-4 space-y-3">
+                    {transcriptCall.transcript.filter((e) => e.speaker !== "system").length === 0 ? (
+                      <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+                        <MessageSquare className="h-8 w-8 mb-2 opacity-15" />
+                        <p className="text-xs">No transcript available</p>
+                      </div>
                     ) : (
-                      selectedCall.transcript.map((entry, index) => (
+                      transcriptCall.transcript.filter((e) => e.speaker !== "system").map((entry, index) => (
                         <div
                           key={index}
-                          className={`flex gap-2 ${entry.speaker === "patient" ? "justify-end" : "justify-start"}`}
+                          className={`flex gap-2.5 ${entry.speaker === "patient" ? "justify-end" : "justify-start"}`}
                         >
                           {entry.speaker === "ai" && (
-                            <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
-                              <Bot className="h-3 w-3" />
+                            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary mt-0.5">
+                              <Bot className="h-3.5 w-3.5" />
                             </div>
                           )}
                           <div
-                            className={`rounded-lg px-3 py-1.5 text-sm max-w-[80%] ${
+                            className={`rounded-xl px-3.5 py-2 text-sm max-w-[75%] ${
                               entry.speaker === "ai"
                                 ? "bg-muted"
                                 : entry.speaker === "patient"
                                   ? "bg-primary text-primary-foreground"
-                                  : "bg-amber-100 text-amber-900 border border-amber-200"
+                                  : "bg-amber-50 text-amber-900 border border-amber-200"
                             }`}
                           >
-                            <p>{entry.text}</p>
-                            <p className="text-[10px] opacity-70 mt-1 tabular-nums">
+                            <p className="leading-relaxed">{entry.text}</p>
+                            <p className="text-[10px] opacity-60 mt-1 tabular-nums">
                               {entry.timestamp ? formatTime(entry.timestamp) : ""}
                             </p>
                           </div>
                           {entry.speaker === "patient" && (
-                            <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-secondary">
-                              <User className="h-3 w-3" />
+                            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-secondary mt-0.5">
+                              <User className="h-3.5 w-3.5" />
                             </div>
                           )}
                         </div>
                       ))
                     )}
                   </div>
-                </ScrollArea>
-              </div>
-            </div>
-          )}
+                </div>
+              </>
+            );
+          })()}
+        </DialogContent>
+      </Dialog>
+
+      {/* Events Modal */}
+      <Dialog open={!!eventsCall} onOpenChange={() => setEventsCall(null)}>
+        <DialogContent className="max-w-lg max-h-[70vh] overflow-hidden flex flex-col gap-0">
+          {eventsCall && (() => {
+            const config = outcomeConfig[eventsCall.outcome] || outcomeConfig.completed;
+            const EIcon = config.icon;
+            const systemEntries = eventsCall.transcript.filter((e) => e.speaker === "system");
+
+            const categorize = (text: string) => {
+              const t = text.toLowerCase();
+              if (t.includes("transfer")) return { icon: ArrowRightLeft, color: "text-blue-500 bg-blue-50" };
+              if (t.includes("sms")) return { icon: Mail, color: "text-violet-500 bg-violet-50" };
+              if (t.includes("fail") || t.includes("error") || t.includes("blocked")) return { icon: ShieldAlert, color: "text-red-500 bg-red-50" };
+              return { icon: Activity, color: "text-slate-500 bg-slate-50" };
+            };
+
+            return (
+              <>
+                <DialogHeader className="pb-3">
+                  <DialogTitle className="text-base font-semibold">Call Events</DialogTitle>
+                </DialogHeader>
+
+                {/* Call summary bar */}
+                <div className="rounded-lg border bg-muted/30 px-4 py-3 mb-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className={`flex h-9 w-9 items-center justify-center rounded-full ${config.color}`}>
+                        <EIcon className="h-4 w-4" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-semibold">{eventsCall.patient_name}</p>
+                        <p className="text-xs text-muted-foreground tabular-nums">
+                          {eventsCall.phone}
+                          {eventsCall.started_at && ` · ${formatDate(eventsCall.started_at)} ${formatTime(eventsCall.started_at)}`}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge variant="outline" className="text-[10px] tabular-nums">
+                        {systemEntries.length} event{systemEntries.length !== 1 ? "s" : ""}
+                      </Badge>
+                      <Badge variant={config.variant} className="text-xs">
+                        {config.label}
+                      </Badge>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Timeline */}
+                <div className="flex-1 min-h-0 overflow-y-auto rounded-lg border bg-muted/10">
+                  <div className="p-4">
+                    {systemEntries.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+                        <Activity className="h-8 w-8 mb-2 opacity-15" />
+                        <p className="text-xs">No events recorded</p>
+                      </div>
+                    ) : (
+                      <div className="relative">
+                        {/* Timeline line */}
+                        <div className="absolute left-[13px] top-3 bottom-3 w-px bg-border" />
+
+                        <div className="space-y-3">
+                          {systemEntries.map((entry, idx) => {
+                            const cat = categorize(entry.text);
+                            const CatIcon = cat.icon;
+                            return (
+                              <div key={idx} className="flex items-start gap-3 relative">
+                                <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${cat.color} z-10 ring-2 ring-background`}>
+                                  <CatIcon className="h-3.5 w-3.5" />
+                                </div>
+                                <div className="flex-1 min-w-0 pt-0.5">
+                                  <p className="text-sm text-foreground/80 leading-snug break-words">{entry.text}</p>
+                                  {entry.timestamp && (
+                                    <p className="text-[10px] text-muted-foreground tabular-nums mt-0.5">
+                                      {formatTime(entry.timestamp)}
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </>
+            );
+          })()}
         </DialogContent>
       </Dialog>
     </>

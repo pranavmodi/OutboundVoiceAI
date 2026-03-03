@@ -150,13 +150,16 @@ async def activate_scenario(scenario_id: str) -> None:
     1. Loads scenario from DB
     2. Calls MockQueueProvider.reset_with_config(queues, ami_connected)
     3. Calls SimulationPatientProvider.reset_with_patients(patients)
-    4. Calls call_log_provider.reset()
-    5. Calls dispatcher.restart()
+    4. Calls dispatcher.restart()
+
+    Note: call logs are NOT cleared — they are historical records that
+    should persist across scenario switches and server restarts.
+    Use DELETE /api/calls to clear them explicitly.
     """
     from sqlalchemy import select
     from app.db import AsyncSessionLocal
     from app.db.models import SimulationScenarioRow
-    from app.providers import get_mock_queue_provider, get_simulation_patient_provider, get_call_log_provider
+    from app.providers import get_mock_queue_provider, get_simulation_patient_provider
     from app.services.dispatcher import get_dispatcher
 
     print(f"[ACTIVATE_SCENARIO] Activating scenario: {scenario_id}")
@@ -190,11 +193,7 @@ async def activate_scenario(scenario_id: str) -> None:
             patient_dicts=row.patients or []
         )
 
-        # 3. Clear call logs
-        call_log_provider = get_call_log_provider()
-        await call_log_provider.reset()
-
-        # 4. Restart dispatcher
+        # 3. Restart dispatcher
         get_dispatcher().restart()
 
         print(f"[ACTIVATE_SCENARIO] Scenario '{row.label}' activated successfully")
@@ -402,8 +401,8 @@ async def set_active_scenario(request: ActiveScenarioRequest):
     """Set the active simulation scenario and apply it.
 
     This updates the active_scenario_id in settings and immediately
-    activates the scenario (resets mock providers, clears call logs,
-    restarts dispatcher).
+    activates the scenario (resets mock providers, restarts dispatcher).
+    Call logs are preserved.
     """
     from fastapi import HTTPException
 

@@ -45,7 +45,7 @@ class CallLogRow(Base):
     __tablename__ = "call_logs"
 
     call_id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    patient_id: Mapped[str] = mapped_column(String(64), ForeignKey("patients.patient_id"), nullable=False)
+    patient_id: Mapped[str] = mapped_column(String(64), nullable=False)
     patient_name: Mapped[str] = mapped_column(String(255), default="")
     phone: Mapped[str] = mapped_column(String(32), default="")
     order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)

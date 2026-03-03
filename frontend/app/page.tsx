@@ -11,7 +11,6 @@ import {
   ActiveCallCard,
   CallHistoryCard,
   DispatcherEventsCard,
-  TranscriptBrowserCard,
 } from "@/components/dashboard";
 import { SimulationConsole, OperatorConsole } from "@/components/console";
 import { useApi } from "@/hooks/useApi";
@@ -29,6 +28,7 @@ import {
 import type { Patient, CallLog, QueueState, SystemSettings, SimulationScenario } from "@/types";
 
 const PATIENT_POLL_INTERVAL_MS = 10000; // Poll patients every 10 seconds
+const CALLS_PAGE_SIZE = 25;
 
 export default function Dashboard() {
   // API hooks
@@ -48,6 +48,7 @@ export default function Dashboard() {
   const [patients, setPatients] = useState<Patient[]>([]);
   const [patientsLastUpdated, setPatientsLastUpdated] = useState<Date | null>(null);
   const [calls, setCalls] = useState<CallLog[]>([]);
+  const [callsTotal, setCallsTotal] = useState(0);
   const [activeCall, setActiveCall] = useState<CallLog | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
   const [lastCallInfo, setLastCallInfo] = useState<{ patientName: string; duration: number } | null>(null);
@@ -72,10 +73,10 @@ export default function Dashboard() {
     if (isLoaded) return;
 
     const loadData = async () => {
-      const [status, patientList, callList, settingsData, tzList, scenarioList] = await Promise.all([
+      const [status, patientList, callData, settingsData, tzList, scenarioList] = await Promise.all([
         api.getStatus(),
         api.getOutboundQueue(),
-        api.getCalls(),
+        api.getCalls(CALLS_PAGE_SIZE),
         api.getSettings(),
         api.getTimezones(),
         api.getScenarios(),
@@ -87,7 +88,8 @@ export default function Dashboard() {
       }
       setPatients(patientList);
       setPatientsLastUpdated(new Date());
-      setCalls(callList);
+      setCalls(callData.calls);
+      setCallsTotal(callData.total);
       setSettings(settingsData);
       if (settingsData?.call_mode) {
         setCallMode(settingsData.call_mode);
@@ -126,7 +128,10 @@ export default function Dashboard() {
   // Refresh call history and patient list when a call ends (via dashboard WS)
   useEffect(() => {
     dashboard.onCallEnded.current = () => {
-      api.getCalls().then(setCalls);
+      api.getCalls(CALLS_PAGE_SIZE).then(({ calls: c, total: t }) => {
+        setCalls(c);
+        setCallsTotal(t);
+      });
       api.getOutboundQueue().then((list) => {
         setPatients(list);
         setPatientsLastUpdated(new Date());
@@ -255,7 +260,10 @@ export default function Dashboard() {
     setActiveCall(null);
     setCallStartTime(null);
 
-    api.getCalls().then(setCalls);
+    api.getCalls(CALLS_PAGE_SIZE).then(({ calls: c, total: t }) => {
+      setCalls(c);
+      setCallsTotal(t);
+    });
     api.getOutboundQueue().then((list) => {
       setPatients(list);
       setPatientsLastUpdated(new Date());
@@ -282,14 +290,15 @@ export default function Dashboard() {
     if (newSettings) {
       setSettings(newSettings);
       // Refresh patients and calls since the scenario reset them
-      const [patientList, callList, statusData] = await Promise.all([
+      const [patientList, callData, statusData] = await Promise.all([
         api.getOutboundQueue(),
-        api.getCalls(),
+        api.getCalls(CALLS_PAGE_SIZE),
         api.getQueueState(),
       ]);
       setPatients(patientList);
       setPatientsLastUpdated(new Date());
-      setCalls(callList);
+      setCalls(callData.calls);
+      setCallsTotal(callData.total);
       if (statusData) setQueueState(statusData);
     }
   }, [api]);
@@ -438,9 +447,16 @@ export default function Dashboard() {
   }, [api]);
 
   const handleRefreshCalls = useCallback(async () => {
-    const callList = await api.getCalls();
-    setCalls(callList);
+    const { calls: c, total: t } = await api.getCalls(CALLS_PAGE_SIZE);
+    setCalls(c);
+    setCallsTotal(t);
   }, [api]);
+
+  const handleLoadMoreCalls = useCallback(async () => {
+    const { calls: more, total: t } = await api.getCalls(CALLS_PAGE_SIZE, calls.length);
+    setCalls((prev) => [...prev, ...more]);
+    setCallsTotal(t);
+  }, [api, calls.length]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -627,21 +643,21 @@ export default function Dashboard() {
                 transcript: [],
                 error_code: null,
                 error_message: null,
-              } as CallLog) : null}
-              status={voice.callStatus}
-              transcript={voice.transcript}
+              } as CallLog) : dashboard.activeCall}
+              status={voice.isCallActive ? voice.callStatus : dashboard.lastStatus}
+              transcript={voice.isCallActive ? voice.transcript : (dashboard.activeCall?.transcript ?? [])}
               isRecording={audio.isRecording}
               audioLevel={audio.audioLevel}
               onEndCall={handleEndCall}
               onToggleMic={handleToggleMic}
               lastCallInfo={lastCallInfo}
+              isTwilioMode={!voice.isCallActive && !!dashboard.activeCall}
             />
           </TabsContent>
 
           {/* History Tab */}
           <TabsContent value="history" className="space-y-6 animate-in">
-            <CallHistoryCard calls={calls} onRefresh={handleRefreshCalls} />
-            <TranscriptBrowserCard calls={calls} onRefresh={handleRefreshCalls} />
+            <CallHistoryCard calls={calls} onRefresh={handleRefreshCalls} onLoadMore={handleLoadMoreCalls} hasMore={calls.length < callsTotal} />
           </TabsContent>
 
           {/* Simulation Tab */}

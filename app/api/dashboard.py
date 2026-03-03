@@ -368,11 +368,12 @@ async def reset_patients():
 
 
 @router.get("/calls")
-async def get_calls(limit: int = 50):
-    """Get call history."""
+async def get_calls(limit: int = 25, offset: int = 0):
+    """Get call history with pagination."""
     call_log_provider = get_call_log_provider()
-    calls = await call_log_provider.get_all_calls(limit=limit)
-    return {"calls": [c.to_dict() for c in calls]}
+    calls = await call_log_provider.get_all_calls(limit=limit, offset=offset)
+    total = await call_log_provider.get_total_call_count()
+    return {"calls": [c.to_dict() for c in calls], "total": total}
 
 
 @router.get("/calls/active")

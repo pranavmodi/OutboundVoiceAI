@@ -127,14 +127,20 @@ class CallLogProvider:
             return None
         return await self.get_call(self._active_call_id)
 
-    async def get_all_calls(self, limit: int = 50) -> list[CallLog]:
+    async def get_all_calls(self, limit: int = 50, offset: int = 0) -> list[CallLog]:
         async with AsyncSessionLocal() as session:
             result = await session.execute(
                 select(CallLogRow)
                 .order_by(CallLogRow.started_at.desc())
+                .offset(offset)
                 .limit(limit)
             )
             return [_row_to_call_log(r) for r in result.scalars().all()]
+
+    async def get_total_call_count(self) -> int:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(func.count(CallLogRow.call_id)))
+            return result.scalar() or 0
 
     async def get_calls_by_patient(self, patient_id: str) -> list[CallLog]:
         async with AsyncSessionLocal() as session:

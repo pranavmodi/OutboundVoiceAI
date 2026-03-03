@@ -273,6 +273,17 @@ class AutoCallDispatcher:
 
                             orchestrator.on_status_update = _dispatcher_on_status
 
+                        if not orchestrator.on_transcript_update:
+                            async def _dispatcher_on_transcript(speaker, text):
+                                if speaker in ("ai", "patient"):
+                                    await broadcast_to_dashboards({
+                                        "type": "transcript",
+                                        "speaker": speaker,
+                                        "text": text,
+                                    })
+
+                            orchestrator.on_transcript_update = _dispatcher_on_transcript
+
                         call = await orchestrator.start_call(candidate.patient_id, call_mode=call_mode)
 
                         if call is None:
