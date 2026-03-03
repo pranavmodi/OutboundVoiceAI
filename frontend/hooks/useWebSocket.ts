@@ -77,13 +77,13 @@ export function useDashboardWS(): UseDashboardWSReturn {
   }, [appendEvent]);
 
   const connect = useCallback(() => {
-    // Reuse a singleton socket across dev hot-reloads to avoid rapid flap
-    if (isDev && typeof window !== "undefined" && window.__DASHBOARD_WS__ && window.__DASHBOARD_WS__.readyState === WebSocket.OPEN) {
+    // Reuse a singleton socket across dev hot-reloads / strict-mode double-mounts
+    if (isDev && typeof window !== "undefined" && window.__DASHBOARD_WS__ && window.__DASHBOARD_WS__.readyState <= WebSocket.OPEN) {
       wsRef.current = window.__DASHBOARD_WS__;
-      setConnected(true);
+      if (window.__DASHBOARD_WS__.readyState === WebSocket.OPEN) setConnected(true);
       return;
     }
-    if (wsRef.current?.readyState === WebSocket.OPEN) return;
+    if (wsRef.current && wsRef.current.readyState <= WebSocket.OPEN) return;
 
     const ws = new WebSocket(`${WS_BASE}/ws/dashboard`);
 
@@ -147,22 +147,23 @@ export function useDashboardWS(): UseDashboardWSReturn {
             break;
 
           case "transcript":
-            // Update active call transcript (use prev to avoid stale closure)
-            setActiveCall((prev) =>
-              prev
-                ? {
-                    ...prev,
-                    transcript: [
-                      ...prev.transcript,
-                      {
-                        speaker: message.speaker as string,
-                        text: message.text as string,
-                        timestamp: new Date().toISOString(),
-                      },
-                    ],
-                  }
-                : prev
-            );
+            // Update active call transcript (deduplicate consecutive identical entries)
+            setActiveCall((prev) => {
+              if (!prev) return prev;
+              const speaker = message.speaker as string;
+              const text = message.text as string;
+              const last = prev.transcript[prev.transcript.length - 1];
+              if (last && last.speaker === speaker && last.text === text) {
+                return prev; // skip duplicate
+              }
+              return {
+                ...prev,
+                transcript: [
+                  ...prev.transcript,
+                  { speaker, text, timestamp: new Date().toISOString() },
+                ],
+              };
+            });
             break;
 
           case "queue_update":

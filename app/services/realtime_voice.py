@@ -301,7 +301,7 @@ class RealtimeVoiceService:
                 "input_audio_format": self._audio_format,
                 "output_audio_format": self._audio_format,
                 "input_audio_transcription": {
-                    "model": "whisper-1",
+                    "model": "gpt-4o-transcribe",
                 },
                 "turn_detection": {
                     "type": "server_vad",
@@ -425,8 +425,18 @@ class RealtimeVoiceService:
             elif msg_type == "conversation.item.input_audio_transcription.completed":
                 # Patient speech transcript
                 text = data.get("transcript", "")
-                if text and self.on_transcript:
-                    await self.on_transcript("patient", text)
+                if text and text.strip() and self.on_transcript:
+                    await self.on_transcript("patient", text.strip())
+                elif not text or not text.strip():
+                    print("[RealtimeVoice] Patient transcription completed but text was empty")
+
+            elif msg_type == "conversation.item.input_audio_transcription.failed":
+                # Whisper failed to transcribe patient speech
+                error = data.get("error", {})
+                error_msg = error.get("message", "unknown")
+                print(f"[RealtimeVoice] Patient transcription FAILED: {error_msg}")
+                if self.on_transcript:
+                    await self.on_transcript("patient", "[inaudible]")
 
             elif msg_type == "response.function_call_arguments.done":
                 # Function call completed
