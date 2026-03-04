@@ -192,7 +192,8 @@ class CallOrchestrator:
                 if self.on_error:
                     await self.on_error(error_msg)
                 await call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
-                await self._voice_service.disconnect()
+                if self._voice_service:
+                    await self._voice_service.disconnect()
                 self._voice_service = None
                 self._current_call = None
                 self._current_patient = None
@@ -204,7 +205,8 @@ class CallOrchestrator:
                 if self.on_error:
                     await self.on_error(error_msg)
                 await call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
-                await self._voice_service.disconnect()
+                if self._voice_service:
+                    await self._voice_service.disconnect()
                 self._voice_service = None
                 self._current_call = None
                 self._current_patient = None
@@ -222,7 +224,8 @@ class CallOrchestrator:
                 if self.on_error:
                     await self.on_error(error_msg)
                 await call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
-                await self._voice_service.disconnect()
+                if self._voice_service:
+                    await self._voice_service.disconnect()
                 self._voice_service = None
                 self._current_call = None
                 self._current_patient = None
@@ -273,7 +276,8 @@ class CallOrchestrator:
                 if self.on_error:
                     await self.on_error(f"Twilio call failed: {str(e)}")
                 await call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
-                await self._voice_service.disconnect()
+                if self._voice_service:
+                    await self._voice_service.disconnect()
                 self._voice_service = None
                 self._current_call = None
                 self._current_patient = None
@@ -299,7 +303,8 @@ class CallOrchestrator:
                 if self.on_error:
                     await self.on_error("Twilio media stream connection timed out")
                 await call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
-                await self._voice_service.disconnect()
+                if self._voice_service:
+                    await self._voice_service.disconnect()
                 self._voice_service = None
                 self._current_call = None
                 self._current_patient = None

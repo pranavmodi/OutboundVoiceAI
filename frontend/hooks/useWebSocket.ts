@@ -76,17 +76,7 @@ export function useDashboardWS(): UseDashboardWSReturn {
     appendEvent(event);
   }, [appendEvent]);
 
-  const connect = useCallback(() => {
-    // Reuse a singleton socket across dev hot-reloads / strict-mode double-mounts
-    if (isDev && typeof window !== "undefined" && window.__DASHBOARD_WS__ && window.__DASHBOARD_WS__.readyState <= WebSocket.OPEN) {
-      wsRef.current = window.__DASHBOARD_WS__;
-      if (window.__DASHBOARD_WS__.readyState === WebSocket.OPEN) setConnected(true);
-      return;
-    }
-    if (wsRef.current && wsRef.current.readyState <= WebSocket.OPEN) return;
-
-    const ws = new WebSocket(`${WS_BASE}/ws/dashboard`);
-
+  const attachHandlers = useCallback((ws: WebSocket) => {
     ws.onopen = () => {
       setConnected(true);
       console.log("Dashboard WS connected");
@@ -195,12 +185,28 @@ export function useDashboardWS(): UseDashboardWSReturn {
         console.error("Failed to parse WS message:", e);
       }
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appendEvent]);
+
+  const connect = useCallback(() => {
+    // Reuse a singleton socket across dev hot-reloads / strict-mode double-mounts
+    if (isDev && typeof window !== "undefined" && window.__DASHBOARD_WS__ && window.__DASHBOARD_WS__.readyState <= WebSocket.OPEN) {
+      wsRef.current = window.__DASHBOARD_WS__;
+      if (window.__DASHBOARD_WS__.readyState === WebSocket.OPEN) setConnected(true);
+      // Re-attach handlers so this mount receives events
+      attachHandlers(window.__DASHBOARD_WS__);
+      return;
+    }
+    if (wsRef.current && wsRef.current.readyState <= WebSocket.OPEN) return;
+
+    const ws = new WebSocket(`${WS_BASE}/ws/dashboard`);
+    attachHandlers(ws);
 
     wsRef.current = ws;
     if (isDev && typeof window !== "undefined") {
       window.__DASHBOARD_WS__ = ws;
     }
-  }, [appendEvent, isDev]);
+  }, [attachHandlers, isDev]);
 
   useEffect(() => {
     isMountedRef.current = true;
