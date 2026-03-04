@@ -262,3 +262,11 @@ async def twilio_media_websocket(websocket: WebSocket, stream_id: str):
         logger.info(f"Twilio media stream disconnected: stream_id={stream_id}")
     except Exception as e:
         logger.error(f"Twilio media stream error: {e}")
+    finally:
+        # Twilio media stream ended (caller hung up or stream stopped).
+        # End the call if it's still active.
+        from app.services.call_orchestrator import get_orchestrator
+        orchestrator = get_orchestrator()
+        if orchestrator.is_call_active:
+            logger.info(f"Twilio media stream closed — ending active call (stream_id={stream_id})")
+            await orchestrator.end_call(CallOutcome.DISCONNECTED)
