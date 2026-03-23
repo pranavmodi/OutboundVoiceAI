@@ -223,7 +223,7 @@ Last updated: 2026-03-23
 | `CORS_ORIGINS` | Yes | Set (includes production domain) | None |
 | `FREEPBX_QUEUE_URL` | No | Uses default `10.254.99.40:2001` | Verify correct for production |
 | `LANGUAGE_QUEUE_MAP` | Yes | **NOT SET** — defaults to `scheduling_en/es` | `{"en":"9006","es":"9009","zh":"9012"}` (Cantonese 9013 needs handling) |
-| `QUEUE_TRANSFER_TARGETS` | Yes | **NOT SET** | Set SIP/PSTN targets per queue (needs Danny) |
+| `QUEUE_TRANSFER_TARGETS` | Yes | **NOT SET** | See FreePBX section above for SIP URIs |
 | `CALLLIST_API_URL` | No | Set (`app.radflow360.com`) | None |
 | `CALLLIST_API_USER` | Yes | Set (`Chatbot`) | None |
 | `CALLLIST_API_PASSWORD` | Yes | Set | None |
@@ -277,9 +277,27 @@ Full queue mapping from Danny:
 - Add `zh-cmn` (Mandarin) and `zh-yue` (Cantonese) to the Language enum and update RadFlow mapping, or
 - Default `zh` → 9012 (Mandarin) and add Cantonese handling if RadFlow provides that distinction
 
+**Transfer SIP destinations — ANSWERED (2026-03-23, Bill Simon):**
+
+FreePBX has direct SIP access to each queue:
+```
+sip:9006@pbx.radflow360.com;transport=TLS   # Scheduling English
+sip:9009@pbx.radflow360.com;transport=TLS   # Scheduling Spanish
+sip:9012@pbx.radflow360.com;transport=TLS   # Scheduling Mandarin
+sip:9013@pbx.radflow360.com;transport=TLS   # Scheduling Cantonese
+```
+
+Production env var:
+```
+QUEUE_TRANSFER_TARGETS={"9006":"sip:9006@pbx.radflow360.com;transport=TLS","9009":"sip:9009@pbx.radflow360.com;transport=TLS","9012":"sip:9012@pbx.radflow360.com;transport=TLS","9013":"sip:9013@pbx.radflow360.com;transport=TLS"}
+```
+
+Code already handles SIP URIs with `;transport=TLS` — no changes needed (`twilio_voice_service.py:200`).
+
+**Note:** Twilio's IP ranges may need to be whitelisted on the FreePBX firewall. Confirm with Bill whether Twilio can reach `pbx.radflow360.com` on SIP port.
+
 **Still unanswered:**
-- What SIP URI / DID / extension should Twilio dial to transfer into each queue?
-- Is `http://10.254.99.40:2001/queuestatus.php` the correct production URL? Does it support HTTPS?
+- Is `http://10.254.99.40:2001/queuestatus.php` the correct production URL for queue monitoring? Does it support HTTPS?
 
 ### Twilio
 
