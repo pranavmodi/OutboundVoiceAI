@@ -1,50 +1,9 @@
-"""Tests for wrong-number and voicemail detection heuristics."""
+"""Tests for voicemail and disconnected-number detection heuristics."""
 import pytest
 from app.services.transfer_service import (
-    looks_like_wrong_number_signal,
     looks_like_voicemail_signal,
 )
 from app.services.carrier_failure_service import looks_like_disconnected_or_invalid
-
-
-class TestLooksLikeWrongNumberSignal:
-    """Test wrong-number detection in patient utterances."""
-
-    def test_wrong_number_explicit(self):
-        assert looks_like_wrong_number_signal("You have the wrong number") is True
-
-    def test_wrong_person(self):
-        assert looks_like_wrong_number_signal("Wrong person, sorry") is True
-
-    def test_not_me(self):
-        assert looks_like_wrong_number_signal("That's not me") is True
-
-    def test_this_isnt_someone(self):
-        assert looks_like_wrong_number_signal("This isn't John") is True
-
-    def test_this_is_not_someone(self):
-        assert looks_like_wrong_number_signal("This is not Maria") is True
-
-    def test_you_have_the_wrong(self):
-        assert looks_like_wrong_number_signal("you have the wrong person") is True
-
-    def test_no_one_by_that_name(self):
-        assert looks_like_wrong_number_signal("There's no one by that name here") is True
-
-    def test_dont_know_who(self):
-        assert looks_like_wrong_number_signal("I don't know who that is") is True
-
-    def test_normal_greeting(self):
-        assert looks_like_wrong_number_signal("Hello, how can I help you?") is False
-
-    def test_empty(self):
-        assert looks_like_wrong_number_signal("") is False
-
-    def test_none(self):
-        assert looks_like_wrong_number_signal(None) is False
-
-    def test_case_insensitive(self):
-        assert looks_like_wrong_number_signal("WRONG NUMBER") is True
 
 
 class TestLooksLikeVoicemailSignal:

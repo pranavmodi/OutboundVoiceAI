@@ -3,7 +3,6 @@ import asyncio
 import json
 import logging
 import os
-import re
 from typing import Optional, Callable, Any
 
 from app.models import CallLog, CallOutcome, Patient
@@ -68,20 +67,6 @@ def find_queue_by_name(queue_state, queue_name: str):
     return None
 
 
-def looks_like_wrong_number_signal(text: str) -> bool:
-    """Best-effort detection of wrong-number intent in patient utterances."""
-    lowered = (text or "").lower()
-    if "wrong number" in lowered or "wrong person" in lowered:
-        return True
-    patterns = (
-        r"\bnot me\b",
-        r"\bthis is(?:n't| not) [a-z]+\b",
-        r"\byou have the wrong\b",
-        r"\bno one (?:by|with) (?:that|this) name\b",
-        r"\bdon'?t know (?:who|them|that person)\b",
-    )
-    return any(re.search(p, lowered) for p in patterns)
-
 
 def looks_like_voicemail_signal(text: str) -> bool:
     """Detect voicemail-like phrases in web-mode simulated patient speech."""
@@ -116,18 +101,6 @@ class TransferService:
         call_log_provider = get_call_log_provider()
         await call_log_provider.add_transcript(call_id, "system", message)
 
-    async def recent_patient_indicates_wrong_number(self, call_id: str) -> bool:
-        """Inspect recent patient transcript lines for wrong-number cues."""
-        call_log_provider = get_call_log_provider()
-        row = await call_log_provider.get_call(call_id)
-        if not row or not row.transcript:
-            return False
-        recent = row.transcript[-8:]
-        for entry in recent:
-            if entry.speaker == "patient" and looks_like_wrong_number_signal(entry.text):
-                return True
-        return False
-
     def resolve_queue(self, language: Optional[object]) -> str:
         return resolve_transfer_queue_for_language(language)
 
@@ -152,11 +125,6 @@ class TransferService:
         """Execute the full transfer flow. Returns the resulting CallOutcome."""
         call_log_provider = get_call_log_provider()
         await call_log_provider.update_call(call.call_id, transfer_attempted=True)
-
-        if await self.recent_patient_indicates_wrong_number(call.call_id):
-            if self.on_status_update:
-                await self.on_status_update("Transfer canceled - possible wrong number detected")
-            return CallOutcome.WRONG_NUMBER
 
         patient_language = normalize_language_code(
             patient.language if patient else None
