@@ -37,6 +37,7 @@ class DispatcherSettings:
     dispatch_timeout: int = 30
     max_attempts: int = 3
     min_hours_between: int = 6
+    verbose_logging: bool = False
 
 
 @dataclass

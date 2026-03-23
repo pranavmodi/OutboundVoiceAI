@@ -33,6 +33,7 @@ class CallOrchestrator:
         self._twilio_call_sid: Optional[str] = None
         self._voicemail_handled: bool = False
         self._web_voicemail_simulated: bool = False
+        self._verbose: bool = False
 
         # Callbacks for UI updates
         self.on_call_started: Optional[Callable[[CallLog], Any]] = None
@@ -57,6 +58,7 @@ class CallOrchestrator:
         self._notifications.on_status_update = self.on_status_update
         self._transfer.on_status_update = self.on_status_update
         self._carrier_failure.on_status_update = self.on_status_update
+        self._carrier_failure.verbose = self._verbose
 
     async def handle_twilio_amd_status(self, call_sid: str, answered_by: str):
         """Handle Twilio AMD callback values (machine/human)."""
@@ -151,22 +153,28 @@ class CallOrchestrator:
         self._call_mode = call_mode
         self._web_voicemail_simulated = False
 
+        # Read verbose setting
+        settings_provider = get_settings_provider()
+        settings = await settings_provider.get_settings()
+        self._verbose = settings.dispatcher_settings.verbose_logging
+
         mode_label = "Twilio" if call_mode == "twilio" else "Web"
-        print(f"[CallOrchestrator] Starting call {call.call_id} to {patient.name} ({patient.phone}) in {mode_label} mode")
+        print(f"[CallOrchestrator] Starting call to {patient.name} ({patient.phone}) in {mode_label} mode")
 
         if self.on_status_update:
             await self.on_status_update(f"Connecting ({mode_label})...")
 
         audio_format = "g711_ulaw" if call_mode == "twilio" else "pcm16"
 
-        self._voice_service = RealtimeVoiceService(audio_format=audio_format)
+        self._voice_service = RealtimeVoiceService(audio_format=audio_format, verbose=self._verbose)
         self._voice_service.on_transcript = self._handle_transcript
         self._voice_service.on_audio = self._handle_audio
         self._voice_service.on_function_call = self._handle_function_call
         self._voice_service.on_error = self._handle_voice_error
         self._voice_service.on_session_ended = self._handle_session_ended
 
-        print(f"[CallOrchestrator] Connecting to OpenAI Realtime for call {call.call_id}...")
+        if self._verbose:
+            print(f"[CallOrchestrator] Connecting to OpenAI Realtime for call {call.call_id}...")
         success = await self._voice_service.connect(
             call.call_id,
             patient.name,
@@ -179,7 +187,8 @@ class CallOrchestrator:
             self._current_call = None
             self._current_patient = None
             return None
-        print(f"[CallOrchestrator] OpenAI Realtime connected for call {call.call_id}")
+        if self._verbose:
+            print(f"[CallOrchestrator] OpenAI Realtime connected for call {call.call_id}")
 
         if call_mode == "twilio":
             settings_provider = get_settings_provider()
@@ -246,7 +255,7 @@ class CallOrchestrator:
                 )
 
                 stream_id = generate_stream_id()
-                bridge = TwilioMediaBridge(self._voice_service)
+                bridge = TwilioMediaBridge(self._voice_service, verbose=self._verbose)
                 register_bridge(stream_id, bridge)
                 self._twilio_bridge = bridge
 
@@ -256,7 +265,8 @@ class CallOrchestrator:
                 twiml_url = f"{backend_host}/api/twilio/twiml/{stream_id}"
 
                 mock_label = " [MOCK]" if settings.mock_mode else ""
-                print(f"[CallOrchestrator] Placing Twilio call{mock_label} for {call.call_id} to {dial_number}, twiml_url={twiml_url}")
+                if self._verbose:
+                    print(f"[CallOrchestrator] Placing Twilio call{mock_label} for {call.call_id} to {dial_number}, twiml_url={twiml_url}")
                 if self.on_status_update:
                     status_msg = f"Mock mode — calling {dial_number} (instead of {patient.phone})" if settings.mock_mode else f"Calling {patient.phone} via Twilio..."
                     await self.on_status_update(status_msg)
@@ -269,7 +279,8 @@ class CallOrchestrator:
                 )
                 self._twilio_call_sid = call_sid
                 self._voicemail_handled = False
-                print(f"[CallOrchestrator] Twilio call placed successfully{mock_label}: SID={call_sid}, call_id={call.call_id}, to={dial_number}")
+                if self._verbose:
+                    print(f"[CallOrchestrator] Twilio call placed: SID={call_sid}, call_id={call.call_id}, to={dial_number}")
 
             except Exception as e:
                 print(f"[CallOrchestrator] Twilio call FAILED for {call.call_id} to {dial_number}: {e}")
@@ -284,7 +295,8 @@ class CallOrchestrator:
                 self._twilio_bridge = None
                 return None
         else:
-            print(f"[CallOrchestrator] Web mode — no Twilio phone call placed. call_id={call.call_id}, phone={patient.phone}")
+            if self._verbose:
+                print(f"[CallOrchestrator] Web mode — no Twilio phone call placed. call_id={call.call_id}, phone={patient.phone}")
             if self.on_status_update:
                 await self.on_status_update("Connected - AI Speaking")
 
@@ -296,10 +308,11 @@ class CallOrchestrator:
         if call_mode == "twilio" and self._twilio_bridge:
             if self.on_status_update:
                 await self.on_status_update("Waiting for call to connect...")
-            print(f"[CallOrchestrator] Waiting for Twilio media stream to connect for call {call.call_id}...")
+            if self._verbose:
+                print(f"[CallOrchestrator] Waiting for Twilio media stream to connect for call {call.call_id}...")
             connected = await self._twilio_bridge.wait_for_connection(timeout=30)
             if not connected:
-                print(f"[CallOrchestrator] Twilio media stream did not connect in time for call {call.call_id}")
+                print(f"[CallOrchestrator] Twilio media stream timed out for call {call.call_id}")
                 if self.on_error:
                     await self.on_error("Twilio media stream connection timed out")
                 await call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
@@ -310,12 +323,14 @@ class CallOrchestrator:
                 self._current_patient = None
                 self._twilio_bridge = None
                 return None
-            print(f"[CallOrchestrator] Twilio media stream connected for call {call.call_id}")
+            if self._verbose:
+                print(f"[CallOrchestrator] Twilio media stream connected for call {call.call_id}")
             if self.on_status_update:
                 await self.on_status_update("Connected - AI Speaking")
 
         await self._voice_service.start_conversation()
-        print(f"[CallOrchestrator] Conversation started for call {call.call_id}")
+        if self._verbose:
+            print(f"[CallOrchestrator] Conversation started for call {call.call_id}")
 
         return call
 
@@ -357,7 +372,8 @@ class CallOrchestrator:
             if call_mode == "twilio" and twilio_call_sid and outcome not in (CallOutcome.TRANSFERRED, CallOutcome.VOICEMAIL):
                 try:
                     from app.services.twilio_voice_service import hangup_twilio_call
-                    print(f"[CallOrchestrator] Hanging up Twilio call SID={twilio_call_sid}")
+                    if self._verbose:
+                        print(f"[CallOrchestrator] Hanging up Twilio call SID={twilio_call_sid}")
                     await asyncio.to_thread(hangup_twilio_call, twilio_call_sid)
                 except Exception as e:
                     logger.warning("Failed to hang up Twilio call %s: %s", twilio_call_sid, e)

@@ -26,13 +26,17 @@ async def lifespan(app: FastAPI):
     settings = await get_settings_provider().get_settings()
     set_queue_source(settings.queue_source)
     set_patient_source(settings.patient_source)
-    # Apply persisted dispatcher settings before starting
+    # Apply persisted dispatcher settings before starting.
+    # CLI flag (VERBOSE_LOGGING env var) overrides the DB setting.
     ds = settings.dispatcher_settings
+    verbose_override = os.getenv("VERBOSE_LOGGING", "").lower() in ("1", "true", "yes")
+    verbose = verbose_override or ds.verbose_logging
     get_dispatcher().update_config(
         poll_interval=ds.poll_interval,
         dispatch_timeout=ds.dispatch_timeout,
         max_attempts=ds.max_attempts,
         min_hours_between=ds.min_hours_between,
+        verbose_logging=verbose,
     )
     # If sources are "simulation" and active_scenario_id is set, activate the scenario
     if (settings.queue_source == "simulation" or settings.patient_source == "simulation") and settings.active_scenario_id:

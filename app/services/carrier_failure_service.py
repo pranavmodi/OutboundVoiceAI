@@ -95,6 +95,7 @@ class CarrierFailureHandler:
         self._get_twilio_call_sid = get_twilio_call_sid
         self._end_call = end_call_fn
         self.on_status_update: Optional[Callable[[str], Any]] = None
+        self.verbose: bool = False
 
     async def _log_call_event(self, call_id: str, message: str):
         call_log_provider = get_call_log_provider()
@@ -119,7 +120,11 @@ class CarrierFailureHandler:
         if not status:
             return
         if not is_carrier_failure(status, error_code, sip_response_code):
-            print(f"[TwilioCallStatus] Call {current_call.call_id}: status={status} (not a failure)")
+            if self.verbose:
+                parts = [f"SID={call_sid}", f"status={status}"]
+                if sip_response_code is not None:
+                    parts.append(f"sip_code={sip_response_code}")
+                print(f"[TwilioStatus] {' | '.join(parts)}")
             return
 
         reason = map_twilio_failure_reason(status, error_code, sip_response_code)

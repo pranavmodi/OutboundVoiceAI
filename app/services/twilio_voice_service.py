@@ -48,8 +48,9 @@ def pop_bridge(stream_id: str) -> Optional["TwilioMediaBridge"]:
 class TwilioMediaBridge:
     """Bridges a Twilio media stream WebSocket with an OpenAI RealtimeVoiceService."""
 
-    def __init__(self, voice_service: RealtimeVoiceService):
+    def __init__(self, voice_service: RealtimeVoiceService, verbose: bool = False):
         self.voice_service = voice_service
+        self._verbose = verbose
         self._twilio_ws: Optional[WebSocket] = None
         self._stream_sid: Optional[str] = None
         self._call_sid: Optional[str] = None
@@ -90,12 +91,14 @@ class TwilioMediaBridge:
                 event = msg.get("event")
 
                 if event == "connected":
-                    logger.info("Twilio stream connected")
+                    if self._verbose:
+                        logger.info("Twilio stream connected")
 
                 elif event == "start":
                     self._stream_sid = msg["start"]["streamSid"]
                     self._call_sid = msg["start"].get("callSid")
-                    logger.info(f"Twilio stream started: streamSid={self._stream_sid}")
+                    if self._verbose:
+                        logger.info(f"Twilio stream started: streamSid={self._stream_sid}")
                     self._connected.set()
 
                 elif event == "media":

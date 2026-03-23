@@ -42,6 +42,7 @@ class DispatcherSettingsRequest(BaseModel):
     dispatch_timeout: int = 30
     max_attempts: int = 3
     min_hours_between: int = 6
+    verbose_logging: bool = False
 
 
 class SourceRequest(BaseModel):
@@ -130,6 +131,7 @@ async def settings_to_response(provider) -> SystemSettingsResponse:
             dispatch_timeout=settings.dispatcher_settings.dispatch_timeout,
             max_attempts=settings.dispatcher_settings.max_attempts,
             min_hours_between=settings.dispatcher_settings.min_hours_between,
+            verbose_logging=settings.dispatcher_settings.verbose_logging,
         ),
         allow_live_calls=settings.allow_live_calls,
         allowed_phones=settings.allowed_phones,
@@ -303,6 +305,7 @@ async def update_dispatcher_settings(request: DispatcherSettingsRequest):
         dispatch_timeout=request.dispatch_timeout,
         max_attempts=request.max_attempts,
         min_hours_between=request.min_hours_between,
+        verbose_logging=request.verbose_logging,
     )
 
     await provider.update_dispatcher_settings(dispatcher_settings)
@@ -313,6 +316,7 @@ async def update_dispatcher_settings(request: DispatcherSettingsRequest):
         dispatch_timeout=request.dispatch_timeout,
         max_attempts=request.max_attempts,
         min_hours_between=request.min_hours_between,
+        verbose_logging=request.verbose_logging,
     )
 
     return await settings_to_response(provider)

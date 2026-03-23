@@ -50,6 +50,7 @@ class AutoCallDispatcher:
         self.dispatch_timeout: int = DEFAULT_DISPATCH_TIMEOUT_SECONDS
         self.max_attempts: int = DEFAULT_MAX_ATTEMPTS
         self.min_hours_between: int = DEFAULT_MIN_HOURS_BETWEEN
+        self.verbose: bool = False
 
     @property
     def state(self) -> DispatcherState:
@@ -76,25 +77,34 @@ class AutoCallDispatcher:
         self._log_decision("stopped", "Dispatcher stopped")
 
     def update_config(self, poll_interval: int, dispatch_timeout: int,
-                       max_attempts: int, min_hours_between: int):
+                       max_attempts: int, min_hours_between: int,
+                       verbose_logging: bool = False):
         """Update dispatcher configuration."""
         self.poll_interval = poll_interval
         self.dispatch_timeout = dispatch_timeout
         self.max_attempts = max_attempts
         self.min_hours_between = min_hours_between
+        self.verbose = verbose_logging
         self._log_decision("config_updated",
                            f"Config updated: poll={poll_interval}s, timeout={dispatch_timeout}s, "
-                           f"max_attempts={max_attempts}, min_hours={min_hours_between}")
+                           f"max_attempts={max_attempts}, min_hours={min_hours_between}, "
+                           f"verbose={verbose_logging}")
 
     def restart(self):
         """Restart the dispatcher (stop + start)."""
         self.stop()
         self.start()
 
+    def _verbose_log(self, msg: str):
+        """Print a message only when verbose logging is enabled."""
+        if self.verbose:
+            print(f"[Dispatcher] {msg}")
+
     async def _run_loop(self):
         """Main polling loop — runs every poll_interval seconds."""
         try:
             while True:
+                self._verbose_log(f"Tick start — state={self._state.value}")
                 await self._tick()
                 await asyncio.sleep(self.poll_interval)
         except asyncio.CancelledError:
@@ -111,6 +121,8 @@ class AutoCallDispatcher:
         # 1. Poll queue state
         queue_provider = get_queue_provider()
         queue_state = await queue_provider.poll()
+
+        self._verbose_log(f"Queue poll: ami={queue_state.ami_connected}, outbound_ok={queue_state.outbound_allowed}, agents={queue_state.global_agents_available}")
 
         # Track the decision made this tick (broadcast at end)
         tick_decision = None
@@ -132,7 +144,7 @@ class AutoCallDispatcher:
                     settings_provider = get_settings_provider()
                     settings = await settings_provider.get_settings()
                     call_mode = settings.call_mode or "web"
-                    print(f"[Dispatcher] DISPATCHED tick: call_mode={call_mode}, voice_clients={len(voice_clients)}, patient={self._dispatched_patient_id}")
+                    self._verbose_log(f"DISPATCHED tick: call_mode={call_mode}, voice_clients={len(voice_clients)}, patient={self._dispatched_patient_id}")
                     if call_mode == "web" and voice_clients and self._dispatched_patient_id:
                         orchestrator = get_orchestrator()
                         call = await orchestrator.start_call(self._dispatched_patient_id, call_mode=call_mode)
@@ -161,6 +173,7 @@ class AutoCallDispatcher:
             call_log_provider = get_call_log_provider()
             if not call_log_provider.has_active_call():
                 # Call ended but notify_call_ended was missed — self-heal
+                print("[Dispatcher] Self-heal: no active call found while in CALL_ACTIVE, resetting to IDLE")
                 self._state = DispatcherState.IDLE
                 self._dispatched_at = None
                 self._dispatched_patient_id = None
@@ -179,6 +192,11 @@ class AutoCallDispatcher:
             settings_provider = get_settings_provider()
             settings = await settings_provider.get_settings()
             call_log_provider = get_call_log_provider()
+
+            self._verbose_log(
+                f"Sources: queue={settings.queue_source}, patients={settings.patient_source}, "
+                f"call_mode={settings.call_mode}, scenario={settings.active_scenario_id or 'none'}"
+            )
 
             # system_enabled
             if not settings.system_enabled:
@@ -210,6 +228,9 @@ class AutoCallDispatcher:
                 tick_decision = self._log_decision("blocked", "Call already in progress")
 
             else:
+                # All gating conditions passed
+                self._verbose_log("All gates passed — looking for candidate patient")
+
                 # 7. Get next candidate patient
                 patient_provider = get_patient_provider()
                 candidate = await patient_provider.get_next_candidate(
@@ -217,6 +238,7 @@ class AutoCallDispatcher:
                     min_hours_between=self.min_hours_between)
 
                 if candidate is None:
+                    self._verbose_log("No eligible candidate found")
                     tick_decision = self._log_decision("no_candidate", "No eligible patients in queue")
 
                 else:
@@ -224,10 +246,11 @@ class AutoCallDispatcher:
                     settings_provider = get_settings_provider()
                     settings = await settings_provider.get_settings()
                     call_mode = settings.call_mode or "web"
-                    print(f"[Dispatcher] Candidate found: {candidate.name} ({candidate.phone}), call_mode={call_mode}, voice_clients={len(voice_clients)}")
+                    print(f"[Dispatcher] Candidate found: {candidate.name} ({candidate.phone}), mode={call_mode}")
 
                     # In web mode, if no voice client is connected, pre-dispatch to trigger the frontend to connect voice
                     if call_mode == "web" and not voice_clients:
+                        print(f"[Dispatcher] State transition: IDLE → DISPATCHED (waiting for voice client)")
                         self._state = DispatcherState.DISPATCHED
                         self._dispatched_at = asyncio.get_event_loop().time()
                         self._dispatched_patient_id = candidate.patient_id
@@ -241,6 +264,7 @@ class AutoCallDispatcher:
                         })
                     else:
                         # 9. Start call directly (backend-driven)
+                        print(f"[Dispatcher] State transition: IDLE → DISPATCHED (starting call)")
                         self._state = DispatcherState.DISPATCHED
                         self._dispatched_at = asyncio.get_event_loop().time()
                         self._dispatched_patient_id = candidate.patient_id
@@ -312,12 +336,14 @@ class AutoCallDispatcher:
     def notify_call_started(self, patient_id: str):
         """Transition DISPATCHED → CALL_ACTIVE when the frontend starts the call."""
         if self._state == DispatcherState.DISPATCHED:
+            print(f"[Dispatcher] State transition: DISPATCHED → CALL_ACTIVE (patient={patient_id})")
             self._state = DispatcherState.CALL_ACTIVE
             self._dispatched_at = None
             self._log_decision("call_started",
                                f"Call started for patient {patient_id}")
         elif self._state == DispatcherState.IDLE:
             # Manual call started outside dispatcher
+            print(f"[Dispatcher] State transition: IDLE → CALL_ACTIVE (manual call, patient={patient_id})")
             self._state = DispatcherState.CALL_ACTIVE
             self._log_decision("call_started",
                                f"Manual call started for patient {patient_id}")
@@ -325,6 +351,7 @@ class AutoCallDispatcher:
     def notify_call_ended(self):
         """Transition CALL_ACTIVE → IDLE when the call ends."""
         if self._state in (DispatcherState.CALL_ACTIVE, DispatcherState.DISPATCHED):
+            print(f"[Dispatcher] State transition: {self._state.value} → IDLE (call ended)")
             self._state = DispatcherState.IDLE
             self._dispatched_at = None
             self._dispatched_patient_id = None
@@ -339,7 +366,7 @@ class AutoCallDispatcher:
             "state": self._state.value,
         }
         self._decision_log.append(entry)
-        logger.info(f"[Dispatcher] {decision}: {detail}")
+        print(f"[Dispatcher] {decision}: {detail}")
 
         # Fire-and-forget DB persistence
         try:
