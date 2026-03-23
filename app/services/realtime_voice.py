@@ -148,11 +148,17 @@ We have 3 convenient locations:
 - **Email**: scheduling@preciseimaging.com
 
 ### What to Bring to Your MRI Appointment
-1. **Photo ID** - Driver's license or government-issued ID
+1. **Photo ID** - Driver's license or government-issued ID. Alternate photo IDs (passport, school ID, gym ID) are also accepted. If your ID is already on file, you may not need to bring it — you can upload it ahead of time on the patient portal.
 2. **Insurance card** - Both front and back
 3. **Referral or prescription** - From your doctor (if not already sent to us)
 4. **List of medications** - Including dosages
 5. **Prior imaging** - CDs or reports from previous scans if you have them
+
+### How to Upload Documents or ID Before Your Visit
+- **Patient Portal**: Log in at https://precise.radflow360.com/patient-portal to upload your photo ID and fill out forms digitally (demographics, questionnaire, screening questions, liens).
+- **Referral/Prescription**: Email to referrals@precisemri.com, text a photo to 818-629-1169, or upload at precisemri.com/referral-order-form/
+- **Need help?**: Call 800-558-2223 for assistance with portal access or uploads.
+<!-- TODO: Replace the above with comprehensive patient-facing upload instructions once available. Current info sourced from precisemri.com (March 2026). The radflow360 knowledge base has staff-facing upload docs (front desk portal) — do NOT use those for patient instructions. -->
 
 ### MRI Preparation Instructions
 - **Clothing**: Wear comfortable, loose-fitting clothes without metal (zippers, buttons, underwire). We provide gowns if needed.
