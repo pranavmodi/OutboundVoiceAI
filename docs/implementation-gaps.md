@@ -1,64 +1,63 @@
 # Implementation Gaps — Requirements Audit
 
 Audit performed against all 70 test scenarios and the requirements document.
-Date: 2026-02-23
+Original audit: 2026-02-23
+Last updated: 2026-03-23
 
 ---
 
-## Functional Gaps
+## Resolved Gaps
 
-### Gap 1: Preferred Callback Time Not Captured
+### Gap 1: Preferred Callback Time Not Captured — FIXED
 
 **Requirement:** Scenario 36 (Patient not available), Requirements §Call Outcomes — Outcome 3
 
-> "AI asks for preferred callback time (optional)"
-> "Invite patient to reply with preferred callback time"
-
-**Current behavior:** The AI system prompt instructs the agent to "ask for permission to note a better callback time" conversationally, but there is no mechanism to record or store it. The `end_call` tool has no `preferred_callback_time` parameter, and neither `CallLog` nor `Patient` models have a field for it.
-
-**Impact:** The AI asks the question but the answer is lost — it only appears in the transcript. Scheduling staff reviewing the call log would have to read the transcript manually.
-
-**Suggested fix:**
-- Add an optional `preferred_callback_time` string parameter to the `end_call` tool definition
-- Add a `preferred_callback_time` field to `CallLog`
-- Persist the value when the AI provides it
-- Surface it in the dashboard call detail view
+**Resolution:** Fully implemented end-to-end.
+- `end_call` tool has `preferred_callback_time` parameter
+- `CallLog` model stores the value, persisted via alembic migration
+- Orchestrator logs a system transcript entry: "Preferred callback captured: {time}"
+- Frontend displays it in call history rows (pen icon) and transcript modal notes
+- Fallback `inferPreferredCallbackFromTranscript()` extracts it from transcript if structured field is empty
 
 ---
 
-### Gap 2: Holiday Calendar Not Implemented
+### Gap 2: Holiday Calendar Not Implemented — FIXED
 
 **Requirement:** Requirements §Business Hours Enforcement, next-milestone.md Feature 6
 
-> "Holiday calendar support required"
-
-**Current behavior:** `is_within_business_hours()` only checks time-of-day and day-of-week. There is no holiday data source, no holiday model, and no check against holidays.
-
-**Impact:** The system will place calls on holidays that fall within normal business hours (e.g., Christmas on a weekday).
-
-**Suggested fix:**
-- Add a `holidays` table or configuration (list of dates)
-- Check holidays in `is_within_business_hours()`
-- Expose holiday management in the dashboard settings
+**Resolution:** `HolidayEntry` model with recurring flag support. `_is_holiday()` / `_matching_holiday()` in `settings_provider.py` check holidays during business hours evaluation. Holiday CRUD exposed in settings API and dashboard.
 
 ---
 
-### Gap 3: Document Upload Instructions Missing from AI Prompt
+### Gap 3: Document Upload Instructions Missing from AI Prompt — FIXED
 
 **Requirement:** Scenario 51 (Patient asks how to upload documents), Requirements §AI Agent Capabilities — Allowed Topics
 
-> "How to upload ID/documents"
+**Resolution:** Added "How to Upload Documents or ID Before Your Visit" section to the AI knowledge base in `realtime_voice.py` with patient portal URL, referral submission channels (email, text, web form), and help phone number. Sourced from precisemri.com. See TODO in code for replacing with more comprehensive instructions when available.
 
-**Current behavior:** The system prompt includes patient portal URL (`portal.preciseimaging.com`) but does not include specific instructions on how to upload documents or ID through the portal.
-
-**Impact:** If a patient asks "How do I upload my ID?", the AI can only point to the portal generically rather than giving step-by-step guidance.
-
-**Suggested fix:**
-- Add a "How to Upload Documents" section to the `SYSTEM_INSTRUCTIONS` knowledge base with steps (e.g., log in to portal, navigate to Documents section, click Upload, select files)
+**Note:** The radflow360 knowledge base contains staff-facing front desk portal documentation (paper intake upload workflow). These are NOT patient-facing and must not be used for patient instructions.
 
 ---
 
-## Logging / Observability Gaps
+### Gap 7: Wrong-Number Detection Uses Fragile Regex Heuristics — RESOLVED (removed)
+
+**Requirement:** Scenario 37 (Wrong Number)
+
+**Resolution:** Regex safety net (`looks_like_wrong_number_signal()`) removed entirely. Wrong-number detection now relies on the AI model in real time. The system prompt was strengthened with an extensive list of identity-mismatch phrasings: "wrong number", "wrong person", "not me", "I'm not that person", "you have the wrong guy", "nobody here by that name", "no one by that name", "never heard of them", "don't know who that is", "who is this for?", "no such person", "they don't live here", "that's not my name".
+
+**Design rationale:** The AI model is the authoritative detector — it hears intent in real time and calls `end_call(reason="wrong_number")` immediately. The regex ran only at transfer time (too late) and had both false positives and false negatives.
+
+---
+
+### Gap 8: AI Cannot Proactively Indicate Queue Unavailability — FIXED
+
+**Requirement:** Scenario 58 (Off-topic question, transfer not safe)
+
+**Resolution:** Added `check_transfer_availability` function tool. The AI calls this silently before promising any transfer. The orchestrator checks queue capacity for the patient's language-specific queue and returns `{"available": true/false}`. The system prompt mandates: "NEVER call `transfer_to_scheduler` without first calling `check_transfer_availability`." If unavailable, the AI tells the patient the team is busy and offers SMS with callback info instead.
+
+---
+
+## Open Gaps
 
 ### Gap 4: No "system_disabled_during_call" Log Event
 
@@ -90,8 +89,6 @@ Date: 2026-02-23
 
 ---
 
-## Minor / Defensive Gaps
-
 ### Gap 6: Stale Queue State at Transfer Time
 
 **Requirement:** Scenario 45 (Transfer requested, AMI now disconnected)
@@ -100,53 +97,7 @@ Date: 2026-02-23
 
 **Impact:** A transfer could be attempted against a stale queue snapshot. The window is small (up to 10 seconds) and the actual Twilio transfer would likely still succeed or fail gracefully, but the safety check is not real-time.
 
-**Suggested fix:**
+**Severity:** Low — accepted as tolerable given the 10-second poll interval.
+
+**Suggested fix (optional):**
 - Force a fresh `queue_provider.poll()` inside `execute_transfer()` before checking capacity
-- Or accept the race window as tolerable given the 10-second poll interval
-
----
-
-### Gap 7: Wrong-Number Detection Uses Fragile Regex Heuristics
-
-**File:** `app/services/transfer_service.py:71-83` (`looks_like_wrong_number_signal()`)
-
-**Current behavior:** The only regex-driven decision logic in the call flow runs against patient transcript lines immediately before a transfer is attempted. If a match is found, the transfer is canceled and the call ends as `WRONG_NUMBER`. The patterns are:
-
-```
-r"\bnot me\b"
-r"\bthis is(?:n't| not) [a-z]+\b"
-r"\byou have the wrong\b"
-r"\bno one (?:by|with) (?:that|this) name\b"
-r"\bdon'?t know (?:who|them|that person)\b"
-```
-
-Plus plain substring checks for "wrong number" and "wrong person".
-
-**Impact:** These heuristics are the sole server-side safety net preventing a transfer after the patient has indicated wrong number. They duplicate intent the AI model is already expected to handle (the AI prompt says to call `end_call(reason="wrong_number")`). The regex approach is brittle:
-- False negatives: "I'm not that person", "you've got the wrong guy", "nobody here by that name" would not match.
-- False positives: "this isn't right" could match `this is(?:n't| not) [a-z]+`.
-- Transcription errors from Whisper can break word-boundary matches.
-
-No other next-step decisions use regex. Voicemail detection (`looks_like_voicemail_signal`) and disconnected-number detection (`looks_like_disconnected_or_invalid`) use plain substring matching. All other call-flow routing comes from AI tool calls, Twilio status callbacks, or numeric queue thresholds.
-
-**Suggested fix:**
-- Treat the regex check as a backup safety net, not the primary detection mechanism — the AI model should be the authoritative wrong-number detector
-- Expand patterns to cover more phrasings (e.g., "wrong guy", "nobody here by that name", "never heard of them")
-- Consider a lightweight LLM classification pass on the last few transcript lines instead of regex, for higher accuracy
-- Add logging when the regex catches a wrong-number that the AI missed, to measure how often the safety net fires
-
----
-
-### Gap 8: AI Cannot Proactively Indicate Queue Unavailability
-
-**Requirement:** Scenario 58 (Off-topic question, transfer not safe)
-
-> Expected: AI says "Our team is currently busy, but I can send you a text with our main number to call back."
-
-**Current behavior:** The AI always offers transfer when it can't answer a question. It calls `transfer_to_scheduler`, and the backend discovers the queue is unavailable, sends a fallback SMS, and ends the call as `CALLBACK_REQUESTED`. The patient hears the AI say it will transfer, then gets told it can't.
-
-**Impact:** Slightly awkward conversational flow — the AI promises a transfer before knowing it will fail. The outcome is correct (SMS sent, call ended), but the patient experience could be smoother.
-
-**Suggested fix:**
-- Expose a `check_transfer_availability` tool that the AI can call before promising a transfer
-- Or add queue status context to the AI session (e.g., periodic updates about queue availability so the AI can proactively adjust its language)
