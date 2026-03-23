@@ -8,15 +8,17 @@ Last updated: 2026-03-23
 
 ## Critical Issues (will break things if not fixed)
 
-### 1. Twilio webhook URLs default to localhost
+### 1. Twilio webhook URLs may point to wrong host
 
 **File:** `app/services/call_orchestrator.py:262-264`
 
-**Issue:** When placing a Twilio call, the system builds webhook URLs (TwiML, status callbacks, media stream WebSocket) using `PUBLIC_BASE_URL`. If that env var is not set, it falls back to `http://localhost:8000`. Twilio's servers cannot reach localhost.
+**Issue:** When placing a Twilio call, the system builds webhook URLs (TwiML, status callbacks, media stream WebSocket) using `PUBLIC_BASE_URL`. If not set, it falls back to `NEXT_PUBLIC_API_URL`, then `http://localhost:8000`.
+
+**Current .env state:** `PUBLIC_BASE_URL` is not set, but `NEXT_PUBLIC_API_URL=https://outbound.mediflow360.com` is set, so Twilio will use `https://outbound.mediflow360.com/api/twilio/twiml/...`. This works **only if that domain routes to the backend API**, not just the frontend. If the frontend and backend are served from different hosts, Twilio webhooks will hit the frontend and fail.
 
 **What happens if not fixed:** Twilio places the call and the patient's phone rings, but when they answer there is no audio — the TwiML webhook fails, the media stream WebSocket never connects (30-second timeout), and the call is marked FAILED. AMD voicemail detection and carrier failure callbacks also silently stop working.
 
-**Fix:** Set `PUBLIC_BASE_URL` to an externally reachable URL (e.g., `https://voice.precisemri.com`). Ensure the host accepts inbound HTTPS from Twilio and can upgrade to WebSocket (`wss://`) for media streams.
+**Fix:** Set `PUBLIC_BASE_URL` explicitly to the backend's externally reachable URL. Verify that this URL can serve both HTTPS (for TwiML/status webhooks) and WSS (for media stream WebSocket at `/ws/twilio-media/`).
 
 ---
 
@@ -62,15 +64,11 @@ Last updated: 2026-03-23
 
 ## High Severity (will cause noticeable problems)
 
-### 5. Email crashes if SMTP is not configured
+### 5. ~~Email crashes if SMTP is not configured~~ — RESOLVED
 
 **File:** `app/services/email_notification_service.py:54,62`
 
-**Issue:** `send_wrong_number_email()` and `send_disconnected_number_email()` raise `RuntimeError` if `EMAIL_NOTIFICATION_RECIPIENT` or `SMTP_HOST` env vars are missing. The notification service catches this at a higher level, so it won't crash the call, but the email is silently lost with no clear indication of why.
-
-**What happens if not fixed:** When a wrong-number or disconnected-number outcome occurs, the scheduling team never receives the email notification. The call log records the outcome but the team has no alert to act on it.
-
-**Fix:** Set `SMTP_HOST`, `EMAIL_NOTIFICATION_RECIPIENT`, `SMTP_FROM_EMAIL`, and SMTP credentials. Alternatively, add a startup health check that warns if email configuration is missing.
+**Status:** SMTP is fully configured in `.env` (Gmail SMTP with app password, recipient `scheduling@precisemri.com`). No action needed.
 
 ---
 
@@ -86,27 +84,23 @@ Last updated: 2026-03-23
 
 ---
 
-### 7. Database URL defaults to development credentials
+### 7. Database credentials are weak
 
-**File:** `app/db/base.py`
+**File:** `app/db/base.py`, `.env`
 
-**Issue:** The default `DATABASE_URL` is `postgresql://precise:password@10.254.99.40:5432/outboundvoice` — a development IP with a plaintext password in source code.
+**Issue:** `DATABASE_URL` is set in `.env` and matches the hardcoded default: `postgresql://precise:password@10.254.99.40:5432/outboundvoice`. The password is `password`. The database is on an internal IP, which limits exposure, but the credentials are trivially guessable.
 
-**What happens if not fixed:** If the `DATABASE_URL` env var is not explicitly set, the production system silently connects to the development database. Calls, settings, and patient data are read from and written to the wrong database.
+**What happens if not fixed:** Anyone with network access to `10.254.99.40` can connect to the database with `precise/password` and read/modify call logs, patient data, and system settings.
 
-**Fix:** Always set `DATABASE_URL` in the production environment. Consider removing the hardcoded default entirely so the app fails fast if the var is missing.
+**Fix:** Change the database password to something strong. If this is the intended production database, update both the DB server and the `.env` file. If there's a separate production database, set the correct `DATABASE_URL`.
 
 ---
 
-### 8. CORS blocks production frontend
+### 8. ~~CORS blocks production frontend~~ — RESOLVED
 
 **File:** `app/main.py:60-68`
 
-**Issue:** Default allowed origins are `http://localhost:3000` and `http://127.0.0.1:3000`. The default regex allows `192.168.x.x` LAN IPs. A production frontend on a real domain (e.g., `https://dashboard.precisemri.com`) will be blocked.
-
-**What happens if not fixed:** The dashboard frontend cannot communicate with the backend API. All API calls and WebSocket connections fail with CORS errors in the browser.
-
-**Fix:** Set `CORS_ORIGINS` env var to the production frontend URL(s), comma-separated. If needed, set `CORS_ORIGIN_REGEX` for pattern-based matching.
+**Status:** `CORS_ORIGINS` is set in `.env` to `https://outbound.mediflow360.com,http://localhost:3002,http://127.0.0.1:3002`. Production domain is included. No action needed.
 
 ---
 
@@ -180,6 +174,8 @@ Last updated: 2026-03-23
 
 **Issue:** Two independent guards must both be enabled: the `ALLOW_TWILIO_CALLS=true` env var (checked in `twilio_voice_service.py`) and the `allow_live_calls` database setting (checked in `call_orchestrator.py`). There's also the `allowed_phones` whitelist.
 
+**Current .env state:** `ALLOW_TWILIO_CALLS=true` is set. The `allow_live_calls` DB setting and `allowed_phones` list must still be configured via the Operator Console.
+
 **What happens if not fixed:** Forgetting to enable one of the two gates results in calls failing with no obvious error message to the user. The env var gate produces a RuntimeError, while the settings gate produces a UI error.
 
 **Fix:** Not a bug — this is defense in depth. But document it clearly so operators know both must be enabled. Consider surfacing a dashboard warning when one is enabled but not the other.
@@ -200,30 +196,30 @@ Last updated: 2026-03-23
 
 ## Production Environment Variables
 
-| Variable | Required | Default | Production Value |
+| Variable | Required | .env Status | Action Needed |
 |---|---|---|---|
-| `PUBLIC_BASE_URL` | Yes | `http://localhost:8000` | Externally reachable URL |
-| `ALLOW_TWILIO_CALLS` | Yes | `false` | `true` |
-| `TWILIO_ACCOUNT_SID` | Yes | empty | Twilio account SID |
-| `TWILIO_AUTH_TOKEN` | Yes | empty | Twilio auth token |
-| `TWILIO_FROM_NUMBER` | Yes | empty | Twilio caller ID number |
-| `OPENAI_API_KEY` | Yes | empty | OpenAI API key |
-| `DATABASE_URL` | Yes | dev IP/password | Production PostgreSQL URL |
-| `SMTP_HOST` | Yes | empty | SMTP server hostname |
-| `SMTP_PORT` | No | `587` | SMTP port |
-| `SMTP_USERNAME` | If auth required | empty | SMTP login |
-| `SMTP_PASSWORD` | If auth required | empty | SMTP password |
-| `SMTP_FROM_EMAIL` | Yes | falls back to SMTP_USERNAME | Sender email address |
-| `EMAIL_NOTIFICATION_RECIPIENT` | Yes | empty | `scheduling@precisemri.com` |
-| `PRECISE_CALLBACK_NUMBER` | Yes | empty | `800-558-2223` |
-| `PRECISE_MAIN_NUMBER` | No | empty | Secondary contact number |
-| `CORS_ORIGINS` | If frontend on different host | `localhost:3000` | Production frontend URL |
-| `FREEPBX_QUEUE_URL` | If different from default | `http://10.254.99.40:2001/queuestatus.php` | Production FreePBX URL |
-| `LANGUAGE_QUEUE_MAP` | Yes | `en→scheduling_en, es→scheduling_es` | `{"en":"9006","es":"9009"}` |
-| `QUEUE_TRANSFER_TARGETS` | Yes | empty | `{"9006":"sip:...","9009":"sip:..."}` |
-| `CALLLIST_API_URL` | If different from default | `https://app.radflow360.com/...` | Production RadFlow URL |
-| `CALLLIST_API_USER` | Yes for live patients | empty | RadFlow API username |
-| `CALLLIST_API_PASSWORD` | Yes for live patients | empty | RadFlow API password |
+| `PUBLIC_BASE_URL` | Yes | **NOT SET** — falls back to `NEXT_PUBLIC_API_URL` | Set explicitly to backend URL |
+| `ALLOW_TWILIO_CALLS` | Yes | `true` | None |
+| `TWILIO_ACCOUNT_SID` | Yes | Set (personal account) | Switch to Precise creds for production |
+| `TWILIO_AUTH_TOKEN` | Yes | Set (personal account) | Switch to Precise creds for production |
+| `TWILIO_FROM_NUMBER` | Yes | `+14437752452` (personal) | Switch to `+18005582223` for production |
+| `OPENAI_API_KEY` | Yes | Set | None |
+| `DATABASE_URL` | Yes | Set (`10.254.99.34`, password=`password`) | Strengthen password |
+| `SMTP_HOST` | Yes | `smtp.gmail.com` | None |
+| `SMTP_PORT` | No | `587` | None |
+| `SMTP_USERNAME` | Yes | Set | None |
+| `SMTP_PASSWORD` | Yes | Set (app password) | None |
+| `SMTP_FROM_EMAIL` | Yes | Set | None |
+| `EMAIL_NOTIFICATION_RECIPIENT` | Yes | `scheduling@precisemri.com` | None |
+| `PRECISE_CALLBACK_NUMBER` | Yes | **NOT SET** | Set to `800-558-2223` |
+| `PRECISE_MAIN_NUMBER` | No | **NOT SET** | Optional |
+| `CORS_ORIGINS` | Yes | Set (includes production domain) | None |
+| `FREEPBX_QUEUE_URL` | No | Uses default `10.254.99.40:2001` | Verify correct for production |
+| `LANGUAGE_QUEUE_MAP` | Yes | **NOT SET** — defaults to `scheduling_en/es` | Set to `{"en":"9006","es":"9009"}` (confirm with Danny) |
+| `QUEUE_TRANSFER_TARGETS` | Yes | **NOT SET** | Set SIP/PSTN targets per queue (needs Danny) |
+| `CALLLIST_API_URL` | No | Set (`app.radflow360.com`) | None |
+| `CALLLIST_API_USER` | Yes | Set (`Chatbot`) | None |
+| `CALLLIST_API_PASSWORD` | Yes | Set | None |
 
 ## Database Settings (via API or Operator Console)
 
