@@ -222,7 +222,7 @@ Last updated: 2026-03-23
 | `PRECISE_MAIN_NUMBER` | No | **NOT SET** | Optional |
 | `CORS_ORIGINS` | Yes | Set (includes production domain) | None |
 | `FREEPBX_QUEUE_URL` | No | Uses default `10.254.99.40:2001` | Verify correct for production |
-| `LANGUAGE_QUEUE_MAP` | Yes | **NOT SET** — defaults to `scheduling_en/es` | Set to `{"en":"9006","es":"9009"}` (confirm with Danny) |
+| `LANGUAGE_QUEUE_MAP` | Yes | **NOT SET** — defaults to `scheduling_en/es` | `{"en":"9006","es":"9009","zh":"9012"}` (Cantonese 9013 needs handling) |
 | `QUEUE_TRANSFER_TARGETS` | Yes | **NOT SET** | Set SIP/PSTN targets per queue (needs Danny) |
 | `CALLLIST_API_URL` | No | Set (`app.radflow360.com`) | None |
 | `CALLLIST_API_USER` | Yes | Set (`Chatbot`) | None |
@@ -245,15 +245,41 @@ Last updated: 2026-03-23
 
 ## Questions for Danny
 
-### FreePBX Queues
+### FreePBX Queues — ANSWERED (2026-03-23)
 
-1. **Queue-to-language mapping:** The live FreePBX has queues `9006`, `9009`, `9012`, `9013`. Which queue is for which language? Based on traffic volume, we're guessing `9006` = English and `9009` = Spanish — is that correct?
+Full queue mapping from Danny:
 
-2. **Queues 9012 and 9013:** These have 0 completed calls and 1 agent each. Are they active? Are any of them a Chinese/Mandarin queue, or do Chinese-speaking patients go to the English queue?
+| Queue ID | Description |
+|---|---|
+| 9000 | Records and Images |
+| 9001 | Funding Co Billing |
+| 9002 | Workers Comp Billing |
+| 9003 | Personal Injury Neg |
+| 9004 | Personal Injury Billing All Others |
+| 9005 | PI Status Updates and Collections |
+| **9006** | **Scheduling (English)** |
+| **9009** | **Scheduling - Spanish** |
+| 9011 | Appointment Status |
+| **9012** | **Scheduling - Mandarin (Chinese)** |
+| **9013** | **Scheduling - Cantonese (Chinese)** |
+| 9014 | Patient Intake (Eng) |
+| 9015 | Patient Intake (Spanish) |
+| 9016 | Patient Intake (Mandarin) |
+| 9017 | Patient Intake (Cantonese) |
 
-3. **Transfer destinations:** When Twilio transfers a call into a FreePBX queue, what SIP URI or phone number/extension should it dial? For example, is it `sip:9006@10.254.99.40`? Or is there a DID/extension per queue? We need a value for each language queue.
+**Scheduling queues for language-based transfer:**
+- English → 9006
+- Spanish → 9009
+- Mandarin → 9012
+- Cantonese → 9013
 
-4. **Is the FreePBX endpoint stable?** The system polls `http://10.254.99.40:2001/queuestatus.php` every 10 seconds. Is this the correct production URL? Does it support HTTPS?
+**Code impact:** The current `Language` enum only has `en`, `es`, `zh`. The real system distinguishes Mandarin and Cantonese as separate queues. Either:
+- Add `zh-cmn` (Mandarin) and `zh-yue` (Cantonese) to the Language enum and update RadFlow mapping, or
+- Default `zh` → 9012 (Mandarin) and add Cantonese handling if RadFlow provides that distinction
+
+**Still unanswered:**
+- What SIP URI / DID / extension should Twilio dial to transfer into each queue?
+- Is `http://10.254.99.40:2001/queuestatus.php` the correct production URL? Does it support HTTPS?
 
 ### Twilio
 
