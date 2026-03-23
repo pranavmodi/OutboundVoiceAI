@@ -129,6 +129,23 @@ class QueueStateSnapshotRow(Base):
     )
 
 
+class PatientCallStateRow(Base):
+    """Local call state for live-mode patients (RadFlow is read-only)."""
+    __tablename__ = "patient_call_state"
+
+    patient_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    last_outcome: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    ai_called_before: Mapped[bool] = mapped_column(Boolean, default=False)
+    invalid_number: Mapped[bool] = mapped_column(Boolean, default=False)
+    updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+    __table_args__ = (
+        Index("ix_patient_call_state_updated", "updated_at"),
+    )
+
+
 class SimulationScenarioRow(Base):
     __tablename__ = "simulation_scenarios"
 

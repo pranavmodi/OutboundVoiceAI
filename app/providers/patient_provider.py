@@ -12,7 +12,7 @@ from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import AsyncSessionLocal
-from app.db.models import PatientRow
+from app.db.models import PatientRow, PatientCallStateRow
 from app.models import Patient, Language, IntakeStatus
 
 logger = logging.getLogger(__name__)
@@ -384,17 +384,116 @@ class LivePatientProvider(BasePatientProvider):
             logger.warning("CallListData fetch failed: %s", e)
             return self._cache  # return stale cache on error
 
+    # -- Outcome-to-RadFlow type mapping ----------------------------------
+
+    _OUTCOME_TO_RADFLOW_TYPE = {
+        "transferred": "PATIENT SCHEDULED",
+        "voicemail": "VM",
+        "callback_requested": "CB",
+        # Everything else maps to a generic failure type
+        "wrong_number": "COULD NOT SCHEDULE PATIENT",
+        "disconnected": "COULD NOT SCHEDULE PATIENT",
+        "failed": "COULD NOT SCHEDULE PATIENT",
+        "completed": "CB",  # Completed without transfer ≈ callback
+    }
+
+    async def _post_outcome_to_radflow(self, patient_id: str, order_id: Optional[str], outcome: str):
+        """POST call outcome back to RadFlow CallListData API."""
+        radflow_type = self._OUTCOME_TO_RADFLOW_TYPE.get(outcome, "CB")
+        payload = {
+            "patientId": patient_id,
+            "internalStudyId": order_id or "",
+            "type": radflow_type,
+        }
+        try:
+            resp = await self._client.post(
+                self._url,
+                json=payload,
+                headers={"Accept": "application/json"},
+                auth=self._auth,
+            )
+            resp.raise_for_status()
+            logger.info("RadFlow write-back OK: patient=%s type=%s", patient_id, radflow_type)
+        except Exception as e:
+            logger.warning("RadFlow write-back failed for patient %s: %s", patient_id, e)
+
+    # -- Local state helpers -----------------------------------------------
+
+    async def _get_local_state(self, session: AsyncSession, patient_id: str) -> Optional[PatientCallStateRow]:
+        result = await session.execute(
+            select(PatientCallStateRow).where(PatientCallStateRow.patient_id == patient_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def _get_all_local_state(self, session: AsyncSession) -> dict[str, PatientCallStateRow]:
+        result = await session.execute(select(PatientCallStateRow))
+        return {row.patient_id: row for row in result.scalars().all()}
+
+    def _merge_local_state(self, patient: Patient, state: PatientCallStateRow) -> Patient:
+        """Apply local call state on top of API-fetched patient data."""
+        patient.attempt_count = max(patient.attempt_count, state.attempt_count)
+        patient.last_attempt_at = state.last_attempt_at
+        patient.last_outcome = state.last_outcome or patient.last_outcome
+        patient.ai_called_before = state.ai_called_before
+        # Recompute priority bucket with updated flags
+        patient.priority_bucket = _compute_priority(
+            patient.has_abandoned_before, patient.ai_called_before, patient.has_called_in_before
+        )
+        return patient
+
+    async def _merge_all(self, patients: list[Patient]) -> list[Patient]:
+        """Merge local state into all patients."""
+        async with AsyncSessionLocal() as session:
+            state_map = await self._get_all_local_state(session)
+        if not state_map:
+            return patients
+        merged = []
+        for p in patients:
+            st = state_map.get(p.patient_id)
+            if st:
+                if st.invalid_number:
+                    continue  # Skip invalid numbers entirely
+                p = self._merge_local_state(p, st)
+            merged.append(p)
+        return merged
+
+    # -- BasePatientProvider interface -------------------------------------
+
     async def get_all_patients(self) -> list[Patient]:
-        return await self._fetch()
+        patients = await self._fetch()
+        return await self._merge_all(patients)
 
     async def get_patient(self, patient_id: str) -> Optional[Patient]:
         patients = await self._fetch(patient_id=patient_id)
-        return patients[0] if patients else None
+        if not patients:
+            return None
+        patient = patients[0]
+        async with AsyncSessionLocal() as session:
+            state = await self._get_local_state(session, patient_id)
+        if state:
+            if state.invalid_number:
+                return None
+            patient = self._merge_local_state(patient, state)
+        return patient
 
     async def get_outbound_queue(self, max_attempts: int = 3, min_hours_between: int = 6) -> list[Patient]:
         patients = await self._fetch()
-        # The API already returns the call list; sort by priority
-        return sorted(patients, key=lambda p: (p.priority_bucket, p.due_by or datetime.max.replace(tzinfo=timezone.utc)))
+        patients = await self._merge_all(patients)
+
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(hours=min_hours_between)
+
+        filtered = [
+            p for p in patients
+            if p.attempt_count < max_attempts
+            and (p.last_attempt_at is None or p.last_attempt_at <= cutoff)
+        ]
+
+        return sorted(filtered, key=lambda p: (
+            p.priority_bucket,
+            p.due_by or datetime.max.replace(tzinfo=timezone.utc),
+            p.attempt_count,
+        ))
 
     async def get_next_candidate(self, max_attempts: int = 3, min_hours_between: int = 6) -> Optional[Patient]:
         queue = await self.get_outbound_queue(max_attempts, min_hours_between)
@@ -406,16 +505,49 @@ class LivePatientProvider(BasePatientProvider):
         outcome: str,
         increment_attempt: bool = True,
     ):
-        # Live mode: no local persistence for patient state
-        logger.info("Live mode: call outcome for %s = %s (not persisted to API)", patient_id, outcome)
+        # 1. Update local state table
+        async with AsyncSessionLocal() as session:
+            state = await self._get_local_state(session, patient_id)
+            if state is None:
+                state = PatientCallStateRow(patient_id=patient_id)
+                session.add(state)
+            if increment_attempt:
+                state.attempt_count += 1
+            state.last_attempt_at = datetime.now(timezone.utc)
+            state.last_outcome = outcome
+            state.ai_called_before = True
+            await session.commit()
+        logger.info("Local state updated: patient=%s outcome=%s attempts=%s",
+                     patient_id, outcome, state.attempt_count)
+
+        # 2. Write back to RadFlow (best-effort, non-blocking)
+        # Look up order_id from cache
+        order_id = None
+        for p in self._cache:
+            if p.patient_id == patient_id:
+                order_id = p.order_id
+                break
+        await self._post_outcome_to_radflow(patient_id, order_id, outcome)
 
     async def mark_patient_invalid_number(self, patient_id: str, reason: str):
-        # Live mode: no local persistence for patient state
-        logger.info(
-            "Live mode: patient %s flagged invalid_number (not persisted to API): %s",
-            patient_id,
-            reason,
-        )
+        async with AsyncSessionLocal() as session:
+            state = await self._get_local_state(session, patient_id)
+            if state is None:
+                state = PatientCallStateRow(patient_id=patient_id)
+                session.add(state)
+            state.invalid_number = True
+            state.last_outcome = "invalid_number"
+            state.last_attempt_at = datetime.now(timezone.utc)
+            await session.commit()
+        logger.info("Local state: patient %s flagged invalid_number: %s", patient_id, reason)
+
+        # Write back to RadFlow
+        order_id = None
+        for p in self._cache:
+            if p.patient_id == patient_id:
+                order_id = p.order_id
+                break
+        await self._post_outcome_to_radflow(patient_id, order_id, "disconnected")
 
 
 # ---------------------------------------------------------------------------
