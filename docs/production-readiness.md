@@ -64,11 +64,18 @@ Last updated: 2026-03-23
 
 ## High Severity (will cause noticeable problems)
 
-### 5. ~~Email crashes if SMTP is not configured~~ — RESOLVED
+### 5. Email SMTP configured with development Gmail account
 
-**File:** `app/services/email_notification_service.py:54,62`
+**File:** `.env`, `app/services/email_notification_service.py`
 
-**Status:** SMTP is fully configured in `.env` (Gmail SMTP with app password, recipient `scheduling@precisemri.com`). No action needed.
+**Issue:** SMTP is configured using a personal/development Gmail account (`holisticreadsai@gmail.com`) with an app password. Emails to the scheduling team arrive from this unrecognized address.
+
+**What happens if not fixed:**
+- Emails from `holisticreadsai@gmail.com` may be caught by spam filters or ignored by staff who don't recognize the sender.
+- Gmail has sending limits (500/day regular, 2000/day Workspace) which should be sufficient but aren't guaranteed.
+- Using a personal Gmail for production alerts is unprofessional and fragile (account suspension, password rotation).
+
+**Fix:** Use Precise Imaging's own SMTP or a transactional email service (SendGrid, AWS SES, etc.) with a domain-matched sender address (e.g., `outbound@precisemri.com` or `noreply@precisemri.com`). Need SMTP credentials from Danny.
 
 ---
 
@@ -205,12 +212,12 @@ Last updated: 2026-03-23
 | `TWILIO_FROM_NUMBER` | Yes | `+14437752452` (personal) | Switch to `+18005582223` for production |
 | `OPENAI_API_KEY` | Yes | Set | None |
 | `DATABASE_URL` | Yes | Set (`10.254.99.34`, password=`password`) | Strengthen password |
-| `SMTP_HOST` | Yes | `smtp.gmail.com` | None |
-| `SMTP_PORT` | No | `587` | None |
-| `SMTP_USERNAME` | Yes | Set | None |
-| `SMTP_PASSWORD` | Yes | Set (app password) | None |
-| `SMTP_FROM_EMAIL` | Yes | Set | None |
-| `EMAIL_NOTIFICATION_RECIPIENT` | Yes | `scheduling@precisemri.com` | None |
+| `SMTP_HOST` | Yes | `smtp.gmail.com` (dev) | Replace with production SMTP |
+| `SMTP_PORT` | No | `587` | Match production SMTP |
+| `SMTP_USERNAME` | Yes | `holisticreadsai@gmail.com` (dev) | Replace with production credentials |
+| `SMTP_PASSWORD` | Yes | Set (dev app password) | Replace with production credentials |
+| `SMTP_FROM_EMAIL` | Yes | `holisticreadsai@gmail.com` (dev) | `outbound@precisemri.com` or similar |
+| `EMAIL_NOTIFICATION_RECIPIENT` | Yes | `scheduling@precisemri.com` | Verify correct |
 | `PRECISE_CALLBACK_NUMBER` | Yes | **NOT SET** | Set to `800-558-2223` |
 | `PRECISE_MAIN_NUMBER` | No | **NOT SET** | Optional |
 | `CORS_ORIGINS` | Yes | Set (includes production domain) | None |
@@ -233,3 +240,51 @@ Last updated: 2026-03-23
 | `system_enabled` | `true` | `true` |
 | `business_hours.enabled` | `false` | `true` |
 | `mock_mode` | `false` | `false` |
+
+---
+
+## Questions for Danny
+
+### FreePBX Queues
+
+1. **Queue-to-language mapping:** The live FreePBX has queues `9006`, `9009`, `9012`, `9013`. Which queue is for which language? Based on traffic volume, we're guessing `9006` = English and `9009` = Spanish — is that correct?
+
+2. **Queues 9012 and 9013:** These have 0 completed calls and 1 agent each. Are they active? Are any of them a Chinese/Mandarin queue, or do Chinese-speaking patients go to the English queue?
+
+3. **Transfer destinations:** When Twilio transfers a call into a FreePBX queue, what SIP URI or phone number/extension should it dial? For example, is it `sip:9006@10.254.99.40`? Or is there a DID/extension per queue? We need a value for each language queue.
+
+4. **Is the FreePBX endpoint stable?** The system polls `http://10.254.99.40:2001/queuestatus.php` every 10 seconds. Is this the correct production URL? Does it support HTTPS?
+
+### Twilio
+
+5. **Production Twilio account:** The `.env` has Precise creds commented out (`AC05a8efa2...`, from number `+18005582223`). Should we switch to these for production? Is `+18005582223` the correct outbound caller ID?
+
+6. **PUBLIC_BASE_URL:** Twilio needs to reach our backend for webhooks (TwiML, status callbacks, media streams). What is the externally reachable URL for the backend? Is `https://outbound.mediflow360.com` serving the backend API, or just the frontend?
+
+### Email / Notifications
+
+7. **Production SMTP:** We need production email credentials to replace the development Gmail account. Does Precise have an SMTP relay or email service we should use? What sender address should appear on notifications (e.g., `outbound@precisemri.com`)?
+
+8. **Email recipient:** Notifications currently go to `scheduling@precisemri.com`. Is that the correct recipient for wrong-number and disconnected-number alerts?
+
+### Patient Data
+
+9. **RadFlow write-back:** Currently the system reads patient data from RadFlow but doesn't write call outcomes back. Should it? Is there a RadFlow API endpoint for updating call status (e.g., marking a patient as called, recording the outcome)?
+
+10. **Retry controls:** Does the RadFlow CallListData API filter out patients who have already been called the maximum number of times, or does it return the full list and expect the caller to filter? We need to know if the API handles max_attempts and cooldown, or if we need to track this locally.
+
+### SMS
+
+11. **Callback number:** What phone number should be included in SMS messages sent to patients? Is it `800-558-2223`?
+
+### Database
+
+12. **Database password:** The current password is `password`. Should this be changed for production? Is `10.254.99.34` the correct production database host?
+
+### General
+
+13. **Business hours:** What are the production business hours? Current defaults are Mon-Fri 8AM-5PM Eastern. Are Saturday hours needed? What timezone?
+
+14. **Holidays:** Which holidays should block outbound calling? Is there a standard list, or should we load a specific set?
+
+15. **Phone whitelist:** In production, should the system be allowed to call any patient phone number, or should there be an `allowed_phones` whitelist? During initial rollout, do you want to restrict to a small test group first?
