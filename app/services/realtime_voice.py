@@ -53,8 +53,10 @@ Your secondary goal is to answer general, non-clinical, non-diagnostic company q
 ## If Patient is Available
 - First, clearly confirm: "Would you like me to transfer you to our scheduling team right now?"
 - Wait for the patient to say yes before proceeding.
-- Once confirmed, inform them what will happen: "Perfect, I'm going to transfer you now. You'll be connected with a scheduler who can help find a time that works for you. One moment please."
-- Only AFTER saying the above, call the `transfer_to_scheduler` tool.
+- Once the patient confirms, call `check_transfer_availability` SILENTLY (do not tell the patient you are checking).
+  - If the result is `{"available": true}`: say "Perfect, I'm going to transfer you now. You'll be connected with a scheduler who can help find a time that works for you. One moment please." Then call `transfer_to_scheduler`.
+  - If the result is `{"available": false}`: say "I'm sorry, our scheduling team is currently busy. I'll send you a text with our callback number so you can reach us when it's convenient." Then call `send_sms` with `message_type: "callback_info"`, then call `end_call` with `reason: "patient_busy"` and `callback_requested: true`.
+- NEVER call `transfer_to_scheduler` without first calling `check_transfer_availability`.
 - NEVER call `transfer_to_scheduler` without the patient's explicit verbal confirmation.
 - NEVER call `transfer_to_scheduler` abruptly — always give the patient a moment to prepare for the handoff.
 
@@ -100,7 +102,9 @@ Your secondary goal is to answer general, non-clinical, non-diagnostic company q
 - Test results
 - Anything involving diagnoses
 
-If asked something outside scope, say you're not able to help with that and offer to transfer to a human.
+If asked something outside scope, say you're not able to help with that directly. Then call `check_transfer_availability` silently:
+- If available: offer to transfer to a human who can help.
+- If unavailable: say "Our scheduling team is currently busy, but I can send you a text with our number to call back." Then send SMS and end the call.
 
 ## Tone
 - Conversational, not robotic
@@ -209,7 +213,7 @@ class RealtimeVoiceService:
         self.on_session_created: Optional[Callable[[str], Any]] = None
         self.on_session_ended: Optional[Callable[[], Any]] = None
         self.on_error: Optional[Callable[[str], Any]] = None
-        self.on_function_call: Optional[Callable[[str, dict], Any]] = None
+        self.on_function_call: Optional[Callable[[str, dict, str], Any]] = None  # (name, args, call_id)
 
     @staticmethod
     def _normalize_language_code(language: Optional[str]) -> str:
@@ -320,6 +324,15 @@ class RealtimeVoiceService:
                     "silence_duration_ms": 500,
                 },
                 "tools": [
+                    {
+                        "type": "function",
+                        "name": "check_transfer_availability",
+                        "description": "Check whether a scheduler is available to take a transfer right now. Call this BEFORE offering or promising a transfer to the patient. Returns {\"available\": true/false}.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {},
+                        },
+                    },
                     {
                         "type": "function",
                         "name": "transfer_to_scheduler",
@@ -451,13 +464,14 @@ class RealtimeVoiceService:
             elif msg_type == "response.function_call_arguments.done":
                 # Function call completed
                 name = data.get("name", "")
+                fn_call_id = data.get("call_id", "")
                 args_str = data.get("arguments", "{}")
                 try:
                     args = json.loads(args_str)
                 except json.JSONDecodeError:
                     args = {}
                 if self.on_function_call:
-                    await self.on_function_call(name, args)
+                    await self.on_function_call(name, args, fn_call_id)
 
             elif msg_type == "error":
                 error = data.get("error", {})

@@ -410,6 +410,24 @@ class CallOrchestrator:
             self._mock_mode = False
             self._mock_phone = ""
 
+    async def _check_transfer_availability(self) -> bool:
+        """Check whether a scheduler queue has capacity for a transfer right now."""
+        if not self._current_patient:
+            return False
+        patient_language = self._current_patient.language
+        target_queue = self._transfer.resolve_queue(patient_language)
+        queue_provider = get_queue_provider()
+        queue_state = queue_provider.get_state()
+        _, has_capacity = self._transfer.check_capacity(queue_state, target_queue)
+        status = "available" if has_capacity else "unavailable"
+        if self._current_call:
+            call_log_provider = get_call_log_provider()
+            await call_log_provider.add_transcript(
+                self._current_call.call_id, "system",
+                f"Transfer availability check: {status} (queue={target_queue})",
+            )
+        return has_capacity
+
     async def send_audio(self, audio_data: bytes):
         """Send audio from the patient (browser) to OpenAI."""
         if self._voice_service and self._voice_service.is_connected:
@@ -450,12 +468,20 @@ class CallOrchestrator:
         if self.on_audio_output:
             await self.on_audio_output(audio_data)
 
-    async def _handle_function_call(self, name: str, args: dict):
+    async def _handle_function_call(self, name: str, args: dict, fn_call_id: str = ""):
         """Handle function calls from AI."""
         if not self._current_call:
             return
 
         self._sync_status_callback()
+
+        if name == "check_transfer_availability":
+            available = await self._check_transfer_availability()
+            if self._voice_service and fn_call_id:
+                await self._voice_service.send_function_result(
+                    fn_call_id, {"available": available}
+                )
+            return
 
         if name == "transfer_to_scheduler":
             if args.get("confirmed"):
