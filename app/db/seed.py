@@ -126,7 +126,7 @@ async def seed_builtin_scenarios(session: AsyncSession):
             is_builtin=True,
             ami_connected=True,
             queues=[
-                {"Queue": "scheduling_en", "Calls": 0, "Holdtime": 0, "AvailableAgents": 1},
+                {"Queue": "9006", "Calls": 0, "Holdtime": 0, "AvailableAgents": 1},
             ],
             patients=[
                 {"name": "Pranav Modi", "phone": "+918287149638", "language": "en",
@@ -142,9 +142,9 @@ async def seed_builtin_scenarios(session: AsyncSession):
             is_builtin=True,
             ami_connected=True,
             queues=[
-                {"Queue": "scheduling_en", "Calls": 0, "Holdtime": 0, "AvailableAgents": 2},
-                {"Queue": "scheduling_es", "Calls": 0, "Holdtime": 0, "AvailableAgents": 1},
-                {"Queue": "intake", "Calls": 0, "Holdtime": 0, "AvailableAgents": 1},
+                {"Queue": "9006", "Calls": 0, "Holdtime": 0, "AvailableAgents": 2},
+                {"Queue": "9009", "Calls": 0, "Holdtime": 0, "AvailableAgents": 1},
+                {"Queue": "9012", "Calls": 0, "Holdtime": 0, "AvailableAgents": 1},
             ],
             patients=[
                 {"name": "John Smith", "phone": "555-0101", "language": "en",
@@ -178,9 +178,9 @@ async def seed_builtin_scenarios(session: AsyncSession):
             is_builtin=True,
             ami_connected=True,
             queues=[
-                {"Queue": "scheduling_en", "Calls": 5, "Holdtime": 120, "AvailableAgents": 0},
-                {"Queue": "scheduling_es", "Calls": 3, "Holdtime": 90, "AvailableAgents": 0},
-                {"Queue": "intake", "Calls": 4, "Holdtime": 60, "AvailableAgents": 0},
+                {"Queue": "9006", "Calls": 5, "Holdtime": 120, "AvailableAgents": 0},
+                {"Queue": "9009", "Calls": 3, "Holdtime": 90, "AvailableAgents": 0},
+                {"Queue": "9012", "Calls": 4, "Holdtime": 60, "AvailableAgents": 0},
             ],
             patients=[
                 {"name": "John Smith", "phone": "555-0101", "language": "en",
@@ -199,7 +199,7 @@ async def seed_builtin_scenarios(session: AsyncSession):
             is_builtin=True,
             ami_connected=False,
             queues=[
-                {"Queue": "scheduling_en", "Calls": 0, "Holdtime": 0, "AvailableAgents": 2},
+                {"Queue": "9006", "Calls": 0, "Holdtime": 0, "AvailableAgents": 2},
             ],
             patients=[
                 {"name": "John Smith", "phone": "555-0101", "language": "en",
@@ -215,8 +215,8 @@ async def seed_builtin_scenarios(session: AsyncSession):
             is_builtin=True,
             ami_connected=True,
             queues=[
-                {"Queue": "scheduling_en", "Calls": 0, "Holdtime": 0, "AvailableAgents": 1},
-                {"Queue": "scheduling_es", "Calls": 0, "Holdtime": 0, "AvailableAgents": 1},
+                {"Queue": "9006", "Calls": 0, "Holdtime": 0, "AvailableAgents": 1},
+                {"Queue": "9009", "Calls": 0, "Holdtime": 0, "AvailableAgents": 1},
             ],
             patients=[
                 {"name": "John Smith", "phone": "555-0101", "language": "en",
@@ -238,7 +238,7 @@ async def seed_builtin_scenarios(session: AsyncSession):
             is_builtin=True,
             ami_connected=True,
             queues=[
-                {"Queue": "scheduling_en", "Calls": 0, "Holdtime": 0, "AvailableAgents": 1},
+                {"Queue": "9006", "Calls": 0, "Holdtime": 0, "AvailableAgents": 1},
             ],
             patients=[
                 {"name": "Robert Johnson", "phone": "555-0103", "language": "en",
@@ -257,7 +257,7 @@ async def seed_builtin_scenarios(session: AsyncSession):
             is_builtin=True,
             ami_connected=True,
             queues=[
-                {"Queue": "scheduling_en", "Calls": 0, "Holdtime": 0, "AvailableAgents": 2},
+                {"Queue": "9006", "Calls": 0, "Holdtime": 0, "AvailableAgents": 2},
             ],
             patients=[],
             dispatcher={},

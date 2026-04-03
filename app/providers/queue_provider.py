@@ -119,9 +119,9 @@ class MockQueueProvider(BaseQueueProvider):
     def __init__(self):
         super().__init__()
         self._state.queues = [
-            QueueInfo(Queue="scheduling_en", AvailableAgents=2),
-            QueueInfo(Queue="scheduling_es", AvailableAgents=1),
-            QueueInfo(Queue="intake", AvailableAgents=1),
+            QueueInfo(Queue="9006", AvailableAgents=2),   # Scheduling English
+            QueueInfo(Queue="9009", AvailableAgents=1),   # Scheduling Spanish
+            QueueInfo(Queue="9012", AvailableAgents=1),   # Scheduling Mandarin
         ]
         self._ami_connected = True
 
@@ -210,13 +210,18 @@ class LiveQueueProvider(BaseQueueProvider):
         super().__init__()
         self._url = url
         self._client = httpx.AsyncClient(timeout=5.0)
+        # Only include these queues in gating/aggregation (empty = all).
+        raw = os.getenv("MONITORED_QUEUES", "").strip()
+        self._monitored: set[str] = (
+            {q.strip() for q in raw.split(",") if q.strip()} if raw else set()
+        )
 
     async def poll(self) -> GlobalQueueState:
         try:
             resp = await self._client.get(self._url)
             resp.raise_for_status()
             data = resp.json()  # {"9006": {...}, "9007": {...}}
-            self._state.queues = [
+            all_queues = [
                 QueueInfo(
                     Event=v.get("Event", "QueueParams"),
                     Queue=v.get("Queue", qid),
@@ -235,6 +240,14 @@ class LiveQueueProvider(BaseQueueProvider):
                 )
                 for qid, v in data.items()
             ]
+            # Filter to scheduling queues only so billing/records don't
+            # affect gating or transfer availability.
+            if self._monitored:
+                self._state.queues = [
+                    q for q in all_queues if q.Queue in self._monitored
+                ]
+            else:
+                self._state.queues = all_queues
             await self._evaluate_gating()
         except Exception as e:
             logger.warning("FreePBX poll failed: %s", e)

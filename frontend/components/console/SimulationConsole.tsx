@@ -449,7 +449,7 @@ export function SimulationConsole({
                   <th className="pb-1 pr-2">
                     <span className="flex items-center gap-1">
                       Queue
-                      <InfoTooltip content="Queue name (e.g., scheduling_en, intake). Matches FreePBX queue names." />
+                      <InfoTooltip content="Queue ID (e.g., 9006, 9009, 9012). Matches FreePBX queue IDs." />
                     </span>
                   </th>
                   <th className="pb-1 pr-2">

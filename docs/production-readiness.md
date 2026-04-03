@@ -222,8 +222,9 @@ Last updated: 2026-03-23
 | `PRECISE_MAIN_NUMBER` | No | **NOT SET** | Optional |
 | `CORS_ORIGINS` | Yes | Set (includes production domain) | None |
 | `FREEPBX_QUEUE_URL` | No | Uses default `10.254.99.40:2001` | Verify correct for production |
-| `LANGUAGE_QUEUE_MAP` | Yes | **NOT SET** — defaults to `scheduling_en/es` | `{"en":"9006","es":"9009","zh":"9012"}` (Cantonese 9013 needs handling) |
-| `QUEUE_TRANSFER_TARGETS` | Yes | **NOT SET** | See FreePBX section above for SIP URIs |
+| `LANGUAGE_QUEUE_MAP` | Yes | Set: `{"en":"9006","es":"9009","zh":"9012"}` | None (defaults also updated to production IDs) |
+| `QUEUE_TRANSFER_TARGETS` | Yes | Set: SIP URIs for 9006/9009/9012/9013 | None |
+| `MONITORED_QUEUES` | Recommended | Set: `9006,9009,9012,9013` | None (filters non-scheduling queues from gating) |
 | `CALLLIST_API_URL` | No | Set (`app.radflow360.com`) | None |
 | `CALLLIST_API_USER` | Yes | Set (`Chatbot`) | None |
 | `CALLLIST_API_PASSWORD` | Yes | Set | None |

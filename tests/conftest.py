@@ -65,7 +65,7 @@ def mock_patient_provider():
 def mock_queue_state():
     """Mock queue state with configurable queues."""
     queue = MagicMock()
-    queue.Queue = "scheduling_en"
+    queue.Queue = "9006"
     queue.AvailableAgents = 2
 
     state = MagicMock()

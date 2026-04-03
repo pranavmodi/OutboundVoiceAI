@@ -229,21 +229,32 @@ class RealtimeVoiceService:
     @classmethod
     def _language_instruction(cls, language: Optional[str]) -> str:
         code = cls._normalize_language_code(language)
+
+        # Common adaptive rule appended to every language variant.
+        adaptive = (
+            "However, if the patient responds in a DIFFERENT language than expected, "
+            "switch to their language immediately and continue the call in that language. "
+            "The patient's comfort is more important than the on-file preference. "
+            "Supported languages: English, Spanish, Mandarin Chinese."
+        )
+
         if code == "es":
             return (
                 "IMPORTANT LANGUAGE RULE: The patient preference is Spanish ('es'). "
-                "Speak in natural Spanish for the entire call, including greeting, questions, and transfer/callback phrasing. "
-                "Only switch to English if the patient explicitly asks you to."
+                "Start in natural Spanish for the greeting, questions, and transfer/callback phrasing. "
+                f"{adaptive}"
             )
         if code == "zh":
             return (
                 "IMPORTANT LANGUAGE RULE: The patient preference is Chinese ('zh'). "
-                "Speak in simple, clear Mandarin Chinese for the entire call when possible. "
-                "If Mandarin is not possible for a specific phrase, use very simple English and offer transfer."
+                "Start in simple, clear Mandarin Chinese for the greeting and conversation. "
+                "If Mandarin is not possible for a specific phrase, use very simple English and offer transfer. "
+                f"{adaptive}"
             )
         return (
             "IMPORTANT LANGUAGE RULE: The patient preference is English ('en'). "
-            "Conduct the call in English."
+            "Start the call in English. "
+            f"{adaptive}"
         )
 
     async def connect(self, call_id: str, patient_name: str, patient_language: str = "en") -> bool:

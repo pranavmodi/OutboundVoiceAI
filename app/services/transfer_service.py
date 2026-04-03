@@ -40,13 +40,13 @@ def resolve_transfer_queue_for_language(language: Optional[object]) -> str:
     language_code = normalize_language_code(language)
 
     default_map = {
-        "en": "scheduling_en",
-        "es": "scheduling_es",
-        "zh": "scheduling_en",
+        "en": "9006",
+        "es": "9009",
+        "zh": "9012",
     }
     configured_map = _load_json_object_env("LANGUAGE_QUEUE_MAP")
     mapping = {**default_map, **configured_map}
-    return mapping.get(language_code) or mapping.get("en", "scheduling_en")
+    return mapping.get(language_code) or mapping.get("en", "9006")
 
 
 def resolve_transfer_destination_for_queue(queue_name: str) -> Optional[str]:
@@ -105,11 +105,21 @@ class TransferService:
         return resolve_transfer_queue_for_language(language)
 
     def check_capacity(self, queue_state, target_queue: str) -> tuple[Optional[object], bool]:
-        """Return (queue_info, has_capacity) for the target queue."""
+        """Return (queue_info, has_capacity) for the target queue.
+
+        For transfer decisions: checks the target queue has available agents
+        and the system has a connected queue source.  Does NOT require the
+        stability hysteresis used for initiating new outbound calls — the
+        patient is already on the line, so we just need an agent ready.
+        """
         queue_info = find_queue_by_name(queue_state, target_queue)
         if queue_info is None:
             return None, False
-        has_capacity = queue_state.outbound_allowed and queue_info.AvailableAgents >= 1
+        has_capacity = (
+            queue_state.ami_connected
+            and queue_info.AvailableAgents >= 1
+            and queue_state.global_agents_available >= 1
+        )
         return queue_info, has_capacity
 
     async def execute_transfer(
