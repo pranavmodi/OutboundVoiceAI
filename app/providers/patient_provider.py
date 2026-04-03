@@ -492,6 +492,7 @@ class LivePatientProvider(BasePatientProvider):
         return sorted(filtered, key=lambda p: (
             p.priority_bucket,
             p.due_by or datetime.max.replace(tzinfo=timezone.utc),
+            p.order_created or datetime.max.replace(tzinfo=timezone.utc),
             p.attempt_count,
         ))
 
