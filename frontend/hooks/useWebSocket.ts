@@ -22,6 +22,7 @@ export interface DispatcherDecision {
   decision: string;
   detail: string;
   state: string;
+  repeatCount?: number;
 }
 
 interface UseDashboardWSReturn {
@@ -56,9 +57,11 @@ export function useDashboardWS(): UseDashboardWSReturn {
     setDispatcherEvents((prev) => {
       const latest = prev[0];
       if (latest && latest.decision === event.decision && latest.detail === event.detail) {
-        return prev;
+        // Same event repeated — bump count and update timestamp
+        const updated = { ...latest, timestamp: event.timestamp, repeatCount: (latest.repeatCount || 1) + 1 };
+        return [updated, ...prev.slice(1)];
       }
-      return [event, ...prev].slice(0, 50);
+      return [{ ...event, repeatCount: 1 }, ...prev].slice(0, 50);
     });
   }, []);
 

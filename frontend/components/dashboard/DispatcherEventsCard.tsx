@@ -110,6 +110,11 @@ export function DispatcherEventsCard({ events }: DispatcherEventsCardProps) {
                         <span className="text-[10px] text-muted-foreground tabular-nums">
                           {formatTime(event.timestamp)}
                         </span>
+                        {(event.repeatCount ?? 0) > 1 && (
+                          <span className="text-[10px] text-muted-foreground tabular-nums">
+                            ×{event.repeatCount}
+                          </span>
+                        )}
                       </div>
                       <p className="text-xs text-foreground/80 leading-relaxed">
                         {event.detail}

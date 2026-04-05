@@ -26,6 +26,7 @@ async def lifespan(app: FastAPI):
     settings = await get_settings_provider().get_settings()
     set_queue_source(settings.queue_source)
     set_patient_source(settings.patient_source)
+    print(f"[STARTUP] patient_source={settings.patient_source}, queue_source={settings.queue_source}, call_mode={settings.call_mode}")
     # Apply persisted dispatcher settings before starting.
     # CLI flag (VERBOSE_LOGGING env var) overrides the DB setting.
     ds = settings.dispatcher_settings

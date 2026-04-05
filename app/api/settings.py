@@ -147,12 +147,11 @@ async def settings_to_response(provider) -> SystemSettingsResponse:
 
 
 async def activate_scenario(scenario_id: str) -> None:
-    """Load a scenario from DB and apply it to mock providers.
+    """Load scenario data into mock providers and restart the dispatcher.
 
-    1. Loads scenario from DB
-    2. Calls MockQueueProvider.reset_with_config(queues, ami_connected)
-    3. Calls SimulationPatientProvider.reset_with_patients(patients)
-    4. Calls dispatcher.restart()
+    Only prepares the mock data — does NOT change which source (live vs
+    simulation) is active.  The caller or the individual source-switch
+    endpoints are responsible for setting the in-memory source.
 
     Note: call logs are NOT cleared — they are historical records that
     should persist across scenario switches and server restarts.
@@ -182,14 +181,14 @@ async def activate_scenario(scenario_id: str) -> None:
         for p in (row.patients or []):
             print(f"[ACTIVATE_SCENARIO] - Patient from DB: {p.get('name')}, {p.get('phone')}")
 
-        # 1. Reset queue provider
+        # 1. Reset mock queue provider with scenario data
         queue_provider = get_mock_queue_provider()
         queue_provider.reset_with_config(
             queues_config=row.queues or [],
             ami_connected=row.ami_connected,
         )
 
-        # 2. Reset patient provider
+        # 2. Reset simulation patient provider with scenario data
         patient_provider = get_simulation_patient_provider()
         await patient_provider.reset_with_patients(
             patient_dicts=row.patients or []
@@ -250,6 +249,7 @@ async def set_system_enabled(request: SystemEnabledRequest):
     """Toggle system on/off."""
     provider = get_settings_provider()
     await provider.set_system_enabled(request.enabled)
+    print(f"[SETTINGS] system_enabled → {request.enabled}")
     return await settings_to_response(provider)
 
 
@@ -356,6 +356,7 @@ async def set_queue_source(request: SourceRequest):
 
     await provider.set_queue_source(request.source)
     _set_queue_source(request.source)
+    print(f"[SETTINGS] queue_source: {current_settings.queue_source} → {request.source}")
 
     # When switching TO simulation, activate the scenario
     if request.source == "simulation" and not was_simulation:
@@ -387,6 +388,7 @@ async def set_patient_source(request: SourceRequest):
 
     await provider.set_patient_source(request.source)
     _set_patient_source(request.source)
+    print(f"[SETTINGS] patient_source: {current_settings.patient_source} → {request.source}")
 
     # When switching TO simulation, activate the scenario
     if request.source == "simulation" and not was_simulation:
@@ -433,7 +435,9 @@ async def set_call_mode(request: CallModeRequest):
         raise HTTPException(status_code=400, detail="call_mode must be 'web' or 'twilio'")
 
     provider = get_settings_provider()
+    current_settings = await provider.get_settings()
     await provider.set_call_mode(request.call_mode)
+    print(f"[SETTINGS] call_mode: {current_settings.call_mode} → {request.call_mode}")
     return await settings_to_response(provider)
 
 
@@ -442,6 +446,8 @@ async def set_mock_mode(request: MockModeRequest):
     """Toggle mock mode and set the redirect phone number for Twilio calls/SMS."""
     provider = get_settings_provider()
     await provider.set_mock_mode(request.enabled, request.mock_phone)
+    label = f"ON (redirect to {request.mock_phone})" if request.enabled else "OFF"
+    print(f"[SETTINGS] mock_mode → {label}")
     return await settings_to_response(provider)
 
 

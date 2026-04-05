@@ -510,10 +510,10 @@ class LivePatientProvider(BasePatientProvider):
         async with AsyncSessionLocal() as session:
             state = await self._get_local_state(session, patient_id)
             if state is None:
-                state = PatientCallStateRow(patient_id=patient_id)
+                state = PatientCallStateRow(patient_id=patient_id, attempt_count=0)
                 session.add(state)
             if increment_attempt:
-                state.attempt_count += 1
+                state.attempt_count = (state.attempt_count or 0) + 1
             state.last_attempt_at = datetime.now(timezone.utc)
             state.last_outcome = outcome
             state.ai_called_before = True
@@ -534,7 +534,7 @@ class LivePatientProvider(BasePatientProvider):
         async with AsyncSessionLocal() as session:
             state = await self._get_local_state(session, patient_id)
             if state is None:
-                state = PatientCallStateRow(patient_id=patient_id)
+                state = PatientCallStateRow(patient_id=patient_id, attempt_count=0)
                 session.add(state)
             state.invalid_number = True
             state.last_outcome = "invalid_number"
