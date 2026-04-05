@@ -398,7 +398,17 @@ class LivePatientProvider(BasePatientProvider):
     }
 
     async def _post_outcome_to_radflow(self, patient_id: str, order_id: Optional[str], outcome: str):
-        """POST call outcome back to RadFlow CallListData API."""
+        """POST call outcome back to RadFlow CallListData API.
+
+        Skipped entirely when mock_mode is enabled (test calls should
+        not write to production RadFlow).
+        """
+        from app.providers.settings_provider import get_settings_provider
+        settings = await get_settings_provider().get_settings()
+        if settings.mock_mode:
+            logger.info("RadFlow write-back SKIPPED (mock mode): patient=%s outcome=%s", patient_id, outcome)
+            return
+
         radflow_type = self._OUTCOME_TO_RADFLOW_TYPE.get(outcome, "CB")
         payload = {
             "patientId": patient_id,
