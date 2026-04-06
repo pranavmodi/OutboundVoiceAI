@@ -31,8 +31,8 @@ def _load_json_object_env(var_name: str) -> dict[str, str]:
                 for k, v in parsed.items()
                 if str(v).strip()
             }
-    except Exception:
-        logger.warning("Invalid JSON in %s; expected an object map", var_name)
+    except Exception as e:
+        logger.warning("Invalid JSON in %s: %s (raw value: %r)", var_name, e, raw[:200])
     return {}
 
 

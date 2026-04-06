@@ -25,6 +25,7 @@ DEFAULT_POLL_INTERVAL_SECONDS = 10
 DEFAULT_DISPATCH_TIMEOUT_SECONDS = 30
 DEFAULT_MAX_ATTEMPTS = 3
 DEFAULT_MIN_HOURS_BETWEEN = 6
+DEFAULT_COOLDOWN_SECONDS = 120  # wait between consecutive calls to different patients
 DECISION_LOG_MAX = 100
 
 
@@ -45,11 +46,13 @@ class AutoCallDispatcher:
         self._dispatched_at: Optional[float] = None
         self._dispatched_patient_id: Optional[str] = None
         self._decision_log: deque = deque(maxlen=DECISION_LOG_MAX)
+        self._last_call_ended_at: Optional[float] = None
         # Configurable parameters
         self.poll_interval: int = DEFAULT_POLL_INTERVAL_SECONDS
         self.dispatch_timeout: int = DEFAULT_DISPATCH_TIMEOUT_SECONDS
         self.max_attempts: int = DEFAULT_MAX_ATTEMPTS
         self.min_hours_between: int = DEFAULT_MIN_HOURS_BETWEEN
+        self.cooldown_seconds: int = DEFAULT_COOLDOWN_SECONDS
         self.verbose: bool = False
 
     @property
@@ -78,17 +81,19 @@ class AutoCallDispatcher:
 
     def update_config(self, poll_interval: int, dispatch_timeout: int,
                        max_attempts: int, min_hours_between: int,
-                       verbose_logging: bool = False):
+                       verbose_logging: bool = False,
+                       cooldown_seconds: int = DEFAULT_COOLDOWN_SECONDS):
         """Update dispatcher configuration."""
         self.poll_interval = poll_interval
         self.dispatch_timeout = dispatch_timeout
         self.max_attempts = max_attempts
         self.min_hours_between = min_hours_between
+        self.cooldown_seconds = cooldown_seconds
         self.verbose = verbose_logging
         self._log_decision("config_updated",
                            f"Config updated: poll={poll_interval}s, timeout={dispatch_timeout}s, "
                            f"max_attempts={max_attempts}, min_hours={min_hours_between}, "
-                           f"verbose={verbose_logging}")
+                           f"cooldown={cooldown_seconds}s, verbose={verbose_logging}")
 
     def restart(self):
         """Restart the dispatcher (stop + start)."""
@@ -227,7 +232,17 @@ class AutoCallDispatcher:
             elif call_log_provider.has_active_call():
                 tick_decision = self._log_decision("blocked", "Call already in progress")
 
-            else:
+            # cooldown between consecutive calls
+            elif self._last_call_ended_at is not None:
+                elapsed = asyncio.get_event_loop().time() - self._last_call_ended_at
+                remaining = self.cooldown_seconds - elapsed
+                if remaining > 0:
+                    tick_decision = self._log_decision(
+                        "blocked", f"Cooldown between calls ({int(remaining)}s remaining)")
+                else:
+                    self._last_call_ended_at = None  # cooldown expired, clear it
+
+            if tick_decision is None:
                 # All gating conditions passed
                 self._verbose_log("All gates passed — looking for candidate patient")
 
@@ -355,7 +370,8 @@ class AutoCallDispatcher:
             self._state = DispatcherState.IDLE
             self._dispatched_at = None
             self._dispatched_patient_id = None
-            self._log_decision("call_ended", "Call ended, returning to idle")
+            self._last_call_ended_at = asyncio.get_event_loop().time()
+            self._log_decision("call_ended", f"Call ended, cooldown {self.cooldown_seconds}s before next call")
 
     def _log_decision(self, decision: str, detail: str) -> dict:
         """Append to the circular decision buffer, persist to DB, and return the entry."""
@@ -412,6 +428,7 @@ class AutoCallDispatcher:
                 "dispatch_timeout": self.dispatch_timeout,
                 "max_attempts": self.max_attempts,
                 "min_hours_between": self.min_hours_between,
+                "cooldown_seconds": self.cooldown_seconds,
             },
         }
 

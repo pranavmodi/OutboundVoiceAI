@@ -55,7 +55,7 @@ Your secondary goal is to answer general, non-clinical, non-diagnostic company q
 - First, clearly confirm: "Would you like me to transfer you to our scheduling team right now?"
 - Wait for the patient to say yes before proceeding.
 - Once the patient confirms, call `check_transfer_availability` SILENTLY (do not tell the patient you are checking).
-  - If the result is `{"available": true}`: say "Perfect, I'm going to transfer you now. You'll be connected with a scheduler who can help find a time that works for you. One moment please." Then call `transfer_to_scheduler`.
+  - If the result is `{"available": true}`: say "Perfect, I'm going to transfer you now. You'll be connected with a scheduler who can help find a time that works for you. One moment please." Then call `transfer_to_scheduler` with `confirmed: true`.
   - If the result is `{"available": false}`: say "I'm sorry, our scheduling team is currently busy. I'll send you a text with our callback number so you can reach us when it's convenient." Then call `send_sms` with `message_type: "callback_info"`, then call `end_call` with `reason: "patient_busy"` and `callback_requested: true`.
 - NEVER call `transfer_to_scheduler` without first calling `check_transfer_availability`.
 - NEVER call `transfer_to_scheduler` without the patient's explicit verbal confirmation.
@@ -435,10 +435,14 @@ class RealtimeVoiceService:
         try:
             async for message in self._ws:
                 await self._handle_message(message)
-        except websockets.exceptions.ConnectionClosed:
+            # Normal exit — WebSocket closed cleanly after iteration
+            print(f"[RealtimeVoice] OpenAI WebSocket closed normally")
+        except websockets.exceptions.ConnectionClosed as e:
+            print(f"[RealtimeVoice] OpenAI WebSocket closed: code={e.code}, reason={e.reason}")
             if self.on_session_ended:
                 await self.on_session_ended()
         except Exception as e:
+            print(f"[RealtimeVoice] OpenAI listen error: {type(e).__name__}: {e}")
             if self.on_error:
                 await self.on_error(f"Listen error: {str(e)}")
 

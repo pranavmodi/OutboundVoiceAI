@@ -33,6 +33,8 @@ class CallOrchestrator:
         self._twilio_call_sid: Optional[str] = None
         self._voicemail_handled: bool = False
         self._web_voicemail_simulated: bool = False
+        self._ending_call: bool = False  # prevents re-entrant end_call from race conditions
+        self._transfer_in_progress: bool = False  # set during SIP transfer to prevent DISCONNECTED override
         self._verbose: bool = False
 
         # Callbacks for UI updates
@@ -346,8 +348,15 @@ class CallOrchestrator:
 
     async def end_call(self, outcome: CallOutcome = CallOutcome.COMPLETED):
         """End the current call."""
-        if not self._current_call:
+        if not self._current_call or self._ending_call:
             return
+        # During a SIP transfer, Twilio closes the media stream which triggers
+        # end_call(DISCONNECTED).  Ignore it — the transfer code will call
+        # end_call(TRANSFERRED) momentarily.
+        if self._transfer_in_progress and outcome == CallOutcome.DISCONNECTED:
+            print(f"[CallOrchestrator] Ignoring DISCONNECTED during transfer — waiting for transfer outcome")
+            return
+        self._ending_call = True
 
         call = self._current_call
         patient = self._current_patient
@@ -416,6 +425,8 @@ class CallOrchestrator:
             self._twilio_call_sid = None
             self._voicemail_handled = False
             self._web_voicemail_simulated = False
+            self._ending_call = False
+            self._transfer_in_progress = False
             self._call_mode = "web"
             self._mock_mode = False
             self._mock_phone = ""
@@ -495,6 +506,7 @@ class CallOrchestrator:
 
         if name == "transfer_to_scheduler":
             if args.get("confirmed"):
+                self._transfer_in_progress = True
                 outcome = await self._transfer.execute_transfer(
                     call=self._current_call,
                     patient=self._current_patient,

@@ -256,17 +256,21 @@ async def twilio_media_websocket(websocket: WebSocket, stream_id: str):
         await websocket.close(code=4000, reason="No pending bridge")
         return
 
+    disconnect_reason = "unknown"
     try:
         await bridge.handle_twilio_ws(websocket)
-    except WebSocketDisconnect:
-        logger.info(f"Twilio media stream disconnected: stream_id={stream_id}")
+        disconnect_reason = "stream_ended_normally"
+    except WebSocketDisconnect as e:
+        disconnect_reason = f"websocket_disconnect (code={e.code})"
+        print(f"[TwilioMedia] Stream disconnected: stream_id={stream_id}, code={e.code}")
     except Exception as e:
-        logger.error(f"Twilio media stream error: {e}")
+        disconnect_reason = f"error: {type(e).__name__}: {e}"
+        print(f"[TwilioMedia] Stream error: stream_id={stream_id}, {disconnect_reason}")
     finally:
-        # Twilio media stream ended (caller hung up or stream stopped).
-        # End the call if it's still active.
         from app.services.call_orchestrator import get_orchestrator
         orchestrator = get_orchestrator()
         if orchestrator.is_call_active:
-            logger.info(f"Twilio media stream closed — ending active call (stream_id={stream_id})")
+            print(f"[TwilioMedia] Stream closed while call active — reason={disconnect_reason}, stream_id={stream_id}")
             await orchestrator.end_call(CallOutcome.DISCONNECTED)
+        else:
+            print(f"[TwilioMedia] Stream closed (call already ended) — reason={disconnect_reason}, stream_id={stream_id}")

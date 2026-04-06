@@ -1,7 +1,8 @@
 """REST API endpoints for dashboard."""
+import html
 import os
 import logging
-from fastapi import APIRouter, HTTPException, Form
+from fastapi import APIRouter, HTTPException, Form, Request
 from fastapi.responses import Response
 from typing import Optional
 
@@ -475,6 +476,62 @@ async def twilio_status_callback(
     except Exception as e:
         print(f"[TwilioStatus] Callback handling failed: {e}")
     return {"status": "ok"}
+
+
+@router.post("/twilio/dial-status")
+async def twilio_dial_status(request: Request):
+    """Callback from <Dial action=...> — tells us what happened with the SIP transfer.
+
+    If the transfer succeeded, return empty TwiML (call is bridged).
+    If it failed, play a spoken apology so the patient isn't left in silence.
+    """
+    form = await request.form()
+    dial_status = form.get("DialCallStatus", "")
+    sip_code = form.get("DialSipResponseCode", "")
+    bridged = form.get("DialBridged", "")
+    call_sid = form.get("CallSid", "")
+
+    parts = []
+    for key in ("DialCallStatus", "DialCallSid", "DialCallDuration",
+                "DialSipResponseCode", "CallSid", "DialBridged"):
+        val = form.get(key, "")
+        if val:
+            parts.append(f"{key}={val}")
+    print(f"[DialStatus] {' | '.join(parts) or 'no fields'}")
+
+    if dial_status in ("completed", "answered") or bridged == "true":
+        # Transfer succeeded — patient is connected to agent, nothing more to do
+        return Response(
+            content='<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
+            media_type="application/xml",
+        )
+
+    # Transfer failed — tell the patient and provide the callback number
+    from app.services.twilio_sms_service import get_callback_number
+    callback = get_callback_number()
+    if callback:
+        message = (
+            "I'm sorry, we're having trouble connecting you to our scheduling team right now. "
+            f"Please call us back at {callback} and we'll get you scheduled. "
+            "We apologize for the inconvenience. Goodbye."
+        )
+    else:
+        message = (
+            "I'm sorry, we're having trouble connecting you to our scheduling team right now. "
+            "Please call our office back and we'll get you scheduled. "
+            "We apologize for the inconvenience. Goodbye."
+        )
+
+    print(f"[DialStatus] Transfer failed (status={dial_status}, sip={sip_code}) — playing fallback message for {call_sid}")
+
+    twiml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Response>'
+        f'<Say voice="alice">{html.escape(message)}</Say>'
+        '<Hangup/>'
+        '</Response>'
+    )
+    return Response(content=twiml, media_type="application/xml")
 
 
 @router.delete("/calls")

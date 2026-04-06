@@ -109,11 +109,15 @@ class TwilioMediaBridge:
                         await self.voice_service.send_audio(audio_bytes)
 
                 elif event == "stop":
-                    logger.info("Twilio stream stopped")
+                    reason = msg.get("stop", {}).get("reason", "unknown")
+                    print(f"[TwilioMedia] Twilio sent stop event: reason={reason}, callSid={self._call_sid}")
                     break
 
+                elif event not in ("connected", "start", "media"):
+                    print(f"[TwilioMedia] Unexpected event: {event}")
+
         except Exception as e:
-            logger.error(f"Twilio media stream error: {e}")
+            print(f"[TwilioMedia] Bridge error: {type(e).__name__}: {e}")
         finally:
             self._twilio_ws = None
             self._connected.clear()
@@ -196,16 +200,25 @@ def transfer_call_to_destination(call_sid: str, destination: str):
     destination = destination.strip()
     escaped_destination = html.escape(destination, quote=True)
 
+    # Build dial action URL for debugging transfer outcomes
+    backend_host = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+    if not backend_host:
+        backend_host = os.getenv("NEXT_PUBLIC_API_URL", "http://localhost:8000").rstrip("/")
+    action_url = html.escape(f"{backend_host}/api/twilio/dial-status", quote=True)
+
     # Build inner target: <Sip> for SIP endpoints, <Number> for PSTN.
+    # Offer all codecs Twilio supports so FreePBX can pick one it accepts.
+    sip_codecs = os.getenv("SIP_TRANSFER_CODECS", "PCMU,PCMA,G722,OPUS").strip()
     if destination.lower().startswith("sip:"):
-        inner = f"<Sip>{escaped_destination}</Sip>"
-        dial_attrs = ""
+        escaped_codecs = html.escape(sip_codecs, quote=True)
+        inner = f'<Sip codecs="{escaped_codecs}">{escaped_destination}</Sip>'
+        dial_attrs = f' action="{action_url}" method="POST"'
     else:
         inner = f"<Number>{escaped_destination}</Number>"
-        dial_attrs = ""
+        dial_attrs = f' action="{action_url}" method="POST"'
         if from_number:
             escaped_caller_id = html.escape(from_number, quote=True)
-            dial_attrs = f' callerId="{escaped_caller_id}"'
+            dial_attrs += f' callerId="{escaped_caller_id}"'
 
     twiml = (
         '<?xml version="1.0" encoding="UTF-8"?>'
@@ -213,6 +226,7 @@ def transfer_call_to_destination(call_sid: str, destination: str):
         f"<Dial{dial_attrs}>{inner}</Dial>"
         "</Response>"
     )
+    print(f"[Transfer] TwiML: {twiml}")
 
     client = _get_twilio_client()
     client.calls(call_sid).update(twiml=twiml)

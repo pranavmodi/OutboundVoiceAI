@@ -282,18 +282,18 @@ Full queue mapping from Danny:
 
 FreePBX has direct SIP access to each queue:
 ```
-sip:9006@pbx.radflow360.com;transport=TLS   # Scheduling English
-sip:9009@pbx.radflow360.com;transport=TLS   # Scheduling Spanish
-sip:9012@pbx.radflow360.com;transport=TLS   # Scheduling Mandarin
-sip:9013@pbx.radflow360.com;transport=TLS   # Scheduling Cantonese
+sip:9006@pbx.radflow360.com   # Scheduling English
+sip:9009@pbx.radflow360.com   # Scheduling Spanish
+sip:9012@pbx.radflow360.com   # Scheduling Mandarin
+sip:9013@pbx.radflow360.com   # Scheduling Cantonese
 ```
 
 Production env var:
 ```
-QUEUE_TRANSFER_TARGETS={"9006":"sip:9006@pbx.radflow360.com;transport=TLS","9009":"sip:9009@pbx.radflow360.com;transport=TLS","9012":"sip:9012@pbx.radflow360.com;transport=TLS","9013":"sip:9013@pbx.radflow360.com;transport=TLS"}
+QUEUE_TRANSFER_TARGETS={"9006":"sip:9006@pbx.radflow360.com","9009":"sip:9009@pbx.radflow360.com","9012":"sip:9012@pbx.radflow360.com","9013":"sip:9013@pbx.radflow360.com"}
 ```
 
-Code already handles SIP URIs with `;transport=TLS` — no changes needed (`twilio_voice_service.py:200`).
+Code already handles SIP URIs with `` — no changes needed (`twilio_voice_service.py:200`).
 
 **Note:** Twilio's IP ranges may need to be whitelisted on the FreePBX firewall. Confirm with Bill whether Twilio can reach `pbx.radflow360.com` on SIP port.
 
