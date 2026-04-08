@@ -100,6 +100,7 @@ export type WSMessageType =
   | "ping"
   | "pong"
   | "queue_update"
+  | "dispatcher_event"
   | "dispatch_call"
   | "dispatch_ack";
 

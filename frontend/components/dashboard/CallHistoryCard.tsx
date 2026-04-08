@@ -408,6 +408,23 @@ export function CallHistoryCard({ calls, onRefresh, onLoadMore, hasMore }: CallH
                                 </div>
                               </div>
 
+                              {/* Error message for failed calls */}
+                              {call.error_message && (
+                                <div className="flex items-start gap-1.5 mt-2 ml-11 px-2 py-1.5 rounded bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900">
+                                  <ShieldAlert className="h-3 w-3 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
+                                  <div className="min-w-0">
+                                    {call.error_code && (
+                                      <div className="text-[10px] font-mono text-red-700 dark:text-red-400 uppercase">
+                                        {call.error_code}
+                                      </div>
+                                    )}
+                                    <div className="text-xs text-red-700 dark:text-red-300 break-words">
+                                      {call.error_message}
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+
                               {/* Action badges */}
                               {(call.transfer_attempted || call.voicemail_left || call.sms_sent) && (
                                 <div className="flex gap-1.5 mt-2 ml-11">

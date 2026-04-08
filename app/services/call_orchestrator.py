@@ -35,6 +35,7 @@ class CallOrchestrator:
         self._web_voicemail_simulated: bool = False
         self._ending_call: bool = False  # prevents re-entrant end_call from race conditions
         self._transfer_in_progress: bool = False  # set during SIP transfer to prevent DISCONNECTED override
+        self._last_start_error: Optional[str] = None  # last error from failed start_call, for dispatcher visibility
         self._verbose: bool = False
 
         # Callbacks for UI updates
@@ -124,10 +125,12 @@ class CallOrchestrator:
 
     async def start_call(self, patient_id: str, call_mode: str = "web") -> Optional[CallLog]:
         """Start an outbound call to a patient."""
+        self._last_start_error = None
         call_log_provider = get_call_log_provider()
         if call_log_provider.has_active_call():
+            self._last_start_error = "A call is already in progress"
             if self.on_error:
-                await self.on_error("A call is already in progress")
+                await self.on_error(self._last_start_error)
             return None
 
         patient_provider = get_patient_provider()
@@ -184,6 +187,12 @@ class CallOrchestrator:
         )
         if not success:
             print(f"[CallOrchestrator] OpenAI Realtime connection FAILED for call {call.call_id}")
+            self._last_start_error = "Failed to connect to OpenAI Realtime API"
+            await call_log_provider.update_call(
+                call.call_id,
+                error_code="openai_connect_failed",
+                error_message=self._last_start_error,
+            )
             await call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
             await self._mark_patient_attempt(patient, "failed")
             self._voice_service = None
@@ -243,8 +252,14 @@ class CallOrchestrator:
 
             except Exception as e:
                 print(f"[CallOrchestrator] Twilio call FAILED for {call.call_id} to {dial_number}: {e}")
+                self._last_start_error = f"Twilio call placement failed: {type(e).__name__}: {str(e)}"
                 if self.on_error:
                     await self.on_error(f"Twilio call failed: {str(e)}")
+                await call_log_provider.update_call(
+                    call.call_id,
+                    error_code="twilio_place_failed",
+                    error_message=self._last_start_error,
+                )
                 await call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
                 await self._mark_patient_attempt(patient, "failed")
                 voice = self._voice_service
@@ -274,8 +289,14 @@ class CallOrchestrator:
             connected = await self._twilio_bridge.wait_for_connection(timeout=30)
             if not connected:
                 print(f"[CallOrchestrator] Twilio media stream timed out for call {call.call_id}")
+                self._last_start_error = "Twilio media stream did not connect within 30 seconds (call may not have been answered)"
                 if self.on_error:
                     await self.on_error("Twilio media stream connection timed out")
+                await call_log_provider.update_call(
+                    call.call_id,
+                    error_code="media_stream_timeout",
+                    error_message=self._last_start_error,
+                )
                 await call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
                 await self._mark_patient_attempt(patient, "failed")
                 voice = self._voice_service

@@ -332,9 +332,10 @@ class AutoCallDispatcher:
                             self._dispatched_at = None
                             self._dispatched_patient_id = None
                             self._last_call_ended_at = asyncio.get_event_loop().time()
+                            error_reason = getattr(orchestrator, "_last_start_error", None) or "unknown reason"
                             tick_decision = self._log_decision(
                                 "start_failed",
-                                f"Failed to start call to {candidate.name} (cooldown {self.cooldown_seconds}s)")
+                                f"Failed to start call to {candidate.name}: {error_reason} (cooldown {self.cooldown_seconds}s)")
                         else:
                             # Mark active immediately; voice/ws callbacks will also keep state in sync
                             self.notify_call_started(candidate.patient_id)

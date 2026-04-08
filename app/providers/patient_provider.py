@@ -81,6 +81,34 @@ def _map_language(lang_str: str) -> Language:
     return mapping.get(lang_str.lower().strip(), Language.ENGLISH) if lang_str else Language.ENGLISH
 
 
+def _parse_radflow_datetime(value: str) -> Optional[datetime]:
+    """Parse a RadFlow datetime string into an aware UTC datetime.
+
+    RadFlow timestamps look like: '11-20-2025 1:56: 00' (with an odd space
+    before seconds) or '12-28-2025 11:30 AM'.  Be lenient about both.
+    """
+    if not value:
+        return None
+    v = value.strip().replace(": ", ":")
+    for fmt in ("%m-%d-%Y %H:%M:%S", "%m-%d-%Y %I:%M %p", "%m-%d-%Y %H:%M"):
+        try:
+            return datetime.strptime(v, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
+def _add_business_days(start: datetime, days: int) -> datetime:
+    """Add N business days (skipping Sat/Sun) to a datetime."""
+    result = start
+    added = 0
+    while added < days:
+        result = result + timedelta(days=1)
+        if result.weekday() < 5:  # Mon=0..Fri=4
+            added += 1
+    return result
+
+
 def _api_record_to_patient(rec: dict) -> Patient:
     """Convert a CallListData record to a Patient object."""
     lang = _map_language(rec.get("LANGUAGE", "english"))
@@ -92,7 +120,8 @@ def _api_record_to_patient(rec: dict) -> Patient:
     p.phone = rec.get("CELLPHONE", "") or ""
     p.language = lang
     p.order_id = rec.get("InternalStudyId")
-    p.order_created = None
+    # order_created = when the order was placed in RadFlow (INSERTIONDATETIME)
+    p.order_created = _parse_radflow_datetime(rec.get("INSERTIONDATETIME", ""))
     p.intake_status = intake
     p.has_called_in_before = (rec.get("CB", 0) or 0) > 0
     p.has_abandoned_before = (rec.get("status", "") or "").upper() == "NO SHOW"
@@ -100,14 +129,16 @@ def _api_record_to_patient(rec: dict) -> Patient:
     p.attempt_count = (rec.get("VM", 0) or 0) + (rec.get("CB", 0) or 0)
     p.last_attempt_at = None
     p.last_outcome = rec.get("status")
-    p.due_by = None
-    # Parse Studydatetime as due_by if present
-    study_dt = rec.get("Studydatetime", "")
-    if study_dt:
-        try:
-            p.due_by = datetime.strptime(study_dt, "%m-%d-%Y %I:%M %p").replace(tzinfo=timezone.utc)
-        except (ValueError, TypeError):
-            pass
+    # Per spec: DueBy = OrderCreated + 2 business days (unless HasCalledInBefore,
+    # in which case there's no 2-day SLA — fall back to order_created so they
+    # sort naturally by when the order was placed).
+    if p.order_created:
+        if p.has_called_in_before:
+            p.due_by = p.order_created
+        else:
+            p.due_by = _add_business_days(p.order_created, 2)
+    else:
+        p.due_by = None
     p.priority_bucket = _compute_priority(p.has_abandoned_before, p.ai_called_before, p.has_called_in_before)
     return p
 

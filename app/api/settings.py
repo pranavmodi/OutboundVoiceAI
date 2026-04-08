@@ -247,9 +247,23 @@ async def update_settings(request: SystemSettingsRequest):
 @router.put("/system-enabled", response_model=SystemSettingsResponse)
 async def set_system_enabled(request: SystemEnabledRequest):
     """Toggle system on/off."""
+    from app.services.dispatcher import get_dispatcher
+    from app.api.websocket import broadcast_to_dashboards
+
     provider = get_settings_provider()
     await provider.set_system_enabled(request.enabled)
     print(f"[SETTINGS] system_enabled → {request.enabled}")
+
+    # Log to dispatcher events so the dashboard shows the state change in real time
+    dispatcher = get_dispatcher()
+    if request.enabled:
+        decision_entry = dispatcher._log_decision("system_enabled", "System enabled — outbound calls will resume")
+    else:
+        decision_entry = dispatcher._log_decision("system_disabled", "System disabled — no new outbound calls will be placed")
+
+    # Broadcast immediately so the UI event card updates without waiting for next tick
+    await broadcast_to_dashboards({"type": "dispatcher_event", "decision": decision_entry})
+
     return await settings_to_response(provider)
 
 

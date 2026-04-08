@@ -170,6 +170,16 @@ export function useDashboardWS(): UseDashboardWSReturn {
             }
             break;
 
+          case "dispatcher_event":
+            if (message.decision) {
+              const decision = message.decision as DispatcherDecision;
+              if (!decision.timestamp) {
+                decision.timestamp = new Date().toISOString();
+              }
+              appendEvent(decision);
+            }
+            break;
+
           case "dispatch_call":
             console.log("Received dispatch_call:", message.patient_id, message.patient_name);
             setDispatchedPatient({
