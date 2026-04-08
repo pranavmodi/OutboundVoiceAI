@@ -326,13 +326,15 @@ class AutoCallDispatcher:
                         call = await orchestrator.start_call(candidate.patient_id, call_mode=call_mode)
 
                         if call is None:
-                            # Failed to start; reset state
+                            # Failed to start; reset state and start cooldown so we
+                            # don't hammer the same patient on the next tick.
                             self._state = DispatcherState.IDLE
                             self._dispatched_at = None
                             self._dispatched_patient_id = None
+                            self._last_call_ended_at = asyncio.get_event_loop().time()
                             tick_decision = self._log_decision(
                                 "start_failed",
-                                f"Failed to start call to {candidate.name}")
+                                f"Failed to start call to {candidate.name} (cooldown {self.cooldown_seconds}s)")
                         else:
                             # Mark active immediately; voice/ws callbacks will also keep state in sync
                             self.notify_call_started(candidate.patient_id)

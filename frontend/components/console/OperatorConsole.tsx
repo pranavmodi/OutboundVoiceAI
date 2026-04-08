@@ -22,7 +22,6 @@ import {
   XCircle,
   Save,
   ShieldAlert,
-  Phone,
   PhoneCall,
   Monitor,
   Plus,
@@ -53,9 +52,7 @@ interface OperatorConsoleProps {
   onUpdateBusinessHours: (businessHours: BusinessHours) => Promise<void>;
   onUpdateQueueThresholds: (thresholds: QueueThresholds) => Promise<void>;
   onUpdateDispatcherSettings: (dispatcherSettings: DispatcherSettings) => Promise<void>;
-  onSetAllowLiveCalls: (allowed: boolean) => Promise<void>;
   onSetMockMode: (enabled: boolean, mockPhone: string) => Promise<void>;
-  onUpdateAllowedPhones: (phones: string[]) => Promise<void>;
   onSetQueueSource: (source: string) => Promise<void>;
   onSetPatientSource: (source: string) => Promise<void>;
   onSetActiveScenario: (id: string) => Promise<void>;
@@ -71,9 +68,7 @@ export function OperatorConsole({
   onUpdateBusinessHours,
   onUpdateQueueThresholds,
   onUpdateDispatcherSettings,
-  onSetAllowLiveCalls,
   onSetMockMode,
-  onUpdateAllowedPhones,
   onSetQueueSource,
   onSetPatientSource,
   onSetActiveScenario,
@@ -102,7 +97,6 @@ export function OperatorConsole({
     min_hours_between: 6,
   });
 
-  const [newPhone, setNewPhone] = useState("");
   const [mockPhoneInput, setMockPhoneInput] = useState(settings?.mock_phone || "");
   const [holidayEditorOpen, setHolidayEditorOpen] = useState(false);
 
@@ -114,22 +108,6 @@ export function OperatorConsole({
       setMockPhoneInput(settings.mock_phone || "");
     }
   }, [settings]);
-
-  const handleAddPhone = async () => {
-    const phone = newPhone.trim();
-    if (!phone || !settings) return;
-    if (settings.allowed_phones.includes(phone)) {
-      setNewPhone("");
-      return;
-    }
-    await onUpdateAllowedPhones([...settings.allowed_phones, phone]);
-    setNewPhone("");
-  };
-
-  const handleRemovePhone = async (phone: string) => {
-    if (!settings) return;
-    await onUpdateAllowedPhones(settings.allowed_phones.filter((p) => p !== phone));
-  };
 
   const handleBusinessHoursSubmit = async () => {
     await onUpdateBusinessHours(businessHoursForm);
@@ -388,29 +366,12 @@ export function OperatorConsole({
 
       <Separator />
 
-      {/* Live Calls Safeguard */}
+      {/* Mock Mode */}
       <div className="space-y-4 rounded-lg border border-orange-200 bg-orange-50/50 dark:border-orange-900 dark:bg-orange-950/20 p-4">
         <div className="flex items-center gap-2">
           <ShieldAlert className="h-4 w-4 text-orange-600 dark:text-orange-400" />
-          <h4 className="text-sm font-medium">Live Call Safeguards</h4>
-          <InfoTooltip content="Safety controls to prevent accidental live calls. Both the master toggle AND the phone allowlist must be configured before Twilio can dial real numbers." />
-        </div>
-
-        <div className="flex items-center justify-between">
-          <div>
-            <Label htmlFor="allow-live-calls" className="text-sm flex items-center gap-1.5">
-              Allow Live Twilio Calls
-              <InfoTooltip content="Master toggle for real phone calls. When disabled, Twilio mode will be blocked even if selected. This is the first safety check." />
-            </Label>
-            <p className="text-xs text-muted-foreground">
-              When off, only web-simulated calls are allowed
-            </p>
-          </div>
-          <Switch
-            id="allow-live-calls"
-            checked={settings.allow_live_calls}
-            onCheckedChange={onSetAllowLiveCalls}
-          />
+          <h4 className="text-sm font-medium">Test Mode</h4>
+          <InfoTooltip content="Route all Twilio calls and SMS to a test number instead of real patients." />
         </div>
 
         <div className="space-y-2">
@@ -449,48 +410,6 @@ export function OperatorConsole({
           )}
         </div>
 
-        <div className="space-y-2">
-          <Label className="text-xs text-muted-foreground flex items-center gap-1.5">
-            Phone Number Allowlist
-            <InfoTooltip content="Second safety check. Only phone numbers explicitly listed here can be dialed via Twilio. An empty list blocks ALL live calls. Use E.164 format (+1...)." />
-          </Label>
-          <p className="text-xs text-muted-foreground">
-            Only these numbers can be dialed via Twilio. Empty list blocks all calls.
-          </p>
-          <div className="flex gap-2">
-            <Input
-              placeholder="+15551234567"
-              value={newPhone}
-              onChange={(e) => setNewPhone(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") handleAddPhone(); }}
-              className="h-9"
-            />
-            <Button size="sm" variant="outline" onClick={handleAddPhone} disabled={!newPhone.trim()}>
-              <Plus className="h-3 w-3 mr-1" />
-              Add
-            </Button>
-          </div>
-          {settings.allowed_phones.length > 0 ? (
-            <div className="flex flex-wrap gap-2 pt-1">
-              {settings.allowed_phones.map((phone) => (
-                <Badge key={phone} variant="secondary" className="flex items-center gap-1.5 pl-2 pr-1 py-1">
-                  <Phone className="h-3 w-3" />
-                  {phone}
-                  <button
-                    onClick={() => handleRemovePhone(phone)}
-                    className="ml-1 rounded-full p-0.5 hover:bg-destructive/20 hover:text-destructive transition-colors"
-                  >
-                    <Trash2 className="h-3 w-3" />
-                  </button>
-                </Badge>
-              ))}
-            </div>
-          ) : (
-            <p className="text-xs text-orange-600 dark:text-orange-400 font-medium pt-1">
-              No numbers allowed — all Twilio calls are blocked
-            </p>
-          )}
-        </div>
       </div>
 
       <Separator />

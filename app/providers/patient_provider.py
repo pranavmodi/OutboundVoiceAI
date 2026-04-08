@@ -21,6 +21,11 @@ CALLLIST_API_URL = os.getenv(
     "CALLLIST_API_URL",
     "https://app.radflow360.com/chatbotapi/Patient/CallListData",
 )
+# Separate endpoint for writing call outcomes back to RadFlow.
+CALLLIST_LOG_URL = os.getenv(
+    "CALLLIST_LOG_URL",
+    "https://app.radflow360.com/chatbotapi/Patient/SaveCallListLog",
+)
 CALLLIST_API_USER = os.getenv("CALLLIST_API_USER", "")
 CALLLIST_API_PASSWORD = os.getenv("CALLLIST_API_PASSWORD", "")
 
@@ -332,15 +337,20 @@ class LivePatientProvider(BasePatientProvider):
     def __init__(
         self,
         url: str = CALLLIST_API_URL,
+        log_url: str = CALLLIST_LOG_URL,
         user: str = CALLLIST_API_USER,
         password: str = CALLLIST_API_PASSWORD,
     ):
         self._url = url
+        self._log_url = log_url
         self._auth = (user, password) if user else None
         self._client = httpx.AsyncClient(verify=False, timeout=30.0)
         self._cache: list[Patient] = []
         self._cache_time: Optional[datetime] = None
         self._cache_ttl = timedelta(seconds=60)
+        # Mock-mode attempts tracked in memory only — cleared on restart or
+        # when switching to non-mock mode, so real production state is untouched.
+        self._mock_state: dict[str, dict] = {}  # patient_id → {attempt_count, last_attempt_at, last_outcome, invalid_number}
 
     async def _fetch(self, patient_id: Optional[str] = None) -> list[Patient]:
         """Fetch from API, with a 60-second cache."""
@@ -417,7 +427,7 @@ class LivePatientProvider(BasePatientProvider):
         }
         try:
             resp = await self._client.post(
-                self._url,
+                self._log_url,
                 json=payload,
                 headers={"Accept": "application/json"},
                 auth=self._auth,
@@ -451,8 +461,43 @@ class LivePatientProvider(BasePatientProvider):
         )
         return patient
 
+    async def _is_mock_mode(self) -> bool:
+        from app.providers.settings_provider import get_settings_provider
+        settings = await get_settings_provider().get_settings()
+        return bool(settings.mock_mode)
+
+    def _merge_mock_state(self, patient: Patient, st: dict) -> Patient:
+        """Apply in-memory mock call state on top of API-fetched patient data."""
+        patient.attempt_count = max(patient.attempt_count, st.get("attempt_count", 0))
+        patient.last_attempt_at = st.get("last_attempt_at")
+        patient.last_outcome = st.get("last_outcome") or patient.last_outcome
+        patient.ai_called_before = True
+        patient.priority_bucket = _compute_priority(
+            patient.has_abandoned_before, patient.ai_called_before, patient.has_called_in_before
+        )
+        return patient
+
     async def _merge_all(self, patients: list[Patient]) -> list[Patient]:
-        """Merge local state into all patients."""
+        """Merge local state into all patients.
+
+        In mock mode, only the in-memory mock_state is applied — the real
+        patient_call_state DB table is left untouched so production state
+        remains pristine.  In live mode, the DB state is applied as usual.
+        """
+        mock_mode = await self._is_mock_mode()
+        if mock_mode:
+            if not self._mock_state:
+                return patients
+            merged = []
+            for p in patients:
+                st = self._mock_state.get(p.patient_id)
+                if st:
+                    if st.get("invalid_number"):
+                        continue  # Skip invalid numbers entirely
+                    p = self._merge_mock_state(p, st)
+                merged.append(p)
+            return merged
+
         async with AsyncSessionLocal() as session:
             state_map = await self._get_all_local_state(session)
         if not state_map:
@@ -478,6 +523,14 @@ class LivePatientProvider(BasePatientProvider):
         if not patients:
             return None
         patient = patients[0]
+        mock_mode = await self._is_mock_mode()
+        if mock_mode:
+            st = self._mock_state.get(patient_id)
+            if st:
+                if st.get("invalid_number"):
+                    return None
+                patient = self._merge_mock_state(patient, st)
+            return patient
         async with AsyncSessionLocal() as session:
             state = await self._get_local_state(session, patient_id)
         if state:
@@ -516,7 +569,26 @@ class LivePatientProvider(BasePatientProvider):
         outcome: str,
         increment_attempt: bool = True,
     ):
-        # 1. Update local state table
+        mock_mode = await self._is_mock_mode()
+        if mock_mode:
+            # Track in memory only — real patient state is untouched
+            st = self._mock_state.setdefault(patient_id, {
+                "attempt_count": 0,
+                "last_attempt_at": None,
+                "last_outcome": None,
+                "invalid_number": False,
+            })
+            if increment_attempt:
+                st["attempt_count"] = st.get("attempt_count", 0) + 1
+            st["last_attempt_at"] = datetime.now(timezone.utc)
+            st["last_outcome"] = outcome
+            logger.info("Mock state updated: patient=%s outcome=%s attempts=%s (in-memory only)",
+                         patient_id, outcome, st["attempt_count"])
+            # RadFlow write-back already skipped in mock mode
+            await self._post_outcome_to_radflow(patient_id, None, outcome)
+            return
+
+        # 1. Update local state table (live mode)
         async with AsyncSessionLocal() as session:
             state = await self._get_local_state(session, patient_id)
             if state is None:
@@ -541,6 +613,21 @@ class LivePatientProvider(BasePatientProvider):
         await self._post_outcome_to_radflow(patient_id, order_id, outcome)
 
     async def mark_patient_invalid_number(self, patient_id: str, reason: str):
+        mock_mode = await self._is_mock_mode()
+        if mock_mode:
+            st = self._mock_state.setdefault(patient_id, {
+                "attempt_count": 0,
+                "last_attempt_at": None,
+                "last_outcome": None,
+                "invalid_number": False,
+            })
+            st["invalid_number"] = True
+            st["last_outcome"] = "invalid_number"
+            st["last_attempt_at"] = datetime.now(timezone.utc)
+            logger.info("Mock state: patient %s flagged invalid_number (in-memory only): %s", patient_id, reason)
+            await self._post_outcome_to_radflow(patient_id, None, "disconnected")
+            return
+
         async with AsyncSessionLocal() as session:
             state = await self._get_local_state(session, patient_id)
             if state is None:

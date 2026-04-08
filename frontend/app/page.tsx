@@ -386,18 +386,8 @@ export default function Dashboard() {
     if (newSettings) setSettings(newSettings);
   }, [api]);
 
-  const handleSetAllowLiveCalls = useCallback(async (allowed: boolean) => {
-    const newSettings = await api.setAllowLiveCalls(allowed);
-    if (newSettings) setSettings(newSettings);
-  }, [api]);
-
   const handleSetMockMode = useCallback(async (enabled: boolean, mockPhone: string) => {
     const newSettings = await api.setMockMode(enabled, mockPhone);
-    if (newSettings) setSettings(newSettings);
-  }, [api]);
-
-  const handleUpdateAllowedPhones = useCallback(async (phones: string[]) => {
-    const newSettings = await api.updateAllowedPhones(phones);
     if (newSettings) setSettings(newSettings);
   }, [api]);
 
@@ -587,9 +577,7 @@ export default function Dashboard() {
                       onUpdateBusinessHours={handleUpdateBusinessHours}
                       onUpdateQueueThresholds={handleUpdateQueueThresholds}
                       onUpdateDispatcherSettings={handleUpdateDispatcherSettings}
-                      onSetAllowLiveCalls={handleSetAllowLiveCalls}
                       onSetMockMode={handleSetMockMode}
-                      onUpdateAllowedPhones={handleUpdateAllowedPhones}
                       onSetQueueSource={handleSetQueueSource}
                       onSetPatientSource={handleSetPatientSource}
                       onSetActiveScenario={handleSetActiveScenario}

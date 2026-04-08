@@ -298,6 +298,7 @@ export function PatientQueueCard({
                       </Badge>
                     </div>
                     <div className="flex items-center gap-2.5 mt-1 ml-7 text-xs text-muted-foreground">
+                      <span className="font-mono">{patient.patient_id}</span>
                       <span className="tabular-nums">{patient.phone}</span>
                       <span className="uppercase font-medium">{patient.language}</span>
                       {patient.attempt_count > 0 && (

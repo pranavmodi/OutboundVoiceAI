@@ -185,6 +185,7 @@ class CallOrchestrator:
         if not success:
             print(f"[CallOrchestrator] OpenAI Realtime connection FAILED for call {call.call_id}")
             await call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
+            await self._mark_patient_attempt(patient, "failed")
             self._voice_service = None
             self._current_call = None
             self._current_patient = None
@@ -197,58 +198,6 @@ class CallOrchestrator:
             settings = await settings_provider.get_settings()
             self._mock_mode = settings.mock_mode
             self._mock_phone = settings.mock_phone if settings.mock_mode else ""
-            if not settings.allow_live_calls:
-                error_msg = "Live calls are disabled in system settings. Enable 'Allow Live Calls' first."
-                logger.warning(f"Twilio call blocked: {error_msg}")
-                if self.on_error:
-                    await self.on_error(error_msg)
-                await call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
-                # Clear state before disconnect so on_session_ended doesn't re-enter end_call
-                voice = self._voice_service
-                self._voice_service = None
-                self._current_call = None
-                self._current_patient = None
-                if voice:
-                    await voice.disconnect()
-                return None
-
-            # In mock mode, skip the allowlist — we're calling the mock number, not the patient.
-            if not settings.mock_mode:
-                if not settings.allowed_phones:
-                    error_msg = "No phone numbers in allowlist. Add allowed numbers in settings first."
-                    logger.warning(f"Twilio call blocked: {error_msg}")
-                    if self.on_error:
-                        await self.on_error(error_msg)
-                    await call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
-                    voice = self._voice_service
-                    self._voice_service = None
-                    self._current_call = None
-                    self._current_patient = None
-                    if voice:
-                        await voice.disconnect()
-                    return None
-
-                def normalize_phone(p: str) -> str:
-                    return ''.join(c for c in p if c.isdigit() or c == '+')
-
-                normalized_patient_phone = normalize_phone(patient.phone)
-                normalized_allowlist = [normalize_phone(p) for p in settings.allowed_phones]
-
-                if normalized_patient_phone not in normalized_allowlist:
-                    error_msg = f"Phone number {patient.phone} is not in the allowlist. Allowed: {settings.allowed_phones}"
-                    print(f"[CallOrchestrator] Twilio call blocked for call {call.call_id}: {error_msg}")
-                    if self.on_error:
-                        await self.on_error(error_msg)
-                    await call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
-                    voice = self._voice_service
-                    self._voice_service = None
-                    self._current_call = None
-                    self._current_patient = None
-                    if voice:
-                        await voice.disconnect()
-                    return None
-            else:
-                print(f"[CallOrchestrator] Mock mode — skipping allowlist check for {patient.phone}")
 
             # In mock mode, redirect the Twilio call to the mock phone number
             dial_number = patient.phone
@@ -297,6 +246,7 @@ class CallOrchestrator:
                 if self.on_error:
                     await self.on_error(f"Twilio call failed: {str(e)}")
                 await call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
+                await self._mark_patient_attempt(patient, "failed")
                 voice = self._voice_service
                 self._voice_service = None
                 self._current_call = None
@@ -327,6 +277,7 @@ class CallOrchestrator:
                 if self.on_error:
                     await self.on_error("Twilio media stream connection timed out")
                 await call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
+                await self._mark_patient_attempt(patient, "failed")
                 voice = self._voice_service
                 self._voice_service = None
                 self._current_call = None
@@ -430,6 +381,20 @@ class CallOrchestrator:
             self._call_mode = "web"
             self._mock_mode = False
             self._mock_phone = ""
+
+    async def _mark_patient_attempt(self, patient: Optional[Patient], outcome: str):
+        """Record a failed call attempt on the patient so the cooldown/retry filter works.
+
+        Used by early-failure paths in start_call() that don't go through end_call().
+        """
+        if patient is None:
+            return
+        try:
+            patient_provider = get_patient_provider()
+            await patient_provider.update_patient_after_call(patient.patient_id, outcome)
+            print(f"[CallOrchestrator] Marked attempt for patient {patient.patient_id} (outcome={outcome})")
+        except Exception as e:
+            logger.warning("Failed to mark patient attempt for %s: %s", patient.patient_id, e)
 
     async def _check_transfer_availability(self) -> bool:
         """Check whether a scheduler queue has capacity for a transfer right now."""
