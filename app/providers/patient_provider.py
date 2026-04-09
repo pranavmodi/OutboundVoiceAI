@@ -455,6 +455,7 @@ class LivePatientProvider(BasePatientProvider):
             "patientId": patient_id,
             "internalStudyId": order_id or "",
             "type": radflow_type,
+            "status": radflow_type,
         }
         try:
             resp = await self._client.post(
@@ -464,7 +465,7 @@ class LivePatientProvider(BasePatientProvider):
                 auth=self._auth,
             )
             resp.raise_for_status()
-            logger.info("RadFlow write-back OK: patient=%s type=%s", patient_id, radflow_type)
+            logger.info("RadFlow write-back OK: patient=%s type=%s status=%s", patient_id, radflow_type, radflow_type)
         except Exception as e:
             logger.warning("RadFlow write-back failed for patient %s: %s", patient_id, e)
 

@@ -71,6 +71,13 @@ class AllowedPhonesRequest(BaseModel):
     phones: List[str]
 
 
+class DailyReportRequest(BaseModel):
+    enabled: bool = False
+    webhook_url: str = ""
+    hour: int = 7
+    timezone: str = "America/Los_Angeles"
+
+
 class SystemSettingsResponse(BaseModel):
     system_enabled: bool
     business_hours: BusinessHoursRequest
@@ -84,6 +91,7 @@ class SystemSettingsResponse(BaseModel):
     call_mode: str
     mock_mode: bool
     mock_phone: str
+    daily_report: DailyReportRequest
     can_make_calls: bool
     is_within_business_hours: bool
 
@@ -141,6 +149,12 @@ async def settings_to_response(provider) -> SystemSettingsResponse:
         call_mode=settings.call_mode,
         mock_mode=settings.mock_mode,
         mock_phone=settings.mock_phone,
+        daily_report=DailyReportRequest(
+            enabled=settings.daily_report.enabled,
+            webhook_url=settings.daily_report.webhook_url,
+            hour=settings.daily_report.hour,
+            timezone=settings.daily_report.timezone,
+        ),
         can_make_calls=await provider.can_make_outbound_call(),
         is_within_business_hours=await provider.is_within_business_hours(),
     )
@@ -462,6 +476,23 @@ async def set_mock_mode(request: MockModeRequest):
     await provider.set_mock_mode(request.enabled, request.mock_phone)
     label = f"ON (redirect to {request.mock_phone})" if request.enabled else "OFF"
     print(f"[SETTINGS] mock_mode → {label}")
+    return await settings_to_response(provider)
+
+
+@router.put("/daily-report", response_model=SystemSettingsResponse)
+async def update_daily_report(request: DailyReportRequest):
+    """Update the daily Slack report configuration."""
+    from app.models import DailyReportConfig
+    provider = get_settings_provider()
+    config = DailyReportConfig(
+        enabled=request.enabled,
+        webhook_url=request.webhook_url.strip(),
+        hour=request.hour,
+        timezone=request.timezone,
+    )
+    await provider.update_daily_report(config)
+    label = "ON" if request.enabled else "OFF"
+    print(f"[SETTINGS] daily_report → {label} (hour={request.hour} tz={request.timezone})")
     return await settings_to_response(provider)
 
 

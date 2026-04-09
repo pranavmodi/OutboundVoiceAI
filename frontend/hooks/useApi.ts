@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useMemo } from "react";
-import type { SystemStatus, Patient, CallLog, QueueState, SystemSettings, BusinessHours, QueueThresholds, DispatcherSettings, SimulationScenario, ScenarioPatient } from "@/types";
+import type { SystemStatus, Patient, CallLog, QueueState, SystemSettings, BusinessHours, QueueThresholds, DispatcherSettings, SimulationScenario, ScenarioPatient, TodayKpis } from "@/types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -80,6 +80,15 @@ export function useApi() {
   const getCall = useCallback(async (callId: string): Promise<CallLog | null> => {
     try {
       return await fetchApi<CallLog>(`/api/calls/${callId}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
+  const getTodayKpis = useCallback(async (): Promise<TodayKpis | null> => {
+    try {
+      return await fetchApi<TodayKpis>(`/api/statistics/today`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unknown error");
       return null;
@@ -441,6 +450,32 @@ export function useApi() {
     }
   }, []);
 
+  const updateDailyReport = useCallback(async (config: {
+    enabled: boolean;
+    webhook_url: string;
+    hour: number;
+    timezone: string;
+  }): Promise<SystemSettings | null> => {
+    try {
+      return await fetchApi<SystemSettings>("/api/settings/daily-report", {
+        method: "PUT",
+        body: JSON.stringify(config),
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
+  const sendTestDailyReport = useCallback(async (): Promise<{ sent: boolean } | null> => {
+    try {
+      return await fetchApi<{ sent: boolean }>(`/api/reports/daily/test`, { method: "POST" });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
   const deleteAllCalls = useCallback(async (): Promise<boolean> => {
     try {
       await fetchApi("/api/calls", { method: "DELETE" });
@@ -469,6 +504,7 @@ export function useApi() {
     getOutboundQueue,
     getCalls,
     getCall,
+    getTodayKpis,
     simulateBusyQueue,
     simulateQuietQueue,
     simulateAmiFailure,
@@ -496,6 +532,8 @@ export function useApi() {
     setPatientSource,
     setCallMode,
     setMockMode,
+    updateDailyReport,
+    sendTestDailyReport,
     getTimezones,
     deleteAllCalls,
   }), [
@@ -507,6 +545,7 @@ export function useApi() {
     getOutboundQueue,
     getCalls,
     getCall,
+    getTodayKpis,
     simulateBusyQueue,
     simulateQuietQueue,
     simulateAmiFailure,
@@ -534,6 +573,8 @@ export function useApi() {
     setPatientSource,
     setCallMode,
     setMockMode,
+    updateDailyReport,
+    sendTestDailyReport,
     getTimezones,
     deleteAllCalls,
   ]);

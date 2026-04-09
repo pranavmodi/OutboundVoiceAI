@@ -31,6 +31,7 @@ import {
   Layers,
   CalendarDays,
   ChevronDown,
+  MessageSquare,
 } from "lucide-react";
 import { InfoTooltip } from "@/components/ui/info-tooltip";
 import type {
@@ -53,6 +54,8 @@ interface OperatorConsoleProps {
   onUpdateQueueThresholds: (thresholds: QueueThresholds) => Promise<void>;
   onUpdateDispatcherSettings: (dispatcherSettings: DispatcherSettings) => Promise<void>;
   onSetMockMode: (enabled: boolean, mockPhone: string) => Promise<void>;
+  onUpdateDailyReport: (config: { enabled: boolean; webhook_url: string; hour: number; timezone: string }) => Promise<void>;
+  onSendTestDailyReport: () => Promise<{ sent: boolean } | null>;
   onSetQueueSource: (source: string) => Promise<void>;
   onSetPatientSource: (source: string) => Promise<void>;
   onSetActiveScenario: (id: string) => Promise<void>;
@@ -69,6 +72,8 @@ export function OperatorConsole({
   onUpdateQueueThresholds,
   onUpdateDispatcherSettings,
   onSetMockMode,
+  onUpdateDailyReport,
+  onSendTestDailyReport,
   onSetQueueSource,
   onSetPatientSource,
   onSetActiveScenario,
@@ -99,6 +104,14 @@ export function OperatorConsole({
 
   const [mockPhoneInput, setMockPhoneInput] = useState(settings?.mock_phone || "");
   const [holidayEditorOpen, setHolidayEditorOpen] = useState(false);
+  const [dailyReportForm, setDailyReportForm] = useState({
+    enabled: settings?.daily_report?.enabled ?? false,
+    webhook_url: settings?.daily_report?.webhook_url ?? "",
+    hour: settings?.daily_report?.hour ?? 7,
+    timezone: settings?.daily_report?.timezone ?? "America/Los_Angeles",
+  });
+  const [dailyReportSaving, setDailyReportSaving] = useState(false);
+  const [dailyReportTestStatus, setDailyReportTestStatus] = useState<string | null>(null);
 
   useEffect(() => {
     if (settings) {
@@ -106,11 +119,42 @@ export function OperatorConsole({
       setThresholdsForm(settings.queue_thresholds);
       setDispatcherForm(settings.dispatcher_settings);
       setMockPhoneInput(settings.mock_phone || "");
+      if (settings.daily_report) {
+        setDailyReportForm({
+          enabled: settings.daily_report.enabled,
+          webhook_url: settings.daily_report.webhook_url,
+          hour: settings.daily_report.hour,
+          timezone: settings.daily_report.timezone,
+        });
+      }
     }
   }, [settings]);
 
   const handleBusinessHoursSubmit = async () => {
     await onUpdateBusinessHours(businessHoursForm);
+  };
+
+  const handleDailyReportSave = async () => {
+    setDailyReportSaving(true);
+    setDailyReportTestStatus(null);
+    try {
+      await onUpdateDailyReport(dailyReportForm);
+    } finally {
+      setDailyReportSaving(false);
+    }
+  };
+
+  const handleDailyReportTest = async () => {
+    setDailyReportTestStatus("Sending...");
+    try {
+      const result = await onSendTestDailyReport();
+      setDailyReportTestStatus(
+        result?.sent ? "Test report sent successfully" : "Failed to send (check webhook URL and logs)"
+      );
+    } catch {
+      setDailyReportTestStatus("Failed to send test report");
+    }
+    setTimeout(() => setDailyReportTestStatus(null), 6000);
   };
 
   const handleAddHoliday = () => {
@@ -410,6 +454,105 @@ export function OperatorConsole({
           )}
         </div>
 
+      </div>
+
+      <Separator />
+
+      {/* Daily Slack Report */}
+      <div className="space-y-4">
+        <div className="flex items-center gap-2">
+          <MessageSquare className="h-4 w-4 text-muted-foreground" />
+          <h4 className="text-sm font-medium">Daily Slack Report</h4>
+          <InfoTooltip content="Once per day at the configured hour, posts yesterday's call summary (calls placed, transfers, voicemails, etc.) to a Slack webhook." />
+        </div>
+
+        <div className="flex items-center justify-between">
+          <div>
+            <Label htmlFor="daily-report-enabled" className="text-sm flex items-center gap-1.5">
+              Enable daily report
+            </Label>
+            <p className="text-xs text-muted-foreground">
+              Post yesterday's stats to Slack every day
+            </p>
+          </div>
+          <Switch
+            id="daily-report-enabled"
+            checked={dailyReportForm.enabled}
+            onCheckedChange={(checked) => setDailyReportForm({ ...dailyReportForm, enabled: checked })}
+          />
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-2">
+          <div className="space-y-1 md:col-span-2">
+            <Label htmlFor="daily-report-webhook" className="text-xs text-muted-foreground">
+              Slack Webhook URL
+            </Label>
+            <Input
+              id="daily-report-webhook"
+              type="text"
+              placeholder="https://hooks.slack.com/services/..."
+              value={dailyReportForm.webhook_url}
+              onChange={(e) => setDailyReportForm({ ...dailyReportForm, webhook_url: e.target.value })}
+              className="h-9 font-mono text-xs"
+            />
+          </div>
+
+          <div className="space-y-1">
+            <Label htmlFor="daily-report-hour" className="text-xs text-muted-foreground">
+              Send at (hour, 0-23)
+            </Label>
+            <Input
+              id="daily-report-hour"
+              type="number"
+              min={0}
+              max={23}
+              value={dailyReportForm.hour}
+              onChange={(e) => {
+                const h = parseInt(e.target.value, 10);
+                setDailyReportForm({ ...dailyReportForm, hour: isNaN(h) ? 0 : Math.max(0, Math.min(23, h)) });
+              }}
+              className="h-9"
+            />
+          </div>
+
+          <div className="space-y-1">
+            <Label htmlFor="daily-report-tz" className="text-xs text-muted-foreground">
+              Timezone
+            </Label>
+            <Select
+              value={dailyReportForm.timezone}
+              onValueChange={(v) => setDailyReportForm({ ...dailyReportForm, timezone: v })}
+            >
+              <SelectTrigger id="daily-report-tz" className="h-9">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {timezones.map((tz) => (
+                  <SelectItem key={tz} value={tz}>{tz}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Button size="sm" onClick={handleDailyReportSave} disabled={dailyReportSaving}>
+            <Save className="h-3 w-3 mr-1.5" />
+            {dailyReportSaving ? "Saving..." : "Save"}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleDailyReportTest}
+            disabled={!dailyReportForm.webhook_url}
+            title="Send yesterday's summary to Slack now (ignores the enable toggle)"
+          >
+            Send Test Now
+          </Button>
+          {dailyReportTestStatus && (
+            <span className="text-xs text-muted-foreground">{dailyReportTestStatus}</span>
+          )}
+        </div>
       </div>
 
       <Separator />

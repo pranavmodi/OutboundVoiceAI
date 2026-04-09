@@ -12,6 +12,7 @@ from app.models import (
     HolidayEntry,
     QueueThresholds,
     DispatcherSettings,
+    DailyReportConfig,
     SystemSettings,
 )
 from typing import List
@@ -107,6 +108,13 @@ def _row_to_settings(row: SystemSettingsRow) -> SystemSettings:
     settings.call_mode = row.call_mode if row.call_mode is not None else "web"
     settings.mock_mode = row.mock_mode if row.mock_mode is not None else False
     settings.mock_phone = row.mock_phone if row.mock_phone is not None else ""
+    dr = row.daily_report or {}
+    settings.daily_report = DailyReportConfig(
+        enabled=bool(dr.get("enabled", False)),
+        webhook_url=str(dr.get("webhook_url", "")),
+        hour=int(dr.get("hour", 7)),
+        timezone=str(dr.get("timezone", "America/Los_Angeles")),
+    )
     return settings
 
 
@@ -162,6 +170,12 @@ class SettingsProvider:
             row.patient_source = settings.patient_source
             row.mock_mode = settings.mock_mode
             row.mock_phone = settings.mock_phone
+            row.daily_report = {
+                "enabled": settings.daily_report.enabled,
+                "webhook_url": settings.daily_report.webhook_url,
+                "hour": settings.daily_report.hour,
+                "timezone": settings.daily_report.timezone,
+            }
             await session.commit()
             return settings
 
@@ -390,6 +404,22 @@ class SettingsProvider:
                 session.add(row)
             row.mock_mode = enabled
             row.mock_phone = mock_phone
+            await session.commit()
+            return _row_to_settings(row)
+
+    async def update_daily_report(self, config: DailyReportConfig) -> SystemSettings:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(SystemSettingsRow).where(SystemSettingsRow.id == 1))
+            row = result.scalar_one_or_none()
+            if row is None:
+                row = SystemSettingsRow(id=1, business_hours={}, queue_thresholds={})
+                session.add(row)
+            row.daily_report = {
+                "enabled": config.enabled,
+                "webhook_url": config.webhook_url,
+                "hour": max(0, min(23, int(config.hour))),
+                "timezone": config.timezone or "America/Los_Angeles",
+            }
             await session.commit()
             return _row_to_settings(row)
 

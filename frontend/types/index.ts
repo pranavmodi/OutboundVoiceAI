@@ -61,6 +61,9 @@ export interface CallLog {
   ended_at: string | null;
   duration_seconds: number;
   outcome: string;
+  call_status: string;         // "called" | "failed" | "in_progress"
+  call_disposition: string;    // "transferred" | "hung_up" | "no_answer" | etc.
+  mock_mode: boolean;          // true if this call was redirected to a test number
   transfer_attempted: boolean;
   transfer_success: boolean;
   voicemail_left: boolean;
@@ -70,6 +73,19 @@ export interface CallLog {
   transcript: TranscriptEntry[];
   error_code: string | null;
   error_message: string | null;
+  recording_sid?: string | null;
+  recording_path?: string | null;
+  recording_size_bytes?: number | null;
+  recording_duration_seconds?: number | null;
+  recording_format?: string | null;
+  has_recording?: boolean;
+}
+
+export interface TodayKpis {
+  total_calls: number;
+  transferred: number;
+  voicemails: number;
+  sms: number;
 }
 
 export interface Statistics {
@@ -176,6 +192,13 @@ export interface DispatcherSettings {
   min_hours_between: number;
 }
 
+export interface DailyReportConfig {
+  enabled: boolean;
+  webhook_url: string;
+  hour: number;
+  timezone: string;
+}
+
 export interface SystemSettings {
   system_enabled: boolean;
   business_hours: BusinessHours;
@@ -189,6 +212,7 @@ export interface SystemSettings {
   call_mode: string;
   mock_mode: boolean;
   mock_phone: string;
+  daily_report: DailyReportConfig;
   can_make_calls: boolean;
   is_within_business_hours: boolean;
 }

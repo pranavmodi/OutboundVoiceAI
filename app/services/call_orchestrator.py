@@ -144,6 +144,10 @@ class CallOrchestrator:
         queue_provider = get_queue_provider()
         queue_state = queue_provider.get_state()
 
+        # Read settings upfront so we can stamp mock_mode on the call log entry
+        settings_provider = get_settings_provider()
+        settings = await settings_provider.get_settings()
+
         call = await call_log_provider.create_call(
             patient_id=patient.patient_id,
             patient_name=patient.name,
@@ -151,16 +155,13 @@ class CallOrchestrator:
             order_id=patient.order_id,
             priority_bucket=patient.priority_bucket,
             queue_snapshot=queue_state.to_dict(),
+            mock_mode=bool(settings.mock_mode),
         )
 
         self._current_call = call
         self._current_patient = patient
         self._call_mode = call_mode
         self._web_voicemail_simulated = False
-
-        # Read verbose setting
-        settings_provider = get_settings_provider()
-        settings = await settings_provider.get_settings()
         self._verbose = settings.dispatcher_settings.verbose_logging
 
         mode_label = "Twilio" if call_mode == "twilio" else "Web"
@@ -203,8 +204,6 @@ class CallOrchestrator:
             print(f"[CallOrchestrator] OpenAI Realtime connected for call {call.call_id}")
 
         if call_mode == "twilio":
-            settings_provider = get_settings_provider()
-            settings = await settings_provider.get_settings()
             self._mock_mode = settings.mock_mode
             self._mock_phone = settings.mock_phone if settings.mock_mode else ""
 
@@ -240,10 +239,12 @@ class CallOrchestrator:
                     await self.on_status_update(status_msg)
 
                 status_callback_url = f"{backend_host}/api/twilio/status"
+                recording_callback_url = f"{backend_host}/api/twilio/recording-status/{call.call_id}"
                 call_sid = place_twilio_call(
                     to_number=dial_number,
                     twiml_url=twiml_url,
                     status_callback_url=status_callback_url,
+                    recording_status_callback_url=recording_callback_url,
                 )
                 self._twilio_call_sid = call_sid
                 self._voicemail_handled = False

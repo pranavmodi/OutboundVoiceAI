@@ -11,6 +11,7 @@ import {
   ActiveCallCard,
   CallHistoryCard,
   DispatcherEventsCard,
+  KpiBar,
 } from "@/components/dashboard";
 import { SimulationConsole, OperatorConsole } from "@/components/console";
 import { useApi } from "@/hooks/useApi";
@@ -25,7 +26,7 @@ import {
   Circle,
   History,
 } from "lucide-react";
-import type { Patient, CallLog, QueueState, SystemSettings, SimulationScenario } from "@/types";
+import type { Patient, CallLog, QueueState, SystemSettings, SimulationScenario, TodayKpis } from "@/types";
 
 const PATIENT_POLL_INTERVAL_MS = 10000; // Poll patients every 10 seconds
 const CALLS_PAGE_SIZE = 25;
@@ -49,6 +50,7 @@ export default function Dashboard() {
   const [patientsLastUpdated, setPatientsLastUpdated] = useState<Date | null>(null);
   const [calls, setCalls] = useState<CallLog[]>([]);
   const [callsTotal, setCallsTotal] = useState(0);
+  const [todayKpis, setTodayKpis] = useState<TodayKpis | null>(null);
   const [activeCall, setActiveCall] = useState<CallLog | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
   const [lastCallInfo, setLastCallInfo] = useState<{ patientName: string; duration: number } | null>(null);
@@ -73,13 +75,14 @@ export default function Dashboard() {
     if (isLoaded) return;
 
     const loadData = async () => {
-      const [status, patientList, callData, settingsData, tzList, scenarioList] = await Promise.all([
+      const [status, patientList, callData, settingsData, tzList, scenarioList, kpis] = await Promise.all([
         api.getStatus(),
         api.getOutboundQueue(),
         api.getCalls(CALLS_PAGE_SIZE),
         api.getSettings(),
         api.getTimezones(),
         api.getScenarios(),
+        api.getTodayKpis(),
       ]);
 
       if (status) {
@@ -90,6 +93,7 @@ export default function Dashboard() {
       setPatientsLastUpdated(new Date());
       setCalls(callData.calls);
       setCallsTotal(callData.total);
+      setTodayKpis(kpis);
       setSettings(settingsData);
       if (settingsData?.call_mode) {
         setCallMode(settingsData.call_mode);
@@ -125,7 +129,7 @@ export default function Dashboard() {
     if (dashboard.queueState) setQueueState(dashboard.queueState);
   }, [dashboard.queueState]);
 
-  // Refresh call history and patient list when a call ends (via dashboard WS)
+  // Refresh call history, patient list, and today's KPIs when a call ends (via dashboard WS)
   useEffect(() => {
     dashboard.onCallEnded.current = () => {
       api.getCalls(CALLS_PAGE_SIZE).then(({ calls: c, total: t }) => {
@@ -135,6 +139,9 @@ export default function Dashboard() {
       api.getOutboundQueue().then((list) => {
         setPatients(list);
         setPatientsLastUpdated(new Date());
+      });
+      api.getTodayKpis().then((kpis) => {
+        if (kpis) setTodayKpis(kpis);
       });
     };
   }, [api, dashboard.onCallEnded]);
@@ -391,6 +398,20 @@ export default function Dashboard() {
     if (newSettings) setSettings(newSettings);
   }, [api]);
 
+  const handleUpdateDailyReport = useCallback(async (config: {
+    enabled: boolean;
+    webhook_url: string;
+    hour: number;
+    timezone: string;
+  }) => {
+    const newSettings = await api.updateDailyReport(config);
+    if (newSettings) setSettings(newSettings);
+  }, [api]);
+
+  const handleSendTestDailyReport = useCallback(async () => {
+    return await api.sendTestDailyReport();
+  }, [api]);
+
   const handleSetQueueSource = useCallback(async (source: string) => {
     const newSettings = await api.setQueueSource(source);
     if (newSettings) setSettings(newSettings);
@@ -527,6 +548,9 @@ export default function Dashboard() {
 
           {/* Dashboard Tab */}
           <TabsContent value="dashboard" className="space-y-6 animate-in">
+            {/* KPI row — today's headline numbers */}
+            <KpiBar kpis={todayKpis} />
+
             {/* 1. System Settings - at the top, expanded by default */}
             <Collapsible open={operatorOpen} onOpenChange={setOperatorOpen}>
               <Card>
@@ -578,6 +602,8 @@ export default function Dashboard() {
                       onUpdateQueueThresholds={handleUpdateQueueThresholds}
                       onUpdateDispatcherSettings={handleUpdateDispatcherSettings}
                       onSetMockMode={handleSetMockMode}
+                      onUpdateDailyReport={handleUpdateDailyReport}
+                      onSendTestDailyReport={handleSendTestDailyReport}
                       onSetQueueSource={handleSetQueueSource}
                       onSetPatientSource={handleSetPatientSource}
                       onSetActiveScenario={handleSetActiveScenario}
@@ -623,6 +649,9 @@ export default function Dashboard() {
                 ended_at: null,
                 duration_seconds: 0,
                 outcome: "in_progress",
+                call_status: "in_progress",
+                call_disposition: "in_progress",
+                mock_mode: false,
                 transfer_attempted: false,
                 transfer_success: false,
                 voicemail_left: false,
@@ -645,7 +674,7 @@ export default function Dashboard() {
 
           {/* History Tab */}
           <TabsContent value="history" className="space-y-6 animate-in">
-            <CallHistoryCard calls={calls} onRefresh={handleRefreshCalls} onLoadMore={handleLoadMoreCalls} hasMore={calls.length < callsTotal} />
+            <CallHistoryCard calls={calls} callsTotal={callsTotal} onRefresh={handleRefreshCalls} onLoadMore={handleLoadMoreCalls} hasMore={calls.length < callsTotal} />
           </TabsContent>
 
           {/* Simulation Tab */}

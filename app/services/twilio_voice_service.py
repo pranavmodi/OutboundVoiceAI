@@ -135,6 +135,7 @@ def place_twilio_call(
     to_number: str,
     twiml_url: str,
     status_callback_url: Optional[str] = None,
+    recording_status_callback_url: Optional[str] = None,
 ) -> str:
     """Place an outbound call via Twilio REST API. Returns Call SID.
 
@@ -159,6 +160,14 @@ def place_twilio_call(
         create_kwargs["status_callback"] = status_callback_url
         create_kwargs["status_callback_method"] = "POST"
         create_kwargs["status_callback_event"] = ["answered", "completed"]
+
+    # Enable call recording (dual-channel for transcript debugging)
+    if recording_status_callback_url:
+        create_kwargs["record"] = True
+        create_kwargs["recording_channels"] = "dual"
+        create_kwargs["recording_status_callback"] = recording_status_callback_url
+        create_kwargs["recording_status_callback_method"] = "POST"
+        create_kwargs["recording_status_callback_event"] = ["completed"]
 
     call = client.calls.create(**create_kwargs)
     logger.info(f"Twilio call placed: SID={call.sid}, to={to_number}")

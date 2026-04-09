@@ -412,6 +412,26 @@ async def get_statistics():
     return await call_log_provider.get_statistics()
 
 
+@router.get("/statistics/today")
+async def get_today_kpis():
+    """Get today's headline KPIs for the dashboard KPI row."""
+    call_log_provider = get_call_log_provider()
+    return await call_log_provider.get_today_kpis()
+
+
+@router.post("/reports/daily/test")
+async def trigger_daily_report_now():
+    """Manually trigger the daily Slack report (for testing).
+
+    Sends yesterday's stats to the configured Slack webhook.  Bypasses the
+    SLACK_DAILY_REPORT_ENABLED toggle, but still requires
+    SLACK_DAILY_REPORT_WEBHOOK_URL to be set.
+    """
+    from app.services.daily_report_service import send_daily_report
+    ok = await send_daily_report()
+    return {"sent": ok}
+
+
 @router.post("/twilio/twiml/{stream_id}")
 @router.get("/twilio/twiml/{stream_id}")
 async def twilio_twiml(stream_id: str):
@@ -476,6 +496,72 @@ async def twilio_status_callback(
     except Exception as e:
         print(f"[TwilioStatus] Callback handling failed: {e}")
     return {"status": "ok"}
+
+
+@router.post("/twilio/recording-status/{call_id}")
+async def twilio_recording_status(call_id: str, request: Request):
+    """Twilio recording status callback — download the MP3 to local disk.
+
+    Twilio POSTs this when the recording is complete, with fields like
+    RecordingSid, RecordingUrl, RecordingDuration, RecordingStatus.
+    """
+    form = await request.form()
+    recording_sid = str(form.get("RecordingSid", "") or "")
+    recording_url = str(form.get("RecordingUrl", "") or "")
+    recording_status = str(form.get("RecordingStatus", "") or "").lower()
+    try:
+        duration = int(form.get("RecordingDuration", 0) or 0)
+    except (ValueError, TypeError):
+        duration = 0
+
+    print(f"[RecordingStatus] call_id={call_id} sid={recording_sid} status={recording_status} duration={duration}s")
+
+    if recording_status != "completed" or not recording_url or not recording_sid:
+        return {"status": "skipped", "reason": "not completed or missing fields"}
+
+    from app.services.recording_service import download_twilio_recording
+    meta = await download_twilio_recording(
+        call_id=call_id,
+        recording_sid=recording_sid,
+        recording_url=recording_url,
+        recording_duration=duration,
+    )
+    if not meta:
+        return {"status": "download_failed"}
+
+    call_log_provider = get_call_log_provider()
+    await call_log_provider.set_recording(
+        call_id=call_id,
+        recording_sid=recording_sid,
+        recording_path=meta["path"],
+        recording_size_bytes=meta["size_bytes"],
+        recording_duration_seconds=meta["duration_seconds"],
+        recording_format=meta["format"],
+    )
+    return {"status": "ok", "path": meta["path"], "size": meta["size_bytes"]}
+
+
+@router.get("/calls/{call_id}/audio")
+async def get_call_audio(call_id: str):
+    """Stream the saved MP3 recording for a call."""
+    from fastapi.responses import FileResponse
+    from app.services.recording_service import resolve_recording_path
+
+    call_log_provider = get_call_log_provider()
+    call = await call_log_provider.get_call(call_id)
+    if not call or not call.recording_path:
+        raise HTTPException(status_code=404, detail="No recording available for this call")
+
+    abs_path = resolve_recording_path(call.recording_path)
+    if abs_path is None:
+        raise HTTPException(status_code=404, detail="Recording file missing on disk")
+
+    media_type = "audio/mpeg" if (call.recording_format or "mp3") == "mp3" else "audio/wav"
+    return FileResponse(
+        path=str(abs_path),
+        media_type=media_type,
+        filename=f"call-{call_id}.{call.recording_format or 'mp3'}",
+    )
 
 
 @router.post("/twilio/dial-status")

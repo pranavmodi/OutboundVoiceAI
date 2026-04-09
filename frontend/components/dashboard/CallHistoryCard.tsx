@@ -39,12 +39,15 @@ import {
   ShieldAlert,
   Mail,
   Activity,
+  Search,
+  Play,
 } from "lucide-react";
 import { formatDate, formatTime, formatDuration } from "@/lib/utils";
 import type { CallLog } from "@/types";
 
 interface CallHistoryCardProps {
   calls: CallLog[];
+  callsTotal: number;
   onRefresh: () => void;
   onLoadMore: () => void;
   hasMore: boolean;
@@ -68,6 +71,33 @@ const outcomeConfig: Record<
   completed: { label: "Completed", icon: Phone, variant: "default", color: "text-slate-600 bg-slate-50" },
   failed: { label: "Failed", icon: PhoneOff, variant: "destructive", color: "text-red-600 bg-red-50" },
   in_progress: { label: "In Progress", icon: Phone, variant: "default", color: "text-blue-600 bg-blue-50" },
+};
+
+// Call Status (high-level: did the call connect at all?)
+const statusConfig: Record<
+  string,
+  { label: string; variant: "default" | "secondary" | "destructive" | "outline" | "success" | "warning" }
+> = {
+  called: { label: "Called", variant: "success" },
+  failed: { label: "Failed", variant: "destructive" },
+  in_progress: { label: "In Progress", variant: "default" },
+};
+
+// Call Disposition (detailed: what happened during the call)
+const dispositionConfig: Record<
+  string,
+  { label: string; icon: typeof Phone; color: string }
+> = {
+  transferred: { label: "Transferred to Scheduler", icon: PhoneForwarded, color: "text-emerald-600 bg-emerald-50" },
+  voicemail_left: { label: "Voicemail Left", icon: MessageSquare, color: "text-amber-600 bg-amber-50" },
+  no_answer: { label: "No Answer", icon: PhoneMissed, color: "text-amber-600 bg-amber-50" },
+  hung_up: { label: "Hung Up", icon: PhoneOff, color: "text-orange-600 bg-orange-50" },
+  callback_requested: { label: "Callback Requested", icon: MessageSquare, color: "text-blue-600 bg-blue-50" },
+  wrong_number: { label: "Wrong Number", icon: PhoneOff, color: "text-red-600 bg-red-50" },
+  completed: { label: "Completed", icon: Phone, color: "text-slate-600 bg-slate-50" },
+  disconnected_number: { label: "Disconnected Number", icon: PhoneOff, color: "text-red-600 bg-red-50" },
+  technical_error: { label: "Technical Error", icon: ShieldAlert, color: "text-red-600 bg-red-50" },
+  in_progress: { label: "In Progress", icon: Phone, color: "text-blue-600 bg-blue-50" },
 };
 
 interface GroupedCalls {
@@ -124,13 +154,17 @@ function getDateLabel(dateKey: string): string {
   return formatDate(date);
 }
 
-export function CallHistoryCard({ calls, onRefresh, onLoadMore, hasMore }: CallHistoryCardProps) {
+export function CallHistoryCard({ calls, callsTotal, onRefresh, onLoadMore, hasMore }: CallHistoryCardProps) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [transcriptCall, setTranscriptCall] = useState<CallLog | null>(null);
   const [eventsCall, setEventsCall] = useState<CallLog | null>(null);
   const [dateFilter, setDateFilter] = useState<DateFilter>("all");
   const [customDate, setCustomDate] = useState<string>("");
   const [collapsedDates, setCollapsedDates] = useState<Set<string>>(new Set());
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [dispositionFilter, setDispositionFilter] = useState<string>("all");
+  const [playingCallId, setPlayingCallId] = useState<string | null>(null);
 
   // Compute date boundaries
   const todayKey = toDateKey(new Date());
@@ -141,8 +175,9 @@ export function CallHistoryCard({ calls, onRefresh, onLoadMore, hasMore }: CallH
   sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
   const sevenDaysKey = toDateKey(sevenDaysAgo);
 
-  // Group + filter calls by date
+  // Group + filter calls by date and search query
   const groupedCalls = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
     const byDate = new Map<string, CallLog[]>();
     for (const call of calls) {
       const key = getDateKeyFromCall(call);
@@ -152,6 +187,34 @@ export function CallHistoryCard({ calls, onRefresh, onLoadMore, hasMore }: CallH
       if (dateFilter === "yesterday" && key !== yesterdayKey) continue;
       if (dateFilter === "7days" && key !== "unknown-date" && key < sevenDaysKey) continue;
       if (dateFilter === "custom" && customDate && key !== customDate) continue;
+
+      // Apply call status filter
+      if (statusFilter !== "all" && call.call_status !== statusFilter) continue;
+
+      // Apply call disposition filter
+      if (dispositionFilter !== "all" && call.call_disposition !== dispositionFilter) continue;
+
+      // Apply search filter (name, patient id, phone, order id, status, disposition, mock)
+      if (q) {
+        const statusLabel = statusConfig[call.call_status]?.label || call.call_status;
+        const dispositionLabel = dispositionConfig[call.call_disposition]?.label || call.call_disposition;
+        const haystack = [
+          call.patient_name,
+          call.patient_id,
+          call.phone,
+          call.order_id,
+          call.outcome,
+          call.call_status,
+          call.call_disposition,
+          statusLabel,
+          dispositionLabel,
+          call.mock_mode ? "mock" : "",
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        if (!haystack.includes(q)) continue;
+      }
 
       const existing = byDate.get(key) || [];
       existing.push(call);
@@ -168,7 +231,7 @@ export function CallHistoryCard({ calls, onRefresh, onLoadMore, hasMore }: CallH
       });
     }
     return groups;
-  }, [calls, dateFilter, customDate, todayKey, yesterdayKey, sevenDaysKey]);
+  }, [calls, dateFilter, customDate, searchQuery, statusFilter, dispositionFilter, todayKey, yesterdayKey, sevenDaysKey]);
 
   const filteredCallCount = groupedCalls.reduce((sum, g) => sum + g.calls.length, 0);
 
@@ -220,19 +283,61 @@ export function CallHistoryCard({ calls, onRefresh, onLoadMore, hasMore }: CallH
               Call History
             </CardTitle>
             <div className="flex items-center gap-2">
-              {calls.length > 0 && (
-                <span className="text-xs text-muted-foreground tabular-nums">
-                  {dateFilter !== "all"
-                    ? `${filteredCallCount} of ${calls.length}`
-                    : `${calls.length}`}{" "}
-                  call{(dateFilter !== "all" ? filteredCallCount : calls.length) !== 1 ? "s" : ""}
-                </span>
-              )}
+              {callsTotal > 0 && (() => {
+                const isFiltered =
+                  dateFilter !== "all" ||
+                  !!searchQuery ||
+                  statusFilter !== "all" ||
+                  dispositionFilter !== "all";
+                let label: string;
+                let n: number;
+                if (isFiltered) {
+                  // Filters apply to already-loaded calls only
+                  n = filteredCallCount;
+                  label = `${filteredCallCount} of ${calls.length} loaded`;
+                } else if (calls.length < callsTotal) {
+                  // Some calls loaded, more available on the server
+                  n = callsTotal;
+                  label = `${calls.length} of ${callsTotal}`;
+                } else {
+                  // All calls loaded
+                  n = callsTotal;
+                  label = `${callsTotal}`;
+                }
+                return (
+                  <span className="text-xs text-muted-foreground tabular-nums">
+                    {label} call{n !== 1 ? "s" : ""}
+                  </span>
+                );
+              })()}
               <Button variant="ghost" size="icon" className="h-8 w-8" onClick={onRefresh}>
                 <RefreshCw className="h-3.5 w-3.5" />
               </Button>
             </div>
           </div>
+
+          {/* Search bar */}
+          {calls.length > 0 && (
+            <div className="relative pt-2">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 mt-1 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+              <Input
+                type="text"
+                placeholder="Search by name, patient ID, phone, order ID, or outcome..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="h-8 pl-8 pr-8 text-xs"
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => setSearchQuery("")}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 mt-1 text-muted-foreground hover:text-foreground"
+                  aria-label="Clear search"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+          )}
 
           {/* Date filter toolbar */}
           {calls.length > 0 && (
@@ -276,6 +381,38 @@ export function CallHistoryCard({ calls, onRefresh, onLoadMore, hasMore }: CallH
                   </button>
                 )}
               </div>
+
+              {/* Call Status dropdown */}
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="h-7 rounded-md border bg-background px-2 text-xs cursor-pointer"
+                aria-label="Filter by call status"
+              >
+                <option value="all">All Statuses</option>
+                <option value="called">Called</option>
+                <option value="failed">Failed</option>
+                <option value="in_progress">In Progress</option>
+              </select>
+
+              {/* Call Disposition dropdown */}
+              <select
+                value={dispositionFilter}
+                onChange={(e) => setDispositionFilter(e.target.value)}
+                className="h-7 rounded-md border bg-background px-2 text-xs cursor-pointer"
+                aria-label="Filter by call disposition"
+              >
+                <option value="all">All Dispositions</option>
+                <option value="transferred">Transferred to Scheduler</option>
+                <option value="voicemail_left">Voicemail Left</option>
+                <option value="no_answer">No Answer</option>
+                <option value="hung_up">Hung Up</option>
+                <option value="callback_requested">Callback Requested</option>
+                <option value="wrong_number">Wrong Number</option>
+                <option value="completed">Completed</option>
+                <option value="disconnected_number">Disconnected Number</option>
+                <option value="technical_error">Technical Error</option>
+              </select>
             </div>
           )}
         </CardHeader>
@@ -291,17 +428,35 @@ export function CallHistoryCard({ calls, onRefresh, onLoadMore, hasMore }: CallH
                 </div>
               ) : groupedCalls.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
-                  <CalendarDays className="h-12 w-12 mb-3 opacity-10" />
-                  <p className="text-sm font-medium">No calls for this date</p>
-                  <p className="text-xs mt-1">Try a different date or clear the filter</p>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="mt-3 text-xs"
-                    onClick={() => handleFilterChange("all")}
-                  >
-                    Show all calls
-                  </Button>
+                  {searchQuery ? (
+                    <>
+                      <Search className="h-12 w-12 mb-3 opacity-10" />
+                      <p className="text-sm font-medium">No calls match your search</p>
+                      <p className="text-xs mt-1">Try different search terms</p>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="mt-3 text-xs"
+                        onClick={() => setSearchQuery("")}
+                      >
+                        Clear search
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <CalendarDays className="h-12 w-12 mb-3 opacity-10" />
+                      <p className="text-sm font-medium">No calls for this date</p>
+                      <p className="text-xs mt-1">Try a different date or clear the filter</p>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="mt-3 text-xs"
+                        onClick={() => handleFilterChange("all")}
+                      >
+                        Show all calls
+                      </Button>
+                    </>
+                  )}
                 </div>
               ) : (
                 groupedCalls.map((group, groupIndex) => (
@@ -330,8 +485,13 @@ export function CallHistoryCard({ calls, onRefresh, onLoadMore, hasMore }: CallH
                     <CollapsibleContent>
                       <div className="space-y-1.5 pt-1.5 ml-2 border-l-2 border-muted pl-3">
                         {group.calls.map((call) => {
-                          const config = outcomeConfig[call.outcome] || outcomeConfig.completed;
-                          const Icon = config.icon;
+                          // Prefer new status/disposition; fall back to legacy outcome
+                          const dispCfg =
+                            dispositionConfig[call.call_disposition] ||
+                            outcomeConfig[call.outcome] ||
+                            outcomeConfig.completed;
+                          const statusCfg = statusConfig[call.call_status] || statusConfig.in_progress;
+                          const Icon = dispCfg.icon;
                           const preferred =
                             call.preferred_callback_time || inferPreferredCallbackFromTranscript(call);
 
@@ -344,21 +504,36 @@ export function CallHistoryCard({ calls, onRefresh, onLoadMore, hasMore }: CallH
                                 {/* Left: icon + info */}
                                 <div className="flex items-center gap-3 min-w-0">
                                   <div
-                                    className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${config.color}`}
+                                    className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${dispCfg.color}`}
                                   >
                                     <Icon className="h-3.5 w-3.5" />
                                   </div>
                                   <div className="min-w-0">
-                                    <div className="flex items-center gap-2">
+                                    <div className="flex items-center gap-2 flex-wrap">
                                       <p className="text-sm font-medium truncate">
                                         {call.patient_name}
                                       </p>
                                       <Badge
-                                        variant={config.variant}
+                                        variant={statusCfg.variant}
                                         className="text-[10px] px-1.5 py-0 shrink-0"
                                       >
-                                        {config.label}
+                                        {statusCfg.label}
                                       </Badge>
+                                      <Badge
+                                        variant="outline"
+                                        className="text-[10px] px-1.5 py-0 shrink-0"
+                                      >
+                                        {dispCfg.label}
+                                      </Badge>
+                                      {call.mock_mode && (
+                                        <Badge
+                                          variant="outline"
+                                          className="text-[10px] px-1.5 py-0 shrink-0 border-orange-300 bg-orange-50 text-orange-700 dark:border-orange-800 dark:bg-orange-950/40 dark:text-orange-300"
+                                          title="This call was placed in mock mode (redirected to a test number)"
+                                        >
+                                          MOCK
+                                        </Badge>
+                                      )}
                                     </div>
                                     <div className="flex items-center gap-1.5 mt-0.5">
                                       <span className="text-xs text-muted-foreground tabular-nums">
@@ -385,6 +560,22 @@ export function CallHistoryCard({ calls, onRefresh, onLoadMore, hasMore }: CallH
                                       {preferred}
                                     </span>
                                   )}
+                                  {call.has_recording && (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      className="h-7 gap-1.5 text-xs opacity-70 group-hover/row:opacity-100 transition-opacity"
+                                      onClick={() =>
+                                        setPlayingCallId(playingCallId === call.call_id ? null : call.call_id)
+                                      }
+                                      title="Play call recording"
+                                    >
+                                      <Play className="h-3 w-3" />
+                                      <span className="hidden sm:inline">
+                                        {playingCallId === call.call_id ? "Hide" : "Audio"}
+                                      </span>
+                                    </Button>
+                                  )}
                                   {call.transcript.some((e) => e.speaker === "system") && (
                                     <Button
                                       variant="outline"
@@ -407,6 +598,20 @@ export function CallHistoryCard({ calls, onRefresh, onLoadMore, hasMore }: CallH
                                   </Button>
                                 </div>
                               </div>
+
+                              {/* Inline audio player */}
+                              {playingCallId === call.call_id && call.has_recording && (
+                                <div className="mt-2 ml-11">
+                                  <audio
+                                    controls
+                                    autoPlay
+                                    className="w-full h-8"
+                                    src={`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/calls/${call.call_id}/audio`}
+                                  >
+                                    Your browser does not support the audio element.
+                                  </audio>
+                                </div>
+                              )}
 
                               {/* Error message for failed calls */}
                               {call.error_message && (

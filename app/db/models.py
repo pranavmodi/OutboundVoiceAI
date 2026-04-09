@@ -54,6 +54,15 @@ class CallLogRow(Base):
     ended_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     duration_seconds: Mapped[int] = mapped_column(Integer, default=0)
     outcome: Mapped[str] = mapped_column(String(32), default="in_progress")
+    call_status: Mapped[str] = mapped_column(String(32), default="in_progress")
+    call_disposition: Mapped[str] = mapped_column(String(32), default="in_progress")
+    mock_mode: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Audio recording (stored on disk, metadata only in DB)
+    recording_sid: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    recording_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    recording_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    recording_duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    recording_format: Mapped[str | None] = mapped_column(String(16), nullable=True)
     transfer_attempted: Mapped[bool] = mapped_column(Boolean, default=False)
     transfer_success: Mapped[bool] = mapped_column(Boolean, default=False)
     voicemail_left: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -68,6 +77,8 @@ class CallLogRow(Base):
         Index("ix_call_logs_patient_id", "patient_id"),
         Index("ix_call_logs_started_at", "started_at"),
         Index("ix_call_logs_outcome", "outcome"),
+        Index("ix_call_logs_call_status", "call_status"),
+        Index("ix_call_logs_call_disposition", "call_disposition"),
     )
 
 
@@ -89,6 +100,7 @@ class SystemSettingsRow(Base):
     call_mode: Mapped[str] = mapped_column(String(20), default="web")
     mock_mode: Mapped[bool] = mapped_column(Boolean, default=False)
     mock_phone: Mapped[str] = mapped_column(String(32), default="")
+    daily_report: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=_utcnow, onupdate=_utcnow)
 
     __table_args__ = (

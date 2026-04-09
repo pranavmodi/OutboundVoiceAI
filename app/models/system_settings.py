@@ -41,6 +41,15 @@ class DispatcherSettings:
 
 
 @dataclass
+class DailyReportConfig:
+    """Daily Slack report configuration (posts yesterday's call summary)."""
+    enabled: bool = False
+    webhook_url: str = ""
+    hour: int = 7  # 0-23 local time
+    timezone: str = "America/Los_Angeles"
+
+
+@dataclass
 class SystemSettings:
     """Main system settings."""
     system_enabled: bool = True
@@ -55,3 +64,4 @@ class SystemSettings:
     call_mode: str = "web"  # "web" or "twilio"
     mock_mode: bool = False
     mock_phone: str = ""  # redirect Twilio calls/SMS here when mock_mode=True
+    daily_report: DailyReportConfig = field(default_factory=DailyReportConfig)

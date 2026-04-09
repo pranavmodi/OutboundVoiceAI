@@ -1,3 +1,4 @@
+import asyncio
 import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -8,6 +9,7 @@ from pathlib import Path
 
 from .api import dashboard_router, websocket_router, settings_router, dispatcher_router, scenarios_router
 from .services.dispatcher import get_dispatcher
+from .services.daily_report_service import daily_report_loop
 from .providers import set_queue_source, set_patient_source
 from .providers.settings_provider import get_settings_provider
 from .db import AsyncSessionLocal, async_engine
@@ -47,9 +49,16 @@ async def lifespan(app: FastAPI):
         except ValueError:
             pass  # Scenario not found, skip activation
     get_dispatcher().start()
+    # Start the daily Slack report loop (no-op if disabled via env var)
+    daily_report_task = asyncio.create_task(daily_report_loop())
     yield
-    # Shutdown: stop the dispatcher and dispose engine
+    # Shutdown: stop the dispatcher, cancel background tasks, dispose engine
     get_dispatcher().stop()
+    daily_report_task.cancel()
+    try:
+        await daily_report_task
+    except (asyncio.CancelledError, Exception):
+        pass
     await async_engine.dispose()
 
 
