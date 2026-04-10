@@ -248,18 +248,39 @@ class AutoCallDispatcher:
 
                 # 7. Get next candidate patient
                 patient_provider = get_patient_provider()
-                candidate = await patient_provider.get_next_candidate(
-                    max_attempts=self.max_attempts,
-                    min_hours_between=self.min_hours_between)
+                settings_provider = get_settings_provider()
+                settings = await settings_provider.get_settings()
+
+                # In live (non-mock) mode, verify the candidate's language
+                # queue has an agent before calling.  Skip candidates whose
+                # queue is empty and try the next one in priority order.
+                candidate = None
+                if not settings.mock_mode:
+                    from app.services.transfer_service import resolve_transfer_queue_for_language, find_queue_by_name
+                    queue = await patient_provider.get_outbound_queue(
+                        max_attempts=self.max_attempts,
+                        min_hours_between=self.min_hours_between)
+                    for prospect in queue:
+                        target_queue = resolve_transfer_queue_for_language(prospect.language)
+                        queue_info = find_queue_by_name(queue_state, target_queue)
+                        if queue_info and queue_info.AvailableAgents >= 1:
+                            candidate = prospect
+                            break
+                        else:
+                            self._verbose_log(
+                                f"Skipping {prospect.name} — no agents in queue {target_queue} "
+                                f"for language {prospect.language.value if hasattr(prospect.language, 'value') else prospect.language}"
+                            )
+                else:
+                    candidate = await patient_provider.get_next_candidate(
+                        max_attempts=self.max_attempts,
+                        min_hours_between=self.min_hours_between)
 
                 if candidate is None:
                     self._verbose_log("No eligible candidate found")
                     tick_decision = self._log_decision("no_candidate", "No eligible patients in queue")
 
                 else:
-                    # 8. Determine call mode and required connectivity
-                    settings_provider = get_settings_provider()
-                    settings = await settings_provider.get_settings()
                     call_mode = settings.call_mode or "web"
                     print(f"[Dispatcher] Candidate found: {candidate.name} ({candidate.phone}), mode={call_mode}")
 

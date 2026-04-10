@@ -130,6 +130,13 @@ If the patient says "don't call me again", "stop calling me", "take me off your 
 - Allow pauses for natural speech
 - Do not interrupt
 
+## Noise and Hallucination Handling
+Phone calls often have background noise, static, or silence that can be misinterpreted as speech.
+- If you receive input that is very short (one or two words), in an unexpected language (like Japanese, German, Korean, etc. when the conversation is in English), or doesn't make sense in context — it is almost certainly background noise, NOT the patient speaking.
+- DO NOT treat noise artifacts as patient responses. DO NOT interpret random foreign-language words as consent to transfer.
+- If you're unsure whether the patient actually spoke, ask a clarifying question like "I'm sorry, I didn't catch that. Could you repeat that?" instead of assuming what they said.
+- NEVER call `transfer_to_scheduler` or `end_call` based on ambiguous or nonsensical input.
+
 ---
 
 ## PRECISE IMAGING COMPANY INFORMATION
@@ -353,9 +360,9 @@ class RealtimeVoiceService:
                 },
                 "turn_detection": {
                     "type": "server_vad",
-                    "threshold": 0.5,
-                    "prefix_padding_ms": 300,
-                    "silence_duration_ms": 500,
+                    "threshold": float(os.getenv("OPENAI_VAD_THRESHOLD", "0.85")),
+                    "prefix_padding_ms": int(os.getenv("OPENAI_VAD_PREFIX_MS", "300")),
+                    "silence_duration_ms": int(os.getenv("OPENAI_VAD_SILENCE_MS", "700")),
                 },
                 "tools": [
                     {
