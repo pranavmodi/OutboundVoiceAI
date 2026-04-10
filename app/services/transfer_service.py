@@ -229,14 +229,18 @@ class TransferService:
 
             try:
                 from app.services.twilio_voice_service import transfer_call_to_destination
+                # Pass the patient's original phone as the caller ID so the
+                # scheduler sees the actual patient number, not our Twilio DID.
+                patient_caller_id = patient.phone if patient and patient.phone else None
                 await asyncio.to_thread(
                     transfer_call_to_destination,
                     twilio_call_sid,
                     destination,
+                    patient_caller_id,
                 )
                 await self._log_call_event(
                     call.call_id,
-                    f"Twilio transfer initiated to queue '{target_queue}' destination='{destination}'",
+                    f"Twilio transfer initiated to queue '{target_queue}' destination='{destination}' caller_id='{patient_caller_id or ''}'",
                 )
             except Exception as e:
                 await self._log_call_event(

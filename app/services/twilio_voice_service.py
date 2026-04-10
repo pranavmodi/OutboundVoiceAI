@@ -200,14 +200,60 @@ def play_voicemail_and_hangup(call_sid: str, message: str):
     client.calls(call_sid).update(twiml=twiml)
 
 
-def transfer_call_to_destination(call_sid: str, destination: str):
-    """Transfer an in-progress Twilio call to a PSTN/SIP destination."""
-    from_number = os.getenv("TWILIO_FROM_NUMBER", "")
+def _normalize_to_e164(phone: str, default_country_code: str = "1") -> str:
+    """Normalize a phone number to E.164 format (e.g. +16692253551).
+
+    Accepts formats like:
+      - "6692253551"       (10 digits, assume US)
+      - "16692253551"      (11 digits starting with 1)
+      - "+16692253551"     (already E.164)
+      - "(669) 225-3551"   (formatted with separators)
+    Returns "" if the input doesn't look like a valid phone number.
+    """
+    if not phone:
+        return ""
+    # Preserve a leading + but strip all other non-digits
+    has_plus = phone.strip().startswith("+")
+    digits = "".join(c for c in phone if c.isdigit())
+    if not digits:
+        return ""
+    if has_plus:
+        return f"+{digits}"
+    if len(digits) == 10:
+        return f"+{default_country_code}{digits}"
+    if len(digits) == 11 and digits.startswith(default_country_code):
+        return f"+{digits}"
+    # Unknown format — return with + if it looks international
+    if len(digits) > 10:
+        return f"+{digits}"
+    return ""
+
+
+def transfer_call_to_destination(
+    call_sid: str,
+    destination: str,
+    caller_id: Optional[str] = None,
+):
+    """Transfer an in-progress Twilio call to a PSTN/SIP destination.
+
+    Args:
+        call_sid: Twilio CallSid of the active call to update.
+        destination: SIP URI or PSTN number to dial.
+        caller_id: Number to present as caller ID on the new leg.  Typically
+            the original patient's phone number so the scheduler sees who is
+            calling.  Falls back to TWILIO_FROM_NUMBER if unset/invalid.
+    """
+    fallback_from_number = os.getenv("TWILIO_FROM_NUMBER", "")
     if not destination or not destination.strip():
         raise RuntimeError("Missing transfer destination")
 
     destination = destination.strip()
     escaped_destination = html.escape(destination, quote=True)
+
+    # Normalize the caller ID — prefer the provided one (patient's phone),
+    # fall back to our Twilio number if that fails.
+    normalized_caller_id = _normalize_to_e164(caller_id or "") or fallback_from_number
+    escaped_caller_id = html.escape(normalized_caller_id, quote=True) if normalized_caller_id else ""
 
     # Build dial action URL for debugging transfer outcomes
     backend_host = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
@@ -216,18 +262,17 @@ def transfer_call_to_destination(call_sid: str, destination: str):
     action_url = html.escape(f"{backend_host}/api/twilio/dial-status", quote=True)
 
     # Build inner target: <Sip> for SIP endpoints, <Number> for PSTN.
-    # Offer all codecs Twilio supports so FreePBX can pick one it accepts.
-    sip_codecs = os.getenv("SIP_TRANSFER_CODECS", "PCMU,PCMA,G722,OPUS").strip()
+    # Only offer codecs that FreePBX has enabled on its end (per Bill Simon: G722, PCMU).
+    sip_codecs = os.getenv("SIP_TRANSFER_CODECS", "G722,PCMU").strip()
+    dial_attrs = f' action="{action_url}" method="POST"'
+    if escaped_caller_id:
+        dial_attrs += f' callerId="{escaped_caller_id}"'
+
     if destination.lower().startswith("sip:"):
         escaped_codecs = html.escape(sip_codecs, quote=True)
         inner = f'<Sip codecs="{escaped_codecs}">{escaped_destination}</Sip>'
-        dial_attrs = f' action="{action_url}" method="POST"'
     else:
         inner = f"<Number>{escaped_destination}</Number>"
-        dial_attrs = f' action="{action_url}" method="POST"'
-        if from_number:
-            escaped_caller_id = html.escape(from_number, quote=True)
-            dial_attrs += f' callerId="{escaped_caller_id}"'
 
     twiml = (
         '<?xml version="1.0" encoding="UTF-8"?>'
