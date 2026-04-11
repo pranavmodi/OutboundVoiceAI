@@ -298,6 +298,17 @@ class CallOrchestrator:
                     error_code="media_stream_timeout",
                     error_message=self._last_start_error,
                 )
+                # Send callback SMS for no-answer (per spec: no-answer should get SMS)
+                print(f"[CallOrchestrator] Sending SMS (no answer) for call {call.call_id} to {patient.phone if patient else 'unknown'}")
+                await self._notifications.send_sms_for_call(
+                    call=call,
+                    patient=patient,
+                    message_type="callback_info",
+                    reason="no_answer",
+                    call_mode=call_mode,
+                    mock_mode=self._mock_mode,
+                    mock_phone=self._mock_phone,
+                )
                 await call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
                 await self._mark_patient_attempt(patient, "failed")
                 voice = self._voice_service
@@ -344,8 +355,10 @@ class CallOrchestrator:
         try:
             await self._notifications.maybe_send_issue_email(call, outcome)
 
-            # Skip SMS for outcomes where the number is known-bad, call failed, or transfer handled it
-            sms_skip_outcomes = (CallOutcome.TRANSFERRED, CallOutcome.WRONG_NUMBER, CallOutcome.DISCONNECTED, CallOutcome.FAILED)
+            # Skip SMS only when the number is known-bad or the patient is already
+            # talking to a human.  All other outcomes (no answer, hung up, voicemail,
+            # callback, technical error) should get a callback SMS.
+            sms_skip_outcomes = (CallOutcome.TRANSFERRED, CallOutcome.WRONG_NUMBER)
             if outcome not in sms_skip_outcomes:
                 print(f"[CallOrchestrator] Sending SMS (callback_info) for call {call.call_id} to {patient.phone if patient else 'unknown'}")
                 await self._notifications.send_sms_for_call(

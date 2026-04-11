@@ -146,6 +146,16 @@ export default function Dashboard() {
     };
   }, [api, dashboard.onCallEnded]);
 
+  // Sync settings when another window/tab changes them
+  useEffect(() => {
+    dashboard.onSettingsUpdated.current = (newSettings: SystemSettings) => {
+      setSettings(newSettings);
+      if (newSettings.call_mode) {
+        setCallMode(newSettings.call_mode);
+      }
+    };
+  }, [dashboard.onSettingsUpdated]);
+
   // Store refs to always have latest functions
   const voiceRef = useRef(voice);
   const audioRef = useRef(audio);

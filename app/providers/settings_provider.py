@@ -168,16 +168,12 @@ class SettingsProvider:
             row.allowed_phones = settings.allowed_phones
             row.queue_source = settings.queue_source
             row.patient_source = settings.patient_source
-            row.mock_mode = settings.mock_mode
-            row.mock_phone = settings.mock_phone
-            row.daily_report = {
-                "enabled": settings.daily_report.enabled,
-                "webhook_url": settings.daily_report.webhook_url,
-                "hour": settings.daily_report.hour,
-                "timezone": settings.daily_report.timezone,
-            }
+            # NOTE: mock_mode, mock_phone, and daily_report are NOT updated
+            # here — they have their own dedicated endpoints.  Overwriting
+            # them from the generic settings payload would silently reset
+            # them to defaults whenever any other setting is saved.
             await session.commit()
-            return settings
+            return _row_to_settings(row)
 
     async def set_system_enabled(self, enabled: bool) -> SystemSettings:
         async with AsyncSessionLocal() as session:

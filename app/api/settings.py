@@ -109,6 +109,28 @@ class MockModeRequest(BaseModel):
     mock_phone: str = ""
 
 
+async def _broadcast_settings_change(response: "SystemSettingsResponse"):
+    """Push a settings_updated event to all connected dashboard clients.
+
+    This keeps other browser windows in sync when one window changes a setting.
+    """
+    try:
+        from app.api.websocket import broadcast_to_dashboards
+        await broadcast_to_dashboards({
+            "type": "settings_updated",
+            "settings": response.model_dump(),
+        })
+    except Exception:
+        pass  # Don't fail the request if broadcast fails
+
+
+async def settings_response_and_broadcast(provider) -> SystemSettingsResponse:
+    """Build the settings response AND broadcast the change to all WebSocket clients."""
+    resp = await settings_to_response(provider)
+    await _broadcast_settings_change(resp)
+    return resp
+
+
 async def settings_to_response(provider) -> SystemSettingsResponse:
     """Convert settings to response model."""
     settings = await provider.get_settings()
@@ -255,7 +277,7 @@ async def update_settings(request: SystemSettingsRequest):
     )
 
     await provider.update_settings(settings)
-    return await settings_to_response(provider)
+    return await settings_response_and_broadcast(provider)
 
 
 @router.put("/system-enabled", response_model=SystemSettingsResponse)
@@ -278,7 +300,7 @@ async def set_system_enabled(request: SystemEnabledRequest):
     # Broadcast immediately so the UI event card updates without waiting for next tick
     await broadcast_to_dashboards({"type": "dispatcher_event", "decision": decision_entry})
 
-    return await settings_to_response(provider)
+    return await settings_response_and_broadcast(provider)
 
 
 @router.put("/business-hours", response_model=SystemSettingsResponse)
@@ -303,7 +325,7 @@ async def update_business_hours(request: BusinessHoursRequest):
     )
 
     await provider.update_business_hours(business_hours)
-    return await settings_to_response(provider)
+    return await settings_response_and_broadcast(provider)
 
 
 @router.put("/queue-thresholds", response_model=SystemSettingsResponse)
@@ -318,7 +340,7 @@ async def update_queue_thresholds(request: QueueThresholdsRequest):
     )
 
     await provider.update_queue_thresholds(thresholds)
-    return await settings_to_response(provider)
+    return await settings_response_and_broadcast(provider)
 
 
 @router.put("/dispatcher", response_model=SystemSettingsResponse)
@@ -347,7 +369,7 @@ async def update_dispatcher_settings(request: DispatcherSettingsRequest):
         verbose_logging=request.verbose_logging,
     )
 
-    return await settings_to_response(provider)
+    return await settings_response_and_broadcast(provider)
 
 
 @router.put("/allow-live-calls", response_model=SystemSettingsResponse)
@@ -355,7 +377,7 @@ async def set_allow_live_calls(request: AllowLiveCallsRequest):
     """Toggle live Twilio calls on/off."""
     provider = get_settings_provider()
     await provider.set_allow_live_calls(request.allowed)
-    return await settings_to_response(provider)
+    return await settings_response_and_broadcast(provider)
 
 
 @router.put("/allowed-phones", response_model=SystemSettingsResponse)
@@ -363,7 +385,7 @@ async def update_allowed_phones(request: AllowedPhonesRequest):
     """Update the phone number allowlist for live calls."""
     provider = get_settings_provider()
     await provider.update_allowed_phones(request.phones)
-    return await settings_to_response(provider)
+    return await settings_response_and_broadcast(provider)
 
 
 @router.put("/queue-source", response_model=SystemSettingsResponse)
@@ -395,7 +417,7 @@ async def set_queue_source(request: SourceRequest):
             except ValueError:
                 pass  # Scenario not found, skip activation
 
-    return await settings_to_response(provider)
+    return await settings_response_and_broadcast(provider)
 
 
 @router.put("/patient-source", response_model=SystemSettingsResponse)
@@ -427,7 +449,7 @@ async def set_patient_source(request: SourceRequest):
             except ValueError:
                 pass  # Scenario not found, skip activation
 
-    return await settings_to_response(provider)
+    return await settings_response_and_broadcast(provider)
 
 
 @router.put("/active-scenario", response_model=SystemSettingsResponse)
@@ -451,7 +473,7 @@ async def set_active_scenario(request: ActiveScenarioRequest):
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
-    return await settings_to_response(provider)
+    return await settings_response_and_broadcast(provider)
 
 
 @router.put("/call-mode", response_model=SystemSettingsResponse)
@@ -466,7 +488,7 @@ async def set_call_mode(request: CallModeRequest):
     current_settings = await provider.get_settings()
     await provider.set_call_mode(request.call_mode)
     print(f"[SETTINGS] call_mode: {current_settings.call_mode} → {request.call_mode}")
-    return await settings_to_response(provider)
+    return await settings_response_and_broadcast(provider)
 
 
 @router.put("/mock-mode", response_model=SystemSettingsResponse)
@@ -476,7 +498,7 @@ async def set_mock_mode(request: MockModeRequest):
     await provider.set_mock_mode(request.enabled, request.mock_phone)
     label = f"ON (redirect to {request.mock_phone})" if request.enabled else "OFF"
     print(f"[SETTINGS] mock_mode → {label}")
-    return await settings_to_response(provider)
+    return await settings_response_and_broadcast(provider)
 
 
 @router.put("/daily-report", response_model=SystemSettingsResponse)
@@ -493,7 +515,7 @@ async def update_daily_report(request: DailyReportRequest):
     await provider.update_daily_report(config)
     label = "ON" if request.enabled else "OFF"
     print(f"[SETTINGS] daily_report → {label} (hour={request.hour} tz={request.timezone})")
-    return await settings_to_response(provider)
+    return await settings_response_and_broadcast(provider)
 
 
 @router.get("/timezones", response_model=List[str])

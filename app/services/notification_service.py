@@ -131,7 +131,15 @@ class CallNotificationService:
                 return False
 
     async def maybe_send_issue_email(self, call: CallLog, outcome: CallOutcome):
-        """Send required call-issue email notifications based on outcome/status."""
+        """Send required call-issue email notifications based on outcome/status.
+
+        Per spec, emails only go to scheduling@precisemri.com for:
+        - Wrong number (outcome 4): patient said it's the wrong number
+        - Invalid/disconnected number (outcome 5): carrier reported bad number
+
+        NOT for: hung up, no answer, technical errors, voicemail, etc.
+        Those are normal call events, not issues that need human review.
+        """
         if call.call_id in self._email_sent_call_ids:
             return
 
@@ -148,9 +156,15 @@ class CallNotificationService:
                     await self.on_status_update("Email sent (wrong_number) to scheduling team")
                 return
 
-            if outcome == CallOutcome.DISCONNECTED or (
-                outcome == CallOutcome.FAILED and _looks_like_disconnected_or_invalid(status_text)
-            ):
+            # Only send disconnected email for actual carrier failures (invalid
+            # numbers), NOT for patient hang-ups or generic call failures.
+            # Check error_code to distinguish real carrier issues from other failures.
+            carrier_error_codes = {"32005", "32009"}
+            is_carrier_failure = (
+                call.error_code in carrier_error_codes
+                or _looks_like_disconnected_or_invalid(status_text)
+            )
+            if outcome == CallOutcome.FAILED and is_carrier_failure:
                 print(f"[Notifications] Sending disconnected/invalid email for call {call.call_id} (patient={call.patient_id}, status={status_text})")
                 message_id = await asyncio.to_thread(send_disconnected_number_email, call, status_text)
                 print(f"[Notifications] Email sent (invalid_disconnected) for call {call.call_id} message_id={message_id or 'n/a'}")

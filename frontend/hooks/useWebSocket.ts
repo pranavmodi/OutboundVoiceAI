@@ -36,6 +36,7 @@ interface UseDashboardWSReturn {
   dispatcherEvents: DispatcherDecision[];
   pushEvent: (decision: string, detail: string) => void;
   onCallEnded: React.MutableRefObject<(() => void) | null>;
+  onSettingsUpdated: React.MutableRefObject<((settings: any) => void) | null>;
 }
 
 export function useDashboardWS(): UseDashboardWSReturn {
@@ -47,6 +48,7 @@ export function useDashboardWS(): UseDashboardWSReturn {
   const [lastStatus, setLastStatus] = useState<string | null>(null);
   const [dispatchedPatient, setDispatchedPatient] = useState<DispatchedPatient | null>(null);
   const onCallEndedRef = useRef<(() => void) | null>(null);
+  const onSettingsUpdatedRef = useRef<((settings: any) => void) | null>(null);
   const [dispatcherEvents, setDispatcherEvents] = useState<DispatcherDecision[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -180,6 +182,12 @@ export function useDashboardWS(): UseDashboardWSReturn {
             }
             break;
 
+          case "settings_updated":
+            if (message.settings && onSettingsUpdatedRef.current) {
+              onSettingsUpdatedRef.current(message.settings);
+            }
+            break;
+
           case "dispatch_call":
             console.log("Received dispatch_call:", message.patient_id, message.patient_name);
             setDispatchedPatient({
@@ -241,7 +249,7 @@ export function useDashboardWS(): UseDashboardWSReturn {
     };
   }, [connect, isDev]);
 
-  return { connected, queueState, activeCall, statistics, lastStatus, dispatchedPatient, clearDispatch, dispatcherEvents, pushEvent, onCallEnded: onCallEndedRef };
+  return { connected, queueState, activeCall, statistics, lastStatus, dispatchedPatient, clearDispatch, dispatcherEvents, pushEvent, onCallEnded: onCallEndedRef, onSettingsUpdated: onSettingsUpdatedRef };
 }
 
 interface UseVoiceWSReturn {

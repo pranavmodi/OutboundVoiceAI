@@ -540,6 +540,10 @@ export function CallHistoryCard({ calls, callsTotal, onRefresh, onLoadMore, hasM
                                         {call.started_at ? formatTime(call.started_at) : "—"}
                                       </span>
                                       <span className="text-muted-foreground/40">·</span>
+                                      <span className="text-xs text-muted-foreground font-mono">
+                                        {call.patient_id}
+                                      </span>
+                                      <span className="text-muted-foreground/40">·</span>
                                       <span className="text-xs text-muted-foreground tabular-nums">
                                         {call.phone || "No phone"}
                                       </span>

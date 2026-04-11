@@ -117,6 +117,7 @@ export type WSMessageType =
   | "pong"
   | "queue_update"
   | "dispatcher_event"
+  | "settings_updated"
   | "dispatch_call"
   | "dispatch_ack";
 

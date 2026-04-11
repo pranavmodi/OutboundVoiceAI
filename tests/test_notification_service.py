@@ -104,11 +104,13 @@ class TestEmailDispatch:
 
     @pytest.mark.asyncio
     async def test_disconnected_email(self, notification_service, call):
+        """Carrier failure (FAILED + disconnected error text) should trigger email."""
         call.error_message = "Number is disconnected"
+        call.error_code = "32005"
         with patch("app.services.notification_service.get_call_log_provider") as mock_clp:
             mock_clp.return_value = AsyncMock()
             with patch("app.services.notification_service.send_disconnected_number_email", return_value="msg-2"):
-                await notification_service.maybe_send_issue_email(call, CallOutcome.DISCONNECTED)
+                await notification_service.maybe_send_issue_email(call, CallOutcome.FAILED)
         assert call.call_id in notification_service._email_sent_call_ids
 
     @pytest.mark.asyncio

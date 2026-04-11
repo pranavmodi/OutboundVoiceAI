@@ -427,22 +427,32 @@ class LivePatientProvider(BasePatientProvider):
 
     # -- Outcome-to-RadFlow type mapping ----------------------------------
 
-    _OUTCOME_TO_RADFLOW_TYPE = {
-        "transferred": "PATIENT SCHEDULED",
-        "voicemail": "VM",
-        "callback_requested": "CB",
-        # Everything else maps to a generic failure type
-        "wrong_number": "COULD NOT SCHEDULE PATIENT",
-        "disconnected": "COULD NOT SCHEDULE PATIENT",
-        "failed": "COULD NOT SCHEDULE PATIENT",
-        "completed": "CB",  # Completed without transfer ≈ callback
+    # Maps our internal outcome to the RadFlow status code and a human-readable detail
+    _OUTCOME_TO_RADFLOW = {
+        "transferred":        {"status": "PATIENT SCHEDULED", "details": "AI transferred to human scheduler"},
+        "voicemail":          {"status": "VM",                "details": "AI left voicemail"},
+        "callback_requested": {"status": "CB",                "details": "Patient requested callback"},
+        "completed":          {"status": "CB",                "details": "AI call completed"},
+        "wrong_number":       {"status": "COULD NOT SCHEDULE PATIENT", "details": "Wrong number reported"},
+        "disconnected":       {"status": "COULD NOT SCHEDULE PATIENT", "details": "Number disconnected or invalid"},
+        "failed":             {"status": "COULD NOT SCHEDULE PATIENT", "details": "Call could not be completed"},
+        "no_answer":          {"status": "CB",                "details": "No answer"},
+        "hung_up":            {"status": "CB",                "details": "Patient hung up"},
     }
 
     async def _post_outcome_to_radflow(self, patient_id: str, order_id: Optional[str], outcome: str):
-        """POST call outcome back to RadFlow CallListData API.
+        """POST call outcome back to RadFlow SaveCallListLog API.
 
         Skipped entirely when mock_mode is enabled (test calls should
         not write to production RadFlow).
+
+        Payload fields per Danny/Neeraj agreement:
+        - patientId, internalStudyId: identifiers
+        - type: "Phone Call" (activity kind)
+        - status: PATIENT SCHEDULED / VM / CB / COULD NOT SCHEDULE PATIENT
+        - details: human-readable description (e.g. "AI transferred to human scheduler")
+        - user: "AI"
+        - logMethod: "Ordered Scheduler"
         """
         from app.providers.settings_provider import get_settings_provider
         settings = await get_settings_provider().get_settings()
@@ -450,12 +460,15 @@ class LivePatientProvider(BasePatientProvider):
             logger.info("RadFlow write-back SKIPPED (mock mode): patient=%s outcome=%s", patient_id, outcome)
             return
 
-        radflow_type = self._OUTCOME_TO_RADFLOW_TYPE.get(outcome, "CB")
+        mapping = self._OUTCOME_TO_RADFLOW.get(outcome, {"status": "CB", "details": f"AI call outcome: {outcome}"})
         payload = {
             "patientId": patient_id,
             "internalStudyId": order_id or "",
-            "type": radflow_type,
-            "status": radflow_type,
+            "type": "Phone Call",
+            "status": mapping["status"],
+            "details": mapping["details"],
+            "user": "AI",
+            "logMethod": "Ordered Scheduler",
         }
         try:
             resp = await self._client.post(
@@ -465,7 +478,7 @@ class LivePatientProvider(BasePatientProvider):
                 auth=self._auth,
             )
             resp.raise_for_status()
-            logger.info("RadFlow write-back OK: patient=%s type=%s status=%s", patient_id, radflow_type, radflow_type)
+            logger.info("RadFlow write-back OK: patient=%s status=%s details=%s", patient_id, mapping["status"], mapping["details"])
         except Exception as e:
             logger.warning("RadFlow write-back failed for patient %s: %s", patient_id, e)
 
