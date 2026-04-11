@@ -130,8 +130,18 @@ function inferPreferredCallbackFromTranscript(call: CallLog): string | null {
   return null;
 }
 
+const DISPLAY_TIMEZONE = "America/Los_Angeles";
+
+/** Format a Date as YYYY-MM-DD in Pacific time. */
 function toDateKey(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  // Use Intl to get the date parts in Pacific time
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: DISPLAY_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d); // returns "YYYY-MM-DD" in en-CA locale
+  return parts;
 }
 
 function getDateKeyFromCall(call: CallLog): string {
@@ -142,16 +152,15 @@ function getDateKeyFromCall(call: CallLog): string {
 
 function getDateLabel(dateKey: string): string {
   if (dateKey === "unknown-date") return "Unknown Date";
-  const date = new Date(`${dateKey}T00:00:00`);
   const today = new Date();
   const todayKey = toDateKey(today);
-  const yesterday = new Date(today);
-  yesterday.setDate(today.getDate() - 1);
+  const yesterday = new Date(today.getTime() - 86400000);
   const yesterdayKey = toDateKey(yesterday);
 
   if (dateKey === todayKey) return "Today";
   if (dateKey === yesterdayKey) return "Yesterday";
-  return formatDate(date);
+  // Parse and format via the shared formatDate (already Pacific-aware)
+  return formatDate(new Date(`${dateKey}T12:00:00`));
 }
 
 export function CallHistoryCard({ calls, callsTotal, onRefresh, onLoadMore, hasMore }: CallHistoryCardProps) {
@@ -617,8 +626,8 @@ export function CallHistoryCard({ calls, callsTotal, onRefresh, onLoadMore, hasM
                                 </div>
                               )}
 
-                              {/* Error message for failed calls */}
-                              {call.error_message && (
+                              {/* Error message — red for failed calls, muted for called calls with notes */}
+                              {call.error_message && call.call_status === "failed" && (
                                 <div className="flex items-start gap-1.5 mt-2 ml-11 px-2 py-1.5 rounded bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900">
                                   <ShieldAlert className="h-3 w-3 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
                                   <div className="min-w-0">

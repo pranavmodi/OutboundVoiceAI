@@ -59,6 +59,10 @@ def derive_status_and_disposition(
             # Twilio call was placed but the media stream never connected.
             # Typically means the call rang out without being answered.
             return CallStatus.CALLED, CallDisposition.NO_ANSWER
+        if error_code in ("twilio_no-answer", "twilio_busy"):
+            # Twilio reported the call rang out or was busy — the call was
+            # placed successfully, the patient just didn't pick up.
+            return CallStatus.CALLED, CallDisposition.NO_ANSWER
         if error_code and error_code.isdigit():
             code = int(error_code)
             if code in (32005, 32009):  # invalid/disconnected number
