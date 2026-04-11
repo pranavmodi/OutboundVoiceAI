@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useMemo } from "react";
-import type { SystemStatus, Patient, CallLog, QueueState, SystemSettings, BusinessHours, QueueThresholds, DispatcherSettings, SimulationScenario, ScenarioPatient, TodayKpis } from "@/types";
+import type { SystemStatus, Patient, CallLog, QueueState, SystemSettings, BusinessHours, QueueThresholds, DispatcherSettings, SimulationScenario, ScenarioPatient, TodayKpis, TimePerformance } from "@/types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -476,6 +476,15 @@ export function useApi() {
     }
   }, []);
 
+  const getTimePerformance = useCallback(async (days: number = 90): Promise<TimePerformance | null> => {
+    try {
+      return await fetchApi<TimePerformance>(`/api/statistics/time-performance?days=${days}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
   const deleteAllCalls = useCallback(async (): Promise<boolean> => {
     try {
       await fetchApi("/api/calls", { method: "DELETE" });
@@ -534,6 +543,7 @@ export function useApi() {
     setMockMode,
     updateDailyReport,
     sendTestDailyReport,
+    getTimePerformance,
     getTimezones,
     deleteAllCalls,
   }), [
@@ -575,6 +585,7 @@ export function useApi() {
     setMockMode,
     updateDailyReport,
     sendTestDailyReport,
+    getTimePerformance,
     getTimezones,
     deleteAllCalls,
   ]);

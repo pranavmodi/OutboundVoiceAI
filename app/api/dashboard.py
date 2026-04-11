@@ -419,6 +419,15 @@ async def get_today_kpis():
     return await call_log_provider.get_today_kpis()
 
 
+@router.get("/statistics/time-performance")
+async def get_time_performance(days: int = 90):
+    """Get call outcomes broken down by day-of-week and hour-of-day."""
+    if days < 1 or days > 365:
+        raise HTTPException(status_code=400, detail="days must be between 1 and 365")
+    call_log_provider = get_call_log_provider()
+    return await call_log_provider.get_time_performance(days=days)
+
+
 @router.post("/reports/daily/test")
 async def trigger_daily_report_now():
     """Manually trigger the daily Slack report (for testing).

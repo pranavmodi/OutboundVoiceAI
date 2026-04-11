@@ -218,6 +218,39 @@ export interface SystemSettings {
   is_within_business_hours: boolean;
 }
 
+export interface TimeSlotStats {
+  total: number;
+  transferred: number;
+  no_answer: number;
+  voicemail: number;
+  callback: number;
+  hung_up: number;
+  transfer_rate: number;
+  no_answer_rate: number;
+  voicemail_rate: number;
+}
+
+export interface DayStats extends TimeSlotStats {
+  day: number;
+  day_name: string;
+}
+
+export interface HourStats extends TimeSlotStats {
+  hour: number;
+  label: string;
+}
+
+export interface TimePerformance {
+  days: number;
+  timezone: string;
+  total_calls: number;
+  overall_transfer_rate: number;
+  overall_no_answer_rate: number;
+  overall_voicemail_rate: number;
+  by_day: DayStats[];
+  by_hour: HourStats[];
+}
+
 export interface ScenarioPatient {
   name: string;
   phone: string;

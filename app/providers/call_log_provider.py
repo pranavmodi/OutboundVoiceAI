@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import select, delete, func, case
+from sqlalchemy import select, delete, func, case, extract, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import AsyncSessionLocal
@@ -396,6 +396,133 @@ class CallLogProvider:
             "transferred": transferred,
             "voicemails": voicemails,
             "sms": sms,
+        }
+
+    async def get_time_performance(self, days: int = 90, tz_name: str = "America/Los_Angeles") -> dict:
+        """Aggregate call outcomes by day-of-week and hour-of-day over the last N days.
+
+        Returns two breakdowns:
+        - by_day: list of {day, day_name, total, transferred, no_answer, voicemail, transfer_rate, ...}
+        - by_hour: list of {hour, label, total, transferred, no_answer, voicemail, transfer_rate, ...}
+        """
+        from datetime import timedelta
+
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
+        # Use PostgreSQL AT TIME ZONE to convert started_at to local time
+        local_ts = func.timezone(tz_name, CallLogRow.started_at)
+        dow = extract("dow", local_ts)  # 0=Sunday in PG
+        hour = extract("hour", local_ts)
+
+        transferred_count = func.count(case(
+            (CallLogRow.call_disposition == "transferred", 1),
+        ))
+        no_answer_count = func.count(case(
+            (CallLogRow.call_disposition == "no_answer", 1),
+        ))
+        voicemail_count = func.count(case(
+            (CallLogRow.call_disposition == "voicemail_left", 1),
+        ))
+        callback_count = func.count(case(
+            (CallLogRow.call_disposition == "callback_requested", 1),
+        ))
+        hung_up_count = func.count(case(
+            (CallLogRow.call_disposition == "hung_up", 1),
+        ))
+        total_count = func.count(CallLogRow.call_id)
+
+        async with AsyncSessionLocal() as session:
+            # By day of week
+            day_result = await session.execute(
+                select(
+                    dow.label("dow"),
+                    total_count.label("total"),
+                    transferred_count.label("transferred"),
+                    no_answer_count.label("no_answer"),
+                    voicemail_count.label("voicemail"),
+                    callback_count.label("callback"),
+                    hung_up_count.label("hung_up"),
+                )
+                .where(CallLogRow.started_at >= cutoff)
+                .group_by(dow)
+                .order_by(dow)
+            )
+            day_rows = day_result.all()
+
+            # By hour of day
+            hour_result = await session.execute(
+                select(
+                    hour.label("hour"),
+                    total_count.label("total"),
+                    transferred_count.label("transferred"),
+                    no_answer_count.label("no_answer"),
+                    voicemail_count.label("voicemail"),
+                    callback_count.label("callback"),
+                    hung_up_count.label("hung_up"),
+                )
+                .where(CallLogRow.started_at >= cutoff)
+                .group_by(hour)
+                .order_by(hour)
+            )
+            hour_rows = hour_result.all()
+
+        # PG dow: 0=Sunday, 1=Monday, ...
+        day_names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+
+        def _rate(n, total):
+            return round(n / total * 100, 1) if total > 0 else 0.0
+
+        by_day = []
+        for r in day_rows:
+            t = r.total
+            by_day.append({
+                "day": int(r.dow),
+                "day_name": day_names[int(r.dow)],
+                "total": t,
+                "transferred": r.transferred,
+                "no_answer": r.no_answer,
+                "voicemail": r.voicemail,
+                "callback": r.callback,
+                "hung_up": r.hung_up,
+                "transfer_rate": _rate(r.transferred, t),
+                "no_answer_rate": _rate(r.no_answer, t),
+                "voicemail_rate": _rate(r.voicemail, t),
+            })
+
+        by_hour = []
+        for r in hour_rows:
+            t = r.total
+            h = int(r.hour)
+            label = f"{h % 12 or 12} {'AM' if h < 12 else 'PM'}"
+            by_hour.append({
+                "hour": h,
+                "label": label,
+                "total": t,
+                "transferred": r.transferred,
+                "no_answer": r.no_answer,
+                "voicemail": r.voicemail,
+                "callback": r.callback,
+                "hung_up": r.hung_up,
+                "transfer_rate": _rate(r.transferred, t),
+                "no_answer_rate": _rate(r.no_answer, t),
+                "voicemail_rate": _rate(r.voicemail, t),
+            })
+
+        # Grand totals
+        grand_total = sum(d["total"] for d in by_day)
+        grand_transferred = sum(d["transferred"] for d in by_day)
+        grand_no_answer = sum(d["no_answer"] for d in by_day)
+        grand_voicemail = sum(d["voicemail"] for d in by_day)
+
+        return {
+            "days": days,
+            "timezone": tz_name,
+            "total_calls": grand_total,
+            "overall_transfer_rate": _rate(grand_transferred, grand_total),
+            "overall_no_answer_rate": _rate(grand_no_answer, grand_total),
+            "overall_voicemail_rate": _rate(grand_voicemail, grand_total),
+            "by_day": by_day,
+            "by_hour": by_hour,
         }
 
     async def get_statistics(self) -> dict:
