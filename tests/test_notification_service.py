@@ -135,7 +135,7 @@ class TestBuildSmsMessage:
         from app.services.twilio_sms_service import build_sms_message
         msg = build_sms_message("callback_info")
         assert "Precise Imaging" in msg
-        assert "unable to complete" in msg.lower()
+        assert "imaging order" in msg.lower()
 
     def test_unknown_type_defaults(self):
         from app.services.twilio_sms_service import build_sms_message

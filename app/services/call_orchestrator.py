@@ -88,17 +88,13 @@ class CallOrchestrator:
             if self.on_status_update:
                 await self.on_status_update(f"Twilio AMD: voicemail detected ({answered_by})")
 
-            callback_number = get_callback_number().strip()
-            if callback_number:
-                message = (
-                    "Hi, this is a call from Precise Imaging regarding scheduling. "
-                    f"Please call us back at {callback_number}."
-                )
-            else:
-                message = (
-                    "Hi, this is a call from Precise Imaging regarding scheduling. "
-                    "Please call us back at the number previously provided."
-                )
+            callback_number = get_callback_number().strip() or "800-558-2223"
+            message = (
+                "Hi, this is Ashley with Precise Imaging. We received your doctor's imaging order "
+                "and need to schedule your appointment. "
+                f"Please call us back at {callback_number}, Monday through Friday, 8 AM to 5 PM Pacific. "
+                "Thank you and have a good day."
+            )
 
             try:
                 from app.services.twilio_voice_service import play_voicemail_and_hangup

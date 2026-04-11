@@ -68,20 +68,21 @@ def get_main_number() -> str:
 
 def build_sms_message(message_type: str) -> str:
     """Build a non-PHI SMS message body."""
-    callback_number = get_callback_number()
-    main_number = get_main_number()
-    contact_number = callback_number or main_number
-    contact_line = (
-        f"Please call us back at {contact_number}."
-        if contact_number
-        else "Please call our office using the number previously shared with you."
-    )
+    callback_number = get_callback_number() or "800-558-2223"
 
     if message_type == "appointment_reminder":
-        return f"Precise Imaging reminder: please contact us to review scheduling details. {contact_line}"
+        return (
+            f"Precise Imaging reminder: please contact us to review scheduling details. "
+            f"Please call us back at {callback_number}."
+        )
 
-    # Default and callback_info: concise, no PHI.
-    return f"This is Precise Imaging. We were unable to complete your scheduling call. {contact_line}"
+    # Default and callback_info
+    return (
+        f"Precise Imaging: We received your doctor's imaging order. "
+        f"Call us at {callback_number} M-F 8 AM to 5PM PST, or go to "
+        f"https://app.radflow360.com/patient-portal to answer your pre-screening "
+        f"questions, sign your pending documents and schedule your exam on the portal."
+    )
 
 
 def send_sms(to_number: str, message_body: str) -> str:
