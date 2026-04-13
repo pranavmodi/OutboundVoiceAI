@@ -426,6 +426,18 @@ export function useApi() {
     }
   }, []);
 
+  const setVoiceProvider = useCallback(async (voiceProvider: string): Promise<SystemSettings | null> => {
+    try {
+      return await fetchApi<SystemSettings>("/api/settings/voice-provider", {
+        method: "PUT",
+        body: JSON.stringify({ voice_provider: voiceProvider }),
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
   const setCallMode = useCallback(async (callMode: string): Promise<SystemSettings | null> => {
     try {
       return await fetchApi<SystemSettings>("/api/settings/call-mode", {
@@ -539,6 +551,7 @@ export function useApi() {
     updateAllowedPhones,
     setQueueSource,
     setPatientSource,
+    setVoiceProvider,
     setCallMode,
     setMockMode,
     updateDailyReport,
@@ -581,6 +594,7 @@ export function useApi() {
     updateAllowedPhones,
     setQueueSource,
     setPatientSource,
+    setVoiceProvider,
     setCallMode,
     setMockMode,
     updateDailyReport,

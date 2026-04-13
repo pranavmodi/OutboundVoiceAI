@@ -108,6 +108,7 @@ def _row_to_settings(row: SystemSettingsRow) -> SystemSettings:
     settings.call_mode = row.call_mode if row.call_mode is not None else "web"
     settings.mock_mode = row.mock_mode if row.mock_mode is not None else False
     settings.mock_phone = row.mock_phone if row.mock_phone is not None else ""
+    settings.voice_provider = getattr(row, "voice_provider", None) or "openai"
     dr = row.daily_report or {}
     settings.daily_report = DailyReportConfig(
         enabled=bool(dr.get("enabled", False)),
@@ -388,6 +389,17 @@ class SettingsProvider:
                 row = SystemSettingsRow(id=1, business_hours={}, queue_thresholds={})
                 session.add(row)
             row.call_mode = call_mode
+            await session.commit()
+            return _row_to_settings(row)
+
+    async def set_voice_provider(self, voice_provider: str) -> SystemSettings:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(SystemSettingsRow).where(SystemSettingsRow.id == 1))
+            row = result.scalar_one_or_none()
+            if row is None:
+                row = SystemSettingsRow(id=1, business_hours={}, queue_thresholds={})
+                session.add(row)
+            row.voice_provider = voice_provider
             await session.commit()
             return _row_to_settings(row)
 

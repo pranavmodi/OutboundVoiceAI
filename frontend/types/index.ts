@@ -213,6 +213,7 @@ export interface SystemSettings {
   call_mode: string;
   mock_mode: boolean;
   mock_phone: string;
+  voice_provider: string;
   daily_report: DailyReportConfig;
   can_make_calls: boolean;
   is_within_business_hours: boolean;

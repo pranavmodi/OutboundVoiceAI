@@ -6,7 +6,7 @@ from typing import Optional, Callable, Any
 
 from app.models import CallLog, CallOutcome, Patient
 from app.providers import get_queue_provider, get_patient_provider, get_call_log_provider, get_settings_provider
-from app.services.realtime_voice import RealtimeVoiceService
+from app.services.voice_service_base import BaseVoiceService
 from app.services.notification_service import CallNotificationService
 from app.services.carrier_failure_service import CarrierFailureHandler
 from app.services.transfer_service import (
@@ -23,7 +23,7 @@ class CallOrchestrator:
     """Orchestrates outbound calls with OpenAI Realtime voice."""
 
     def __init__(self):
-        self._voice_service: Optional[RealtimeVoiceService] = None
+        self._voice_service: Optional[BaseVoiceService] = None
         self._current_call: Optional[CallLog] = None
         self._current_patient: Optional[Patient] = None
         self._twilio_bridge = None  # TwilioMediaBridge when in twilio mode
@@ -167,27 +167,35 @@ class CallOrchestrator:
             await self.on_status_update(f"Connecting ({mode_label})...")
 
         audio_format = "g711_ulaw" if call_mode == "twilio" else "pcm16"
+        voice_provider = settings.voice_provider or "openai"
 
-        self._voice_service = RealtimeVoiceService(audio_format=audio_format, verbose=self._verbose)
+        if voice_provider == "gemini":
+            from app.services.gemini_voice import GeminiVoiceService
+            self._voice_service = GeminiVoiceService(audio_format=audio_format, verbose=self._verbose)
+        else:
+            from app.services.realtime_voice import RealtimeVoiceService
+            self._voice_service = RealtimeVoiceService(audio_format=audio_format, verbose=self._verbose)
+
         self._voice_service.on_transcript = self._handle_transcript
         self._voice_service.on_audio = self._handle_audio
         self._voice_service.on_function_call = self._handle_function_call
         self._voice_service.on_error = self._handle_voice_error
         self._voice_service.on_session_ended = self._handle_session_ended
 
+        provider_label = voice_provider.capitalize()
         if self._verbose:
-            print(f"[CallOrchestrator] Connecting to OpenAI Realtime for call {call.call_id}...")
+            print(f"[CallOrchestrator] Connecting to {provider_label} Realtime for call {call.call_id}...")
         success = await self._voice_service.connect(
             call.call_id,
             patient.name,
             normalize_language_code(patient.language),
         )
         if not success:
-            print(f"[CallOrchestrator] OpenAI Realtime connection FAILED for call {call.call_id}")
-            self._last_start_error = "Failed to connect to OpenAI Realtime API"
+            print(f"[CallOrchestrator] {provider_label} Realtime connection FAILED for call {call.call_id}")
+            self._last_start_error = f"Failed to connect to {provider_label} Realtime API"
             await call_log_provider.update_call(
                 call.call_id,
-                error_code="openai_connect_failed",
+                error_code=f"{voice_provider}_connect_failed",
                 error_message=self._last_start_error,
             )
             await call_log_provider.end_call(call.call_id, CallOutcome.FAILED)

@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 
 from .api import dashboard_router, websocket_router, settings_router, dispatcher_router, scenarios_router
+from .api.auth import router as auth_router
 from .services.dispatcher import get_dispatcher
 from .services.daily_report_service import daily_report_loop
 from .providers import set_queue_source, set_patient_source
@@ -87,6 +88,7 @@ app.add_middleware(
 )
 
 # Include API routers
+app.include_router(auth_router)
 app.include_router(dashboard_router)
 app.include_router(websocket_router)
 app.include_router(settings_router)

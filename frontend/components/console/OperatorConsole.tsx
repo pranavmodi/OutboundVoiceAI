@@ -32,6 +32,7 @@ import {
   CalendarDays,
   ChevronDown,
   MessageSquare,
+  Bot,
 } from "lucide-react";
 import { InfoTooltip } from "@/components/ui/info-tooltip";
 import type {
@@ -49,6 +50,7 @@ interface OperatorConsoleProps {
   callMode: string;
   scenarios: SimulationScenario[];
   onCallModeChange: (mode: string) => void;
+  onVoiceProviderChange: (provider: string) => void;
   onSetSystemEnabled: (enabled: boolean) => Promise<void>;
   onUpdateBusinessHours: (businessHours: BusinessHours) => Promise<void>;
   onUpdateQueueThresholds: (thresholds: QueueThresholds) => Promise<void>;
@@ -67,6 +69,7 @@ export function OperatorConsole({
   callMode,
   scenarios,
   onCallModeChange,
+  onVoiceProviderChange,
   onSetSystemEnabled,
   onUpdateBusinessHours,
   onUpdateQueueThresholds,
@@ -283,9 +286,46 @@ export function OperatorConsole({
         </div>
         <p className="text-xs text-muted-foreground">
           {callMode === "web"
-            ? "Audio streams between your browser and OpenAI. You speak as the patient through your microphone."
-            : "Twilio dials the patient's phone number. Audio streams between the phone line and OpenAI. The browser still shows transcripts and controls."}
+            ? "Audio streams between your browser and the voice AI. You speak as the patient through your microphone."
+            : "Twilio dials the patient's phone number. Audio streams between the phone line and the voice AI. The browser still shows transcripts and controls."}
         </p>
+      </div>
+
+      <Separator />
+
+      {/* Voice Provider */}
+      <div className="space-y-3">
+        <div className="flex items-center gap-2">
+          <Bot className="h-4 w-4 text-muted-foreground" />
+          <h4 className="text-sm font-medium">Voice AI Provider</h4>
+          <InfoTooltip content="Choose which AI model powers the voice conversations. OpenAI uses GPT Realtime API. Gemini uses Google's Live API — typically faster and more natural sounding." />
+        </div>
+        <div className="flex items-center gap-4">
+          <Select value={settings?.voice_provider || "openai"} onValueChange={onVoiceProviderChange}>
+            <SelectTrigger className="w-48">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="openai">
+                <span className="flex items-center gap-2">
+                  OpenAI Realtime
+                </span>
+              </SelectItem>
+              <SelectItem value="gemini">
+                <span className="flex items-center gap-2">
+                  Google Gemini Live
+                </span>
+              </SelectItem>
+            </SelectContent>
+          </Select>
+          <Badge variant="outline" className={
+            (settings?.voice_provider || "openai") === "gemini"
+              ? "text-blue-600 border-blue-600"
+              : "text-emerald-600 border-emerald-600"
+          }>
+            {(settings?.voice_provider || "openai") === "gemini" ? "Gemini" : "OpenAI"}
+          </Badge>
+        </div>
       </div>
 
       <Separator />

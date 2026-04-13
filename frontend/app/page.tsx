@@ -25,6 +25,7 @@ import {
   ChevronDown,
   Circle,
   History,
+  LogOut,
 } from "lucide-react";
 import type { Patient, CallLog, QueueState, SystemSettings, SimulationScenario, TodayKpis } from "@/types";
 
@@ -438,6 +439,11 @@ export default function Dashboard() {
     if (newSettings) setSettings(newSettings);
   }, [api]);
 
+  const handleSetVoiceProvider = useCallback(async (provider: string) => {
+    const newSettings = await api.setVoiceProvider(provider);
+    if (newSettings) setSettings(newSettings);
+  }, [api]);
+
   // Refresh handlers
   const handleRefreshPatients = useCallback(async () => {
     const patientList = await api.getOutboundQueue();
@@ -527,6 +533,22 @@ export default function Dashboard() {
                 {settings.system_enabled ? "System On" : "System Off"}
               </Badge>
             )}
+
+            {/* Logout */}
+            <button
+              onClick={async () => {
+                await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/auth/logout`, {
+                  method: "POST",
+                  credentials: "include",
+                });
+                window.location.href = "/login";
+              }}
+              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors ml-1"
+              title="Sign out"
+            >
+              <LogOut className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Logout</span>
+            </button>
           </div>
         </div>
       </header>
@@ -607,6 +629,7 @@ export default function Dashboard() {
                       callMode={callMode}
                       scenarios={scenarios}
                       onCallModeChange={handleSetCallMode}
+                      onVoiceProviderChange={handleSetVoiceProvider}
                       onSetSystemEnabled={handleSetSystemEnabled}
                       onUpdateBusinessHours={handleUpdateBusinessHours}
                       onUpdateQueueThresholds={handleUpdateQueueThresholds}

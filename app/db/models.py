@@ -100,6 +100,7 @@ class SystemSettingsRow(Base):
     call_mode: Mapped[str] = mapped_column(String(20), default="web")
     mock_mode: Mapped[bool] = mapped_column(Boolean, default=False)
     mock_phone: Mapped[str] = mapped_column(String(32), default="")
+    voice_provider: Mapped[str] = mapped_column(String(20), default="openai")
     daily_report: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=_utcnow, onupdate=_utcnow)
 

@@ -9,6 +9,8 @@ from dataclasses import dataclass
 import websockets
 from dotenv import load_dotenv
 
+from app.services.voice_service_base import BaseVoiceService
+
 # Ensure .env is loaded
 _project_root = Path(__file__).resolve().parent.parent.parent
 _env_path = _project_root / ".env"
@@ -120,7 +122,7 @@ Say exactly (using the patient's first name):
 #    and answer from the knowledge base before ending the call.
 
 
-class RealtimeVoiceService:
+class RealtimeVoiceService(BaseVoiceService):
     """Manages OpenAI Realtime API connections for voice calls."""
 
     def __init__(self, audio_format: str = "pcm16", verbose: bool = False):
@@ -132,19 +134,10 @@ class RealtimeVoiceService:
                           "g711_ulaw" for Twilio media streams (8kHz mulaw).
             verbose: Whether to log detailed message-level info.
         """
+        super().__init__(audio_format=audio_format, verbose=verbose)
         self._ws = None  # WebSocket connection
         self._session: Optional[VoiceSession] = None
         self._api_key = os.getenv("OPENAI_API_KEY", "")
-        self._audio_format = audio_format
-        self._verbose = verbose
-
-        # Callbacks
-        self.on_transcript: Optional[Callable[[str, str], Any]] = None  # (speaker, text)
-        self.on_audio: Optional[Callable[[bytes], Any]] = None  # audio data
-        self.on_session_created: Optional[Callable[[str], Any]] = None
-        self.on_session_ended: Optional[Callable[[], Any]] = None
-        self.on_error: Optional[Callable[[str], Any]] = None
-        self.on_function_call: Optional[Callable[[str, dict, str], Any]] = None  # (name, args, call_id)
 
     @staticmethod
     def _normalize_language_code(language: Optional[str]) -> str:

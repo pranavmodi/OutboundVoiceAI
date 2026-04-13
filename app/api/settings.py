@@ -91,6 +91,7 @@ class SystemSettingsResponse(BaseModel):
     call_mode: str
     mock_mode: bool
     mock_phone: str
+    voice_provider: str
     daily_report: DailyReportRequest
     can_make_calls: bool
     is_within_business_hours: bool
@@ -102,6 +103,10 @@ class ActiveScenarioRequest(BaseModel):
 
 class CallModeRequest(BaseModel):
     call_mode: str  # "web" or "twilio"
+
+
+class VoiceProviderRequest(BaseModel):
+    voice_provider: str  # "openai" or "gemini"
 
 
 class MockModeRequest(BaseModel):
@@ -171,6 +176,7 @@ async def settings_to_response(provider) -> SystemSettingsResponse:
         call_mode=settings.call_mode,
         mock_mode=settings.mock_mode,
         mock_phone=settings.mock_phone,
+        voice_provider=settings.voice_provider,
         daily_report=DailyReportRequest(
             enabled=settings.daily_report.enabled,
             webhook_url=settings.daily_report.webhook_url,
@@ -488,6 +494,21 @@ async def set_call_mode(request: CallModeRequest):
     current_settings = await provider.get_settings()
     await provider.set_call_mode(request.call_mode)
     print(f"[SETTINGS] call_mode: {current_settings.call_mode} → {request.call_mode}")
+    return await settings_response_and_broadcast(provider)
+
+
+@router.put("/voice-provider", response_model=SystemSettingsResponse)
+async def set_voice_provider(request: VoiceProviderRequest):
+    """Set the voice provider (openai or gemini)."""
+    from fastapi import HTTPException
+
+    if request.voice_provider not in ("openai", "gemini"):
+        raise HTTPException(status_code=400, detail="voice_provider must be 'openai' or 'gemini'")
+
+    provider = get_settings_provider()
+    current_settings = await provider.get_settings()
+    await provider.set_voice_provider(request.voice_provider)
+    print(f"[SETTINGS] voice_provider: {current_settings.voice_provider} → {request.voice_provider}")
     return await settings_response_and_broadcast(provider)
 
 

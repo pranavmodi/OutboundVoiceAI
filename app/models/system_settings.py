@@ -64,4 +64,5 @@ class SystemSettings:
     call_mode: str = "web"  # "web" or "twilio"
     mock_mode: bool = False
     mock_phone: str = ""  # redirect Twilio calls/SMS here when mock_mode=True
+    voice_provider: str = "openai"  # "openai" or "gemini"
     daily_report: DailyReportConfig = field(default_factory=DailyReportConfig)
