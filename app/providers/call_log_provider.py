@@ -40,6 +40,7 @@ def _row_to_call_log(row: CallLogRow) -> CallLog:
     cl.call_status = call_status
     cl.call_disposition = call_disposition
     cl.mock_mode = bool(row.mock_mode)
+    cl.voice_provider = getattr(row, "voice_provider", None) or "openai"
     cl.transfer_attempted = row.transfer_attempted
     cl.transfer_success = row.transfer_success
     cl.voicemail_left = row.voicemail_left
@@ -89,6 +90,7 @@ class CallLogProvider:
         priority_bucket: int = 0,
         queue_snapshot: Optional[dict] = None,
         mock_mode: bool = False,
+        voice_provider: str = "openai",
     ) -> CallLog:
         call_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
@@ -104,6 +106,7 @@ class CallLogProvider:
                 outcome="in_progress",
                 queue_snapshot=queue_snapshot,
                 mock_mode=mock_mode,
+                voice_provider=voice_provider,
                 transcript=[],
             )
             session.add(row)
@@ -125,6 +128,7 @@ class CallLogProvider:
         cl.call_status = CallStatus.IN_PROGRESS
         cl.call_disposition = CallDisposition.IN_PROGRESS
         cl.mock_mode = mock_mode
+        cl.voice_provider = voice_provider
         cl.transfer_attempted = False
         cl.transfer_success = False
         cl.voicemail_left = False
@@ -154,15 +158,54 @@ class CallLogProvider:
             return None
         return await self.get_call(self._active_call_id)
 
-    async def get_all_calls(self, limit: int = 50, offset: int = 0) -> list[CallLog]:
+    async def get_all_calls(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        search: Optional[str] = None,
+    ) -> list[CallLog]:
         async with AsyncSessionLocal() as session:
+            stmt = select(CallLogRow)
+            if search and search.strip():
+                q = f"%{search.strip().lower()}%"
+                from sqlalchemy import or_, func as _func
+                stmt = stmt.where(
+                    or_(
+                        _func.lower(CallLogRow.patient_name).like(q),
+                        _func.lower(CallLogRow.patient_id).like(q),
+                        _func.lower(CallLogRow.phone).like(q),
+                        _func.lower(CallLogRow.order_id).like(q),
+                        _func.lower(CallLogRow.call_disposition).like(q),
+                        _func.lower(CallLogRow.call_status).like(q),
+                        _func.lower(CallLogRow.outcome).like(q),
+                    )
+                )
             result = await session.execute(
-                select(CallLogRow)
-                .order_by(CallLogRow.started_at.desc())
+                stmt.order_by(CallLogRow.started_at.desc())
                 .offset(offset)
                 .limit(limit)
             )
             return [_row_to_call_log(r) for r in result.scalars().all()]
+
+    async def count_all_calls(self, search: Optional[str] = None) -> int:
+        async with AsyncSessionLocal() as session:
+            stmt = select(func.count(CallLogRow.call_id))
+            if search and search.strip():
+                q = f"%{search.strip().lower()}%"
+                from sqlalchemy import or_, func as _func
+                stmt = stmt.where(
+                    or_(
+                        _func.lower(CallLogRow.patient_name).like(q),
+                        _func.lower(CallLogRow.patient_id).like(q),
+                        _func.lower(CallLogRow.phone).like(q),
+                        _func.lower(CallLogRow.order_id).like(q),
+                        _func.lower(CallLogRow.call_disposition).like(q),
+                        _func.lower(CallLogRow.call_status).like(q),
+                        _func.lower(CallLogRow.outcome).like(q),
+                    )
+                )
+            result = await session.execute(stmt)
+            return result.scalar() or 0
 
     async def get_total_call_count(self) -> int:
         async with AsyncSessionLocal() as session:
@@ -429,7 +472,26 @@ class CallLogProvider:
         hung_up_count = func.count(case(
             (CallLogRow.call_disposition == "hung_up", 1),
         ))
+        wrong_number_count = func.count(case(
+            (CallLogRow.call_disposition == "wrong_number", 1),
+        ))
+        technical_error_count = func.count(case(
+            (CallLogRow.call_disposition == "technical_error", 1),
+        ))
+        disconnected_number_count = func.count(case(
+            (CallLogRow.call_disposition == "disconnected_number", 1),
+        ))
+        completed_count = func.count(case(
+            (CallLogRow.call_disposition == "completed", 1),
+        ))
         total_count = func.count(CallLogRow.call_id)
+
+        # Exclude mock-mode calls and known test patients
+        base_filter = [
+            CallLogRow.started_at >= cutoff,
+            CallLogRow.mock_mode != True,  # noqa: E712
+            CallLogRow.patient_name.notin_(["Pranav Modi", "Neha"]),
+        ]
 
         async with AsyncSessionLocal() as session:
             # By day of week
@@ -442,8 +504,12 @@ class CallLogProvider:
                     voicemail_count.label("voicemail"),
                     callback_count.label("callback"),
                     hung_up_count.label("hung_up"),
+                    wrong_number_count.label("wrong_number"),
+                    technical_error_count.label("technical_error"),
+                    disconnected_number_count.label("disconnected_number"),
+                    completed_count.label("completed"),
                 )
-                .where(CallLogRow.started_at >= cutoff)
+                .where(*base_filter)
                 .group_by(dow)
                 .order_by(dow)
             )
@@ -459,8 +525,12 @@ class CallLogProvider:
                     voicemail_count.label("voicemail"),
                     callback_count.label("callback"),
                     hung_up_count.label("hung_up"),
+                    wrong_number_count.label("wrong_number"),
+                    technical_error_count.label("technical_error"),
+                    disconnected_number_count.label("disconnected_number"),
+                    completed_count.label("completed"),
                 )
-                .where(CallLogRow.started_at >= cutoff)
+                .where(*base_filter)
                 .group_by(hour)
                 .order_by(hour)
             )
@@ -472,41 +542,34 @@ class CallLogProvider:
         def _rate(n, total):
             return round(n / total * 100, 1) if total > 0 else 0.0
 
-        by_day = []
-        for r in day_rows:
+        def _build_row(r, **extra):
             t = r.total
-            by_day.append({
-                "day": int(r.dow),
-                "day_name": day_names[int(r.dow)],
+            return {
+                **extra,
                 "total": t,
                 "transferred": r.transferred,
                 "no_answer": r.no_answer,
                 "voicemail": r.voicemail,
                 "callback": r.callback,
                 "hung_up": r.hung_up,
+                "wrong_number": r.wrong_number,
+                "technical_error": r.technical_error,
+                "disconnected_number": r.disconnected_number,
+                "completed": r.completed,
                 "transfer_rate": _rate(r.transferred, t),
                 "no_answer_rate": _rate(r.no_answer, t),
                 "voicemail_rate": _rate(r.voicemail, t),
-            })
+            }
+
+        by_day = []
+        for r in day_rows:
+            by_day.append(_build_row(r, day=int(r.dow), day_name=day_names[int(r.dow)]))
 
         by_hour = []
         for r in hour_rows:
-            t = r.total
             h = int(r.hour)
             label = f"{h % 12 or 12} {'AM' if h < 12 else 'PM'}"
-            by_hour.append({
-                "hour": h,
-                "label": label,
-                "total": t,
-                "transferred": r.transferred,
-                "no_answer": r.no_answer,
-                "voicemail": r.voicemail,
-                "callback": r.callback,
-                "hung_up": r.hung_up,
-                "transfer_rate": _rate(r.transferred, t),
-                "no_answer_rate": _rate(r.no_answer, t),
-                "voicemail_rate": _rate(r.voicemail, t),
-            })
+            by_hour.append(_build_row(r, hour=h, label=label))
 
         # Grand totals
         grand_total = sum(d["total"] for d in by_day)

@@ -67,9 +67,11 @@ export function useApi() {
     }
   }, []);
 
-  const getCalls = useCallback(async (limit: number = 25, offset: number = 0): Promise<{ calls: CallLog[]; total: number }> => {
+  const getCalls = useCallback(async (limit: number = 25, offset: number = 0, search?: string): Promise<{ calls: CallLog[]; total: number }> => {
     try {
-      const data = await fetchApi<{ calls: CallLog[]; total: number }>(`/api/calls?limit=${limit}&offset=${offset}`);
+      const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+      if (search && search.trim()) params.set("search", search.trim());
+      const data = await fetchApi<{ calls: CallLog[]; total: number }>(`/api/calls?${params.toString()}`);
       return { calls: data.calls, total: data.total };
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unknown error");

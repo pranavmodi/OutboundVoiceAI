@@ -144,6 +144,8 @@ class CallOrchestrator:
         settings_provider = get_settings_provider()
         settings = await settings_provider.get_settings()
 
+        voice_provider = settings.voice_provider or "openai"
+
         call = await call_log_provider.create_call(
             patient_id=patient.patient_id,
             patient_name=patient.name,
@@ -152,6 +154,7 @@ class CallOrchestrator:
             priority_bucket=patient.priority_bucket,
             queue_snapshot=queue_state.to_dict(),
             mock_mode=bool(settings.mock_mode),
+            voice_provider=voice_provider,
         )
 
         self._current_call = call
@@ -396,10 +399,17 @@ class CallOrchestrator:
             await call_log_provider.end_call(call.call_id, outcome)
 
             if patient:
+                # Use the derived call_disposition (e.g. "no_answer") rather than
+                # the raw CallOutcome (e.g. "failed") so the patient's last_outcome
+                # matches what the UI shows on the call history row.
+                updated_call = await call_log_provider.get_call(call.call_id)
+                disposition_value = (
+                    updated_call.call_disposition.value if updated_call else outcome.value
+                )
                 patient_provider = get_patient_provider()
                 await patient_provider.update_patient_after_call(
                     patient.patient_id,
-                    outcome.value,
+                    disposition_value,
                 )
 
             if voice_service:

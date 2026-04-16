@@ -35,9 +35,23 @@ class DispatcherSettings:
     """Dispatcher configuration parameters."""
     poll_interval: int = 10
     dispatch_timeout: int = 30
-    max_attempts: int = 3
+    # Max combined (AI + human) attempts before a patient is moved to
+    # "Couldnt Schedule".  Configurable separately for Ordered-status
+    # patients vs. the remaining statuses (No Show + Needs to Reschedule).
+    max_attempts_ordered: int = 4
+    max_attempts_other: int = 4
     min_hours_between: int = 6
     verbose_logging: bool = False
+
+    @property
+    def max_attempts(self) -> int:
+        """Legacy single-value accessor — returns the larger of the two."""
+        return max(self.max_attempts_ordered, self.max_attempts_other)
+
+    def max_attempts_for_status(self, radflow_status: str | None) -> int:
+        if (radflow_status or "").strip() == "Ordered":
+            return self.max_attempts_ordered
+        return self.max_attempts_other
 
 
 @dataclass

@@ -129,6 +129,7 @@ class CallLog:
     call_status: CallStatus = CallStatus.IN_PROGRESS
     call_disposition: CallDisposition = CallDisposition.IN_PROGRESS
     mock_mode: bool = False  # True if the call was redirected to mock_phone instead of the patient
+    voice_provider: str = "openai"  # "openai" or "gemini"
     transfer_attempted: bool = False
     transfer_success: bool = False
     voicemail_left: bool = False
@@ -178,6 +179,7 @@ class CallLog:
             "call_status": self.call_status.value,
             "call_disposition": self.call_disposition.value,
             "mock_mode": self.mock_mode,
+            "voice_provider": self.voice_provider,
             "transfer_attempted": self.transfer_attempted,
             "transfer_success": self.transfer_success,
             "voicemail_left": self.voicemail_left,

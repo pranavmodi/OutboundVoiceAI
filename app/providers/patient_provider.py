@@ -13,7 +13,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import AsyncSessionLocal
 from app.db.models import PatientRow, PatientCallStateRow
-from app.models import Patient, Language, IntakeStatus
+from app.models import (
+    Patient,
+    Language,
+    IntakeStatus,
+    RadflowStatus,
+    STATUS_RANK,
+    normalize_radflow_status,
+)
+from app.models.system_settings import DispatcherSettings
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +34,14 @@ CALLLIST_LOG_URL = os.getenv(
     "CALLLIST_LOG_URL",
     "https://app.radflow360.com/chatbotapi/Patient/SaveCallListLog",
 )
+# HL7 status update endpoint — used when a patient hits max attempts and
+# transitions to "Couldnt Schedule" (status code 69).
+HL7_STATUS_URL = os.getenv(
+    "HL7_STATUS_URL",
+    "https://app.radflow360.com/chatbotapi/Patient/UpdateHL7Status",
+)
+# Canonical HL7 status code strings per Neeraj's 2026-04-14 spec.
+HL7_STATUS_CODE_COULDNT_SCHEDULE = "69"
 CALLLIST_API_USER = os.getenv("CALLLIST_API_USER", "")
 CALLLIST_API_PASSWORD = os.getenv("CALLLIST_API_PASSWORD", "")
 
@@ -51,24 +67,42 @@ def _row_to_patient(row: PatientRow) -> Patient:
     p.has_called_in_before = row.has_called_in_before
     p.has_abandoned_before = row.has_abandoned_before
     p.ai_called_before = row.ai_called_before
-    p.attempt_count = row.attempt_count
+    p.ai_attempt_count = row.ai_attempt_count or 0
+    p.human_attempt_count = row.human_attempt_count or 0
+    p.attempt_count = p.ai_attempt_count + p.human_attempt_count
     p.last_attempt_at = row.last_attempt_at
     p.last_outcome = row.last_outcome
     p.due_by = row.due_by
-    p.priority_bucket = row.priority_bucket
+    p.radflow_status = row.radflow_status
+    p.hl7_sent_at = row.hl7_sent_at
+    p.priority_bucket = STATUS_RANK.get(row.radflow_status or "", 99)
     return p
 
 
-def _compute_priority(has_abandoned_before: bool, ai_called_before: bool,
-                       has_called_in_before: bool) -> int:
-    if has_abandoned_before and not ai_called_before:
-        return 1
-    elif has_abandoned_before and ai_called_before:
-        return 2
-    elif not ai_called_before and has_called_in_before:
-        return 3
-    else:
-        return 4
+def _sort_key(p: Patient):
+    """Danny's spec: order by status rank, then strict round-robin on
+    combined attempts, then due date, then order creation date."""
+    far_future = datetime.max.replace(tzinfo=timezone.utc)
+    return (
+        STATUS_RANK.get(p.radflow_status or "", 99),
+        p.total_attempts,
+        p.due_by or far_future,
+        p.order_created or far_future,
+    )
+
+
+def _eligible_for_queue(p: Patient, settings: DispatcherSettings, cutoff: datetime) -> bool:
+    """Queue filter: in-scope status, under the per-status cap, past cooldown,
+    not flagged invalid."""
+    if STATUS_RANK.get(p.radflow_status or "", 99) >= 99:
+        return False  # Unknown status or already "Couldnt Schedule"
+    if p.last_outcome == "invalid_number":
+        return False
+    if p.last_attempt_at is not None and p.last_attempt_at > cutoff:
+        return False
+    if p.total_attempts >= settings.max_attempts_for_status(p.radflow_status):
+        return False
+    return True
 
 
 def _map_language(lang_str: str) -> Language:
@@ -126,9 +160,15 @@ def _api_record_to_patient(rec: dict) -> Patient:
     p.has_called_in_before = (rec.get("CB", 0) or 0) > 0
     p.has_abandoned_before = (rec.get("status", "") or "").upper() == "NO SHOW"
     p.ai_called_before = False
-    p.attempt_count = (rec.get("VM", 0) or 0) + (rec.get("CB", 0) or 0)
+    # Split counts: human side comes from RadFlow (VM + CB), AI side is zero
+    # at ingest — the merge step overlays our local AI attempt count.
+    p.human_attempt_count = (rec.get("VM", 0) or 0) + (rec.get("CB", 0) or 0)
+    p.ai_attempt_count = 0
+    p.attempt_count = p.human_attempt_count
     p.last_attempt_at = None
     p.last_outcome = rec.get("status")
+    p.radflow_status = normalize_radflow_status(rec.get("status")) or RadflowStatus.ORDERED.value
+    p.hl7_sent_at = None
     # Per spec: DueBy = OrderCreated + 2 business days (unless HasCalledInBefore,
     # in which case there's no 2-day SLA — fall back to order_created so they
     # sort naturally by when the order was placed).
@@ -139,7 +179,7 @@ def _api_record_to_patient(rec: dict) -> Patient:
             p.due_by = _add_business_days(p.order_created, 2)
     else:
         p.due_by = None
-    p.priority_bucket = _compute_priority(p.has_abandoned_before, p.ai_called_before, p.has_called_in_before)
+    p.priority_bucket = STATUS_RANK.get(p.radflow_status or "", 99)
     return p
 
 
@@ -158,11 +198,21 @@ class BasePatientProvider(ABC):
         ...
 
     @abstractmethod
-    async def get_outbound_queue(self, max_attempts: int = 3, min_hours_between: int = 6) -> list[Patient]:
+    async def get_outbound_queue(
+        self,
+        max_attempts_ordered: int = 4,
+        max_attempts_other: int = 4,
+        min_hours_between: int = 6,
+    ) -> list[Patient]:
         ...
 
     @abstractmethod
-    async def get_next_candidate(self, max_attempts: int = 3, min_hours_between: int = 6) -> Optional[Patient]:
+    async def get_next_candidate(
+        self,
+        max_attempts_ordered: int = 4,
+        max_attempts_other: int = 4,
+        min_hours_between: int = 6,
+    ) -> Optional[Patient]:
         ...
 
     @abstractmethod
@@ -182,10 +232,9 @@ class SimulationPatientProvider(BasePatientProvider):
 
     async def get_all_patients(self) -> list[Patient]:
         async with AsyncSessionLocal() as session:
-            result = await session.execute(
-                select(PatientRow).order_by(PatientRow.priority_bucket, PatientRow.due_by)
-            )
-            return [_row_to_patient(r) for r in result.scalars().all()]
+            result = await session.execute(select(PatientRow))
+            patients = [_row_to_patient(r) for r in result.scalars().all()]
+        return sorted(patients, key=_sort_key)
 
     async def get_patient(self, patient_id: str) -> Optional[Patient]:
         async with AsyncSessionLocal() as session:
@@ -195,59 +244,38 @@ class SimulationPatientProvider(BasePatientProvider):
             row = result.scalar_one_or_none()
             return _row_to_patient(row) if row else None
 
-    async def get_outbound_queue(self, max_attempts: int = 3, min_hours_between: int = 6) -> list[Patient]:
+    async def get_outbound_queue(
+        self,
+        max_attempts_ordered: int = 4,
+        max_attempts_other: int = 4,
+        min_hours_between: int = 6,
+    ) -> list[Patient]:
         now = datetime.now(timezone.utc)
         cutoff = now - timedelta(hours=min_hours_between)
+        settings = DispatcherSettings(
+            max_attempts_ordered=max_attempts_ordered,
+            max_attempts_other=max_attempts_other,
+        )
 
         async with AsyncSessionLocal() as session:
-            stmt = (
-                select(PatientRow)
-                .where(PatientRow.attempt_count < max_attempts)
-                .where(
-                    (PatientRow.last_outcome == None) |  # noqa: E711
-                    (PatientRow.last_outcome != "invalid_number")
-                )
-                .where(
-                    (PatientRow.last_attempt_at == None) |  # noqa: E711
-                    (PatientRow.last_attempt_at <= cutoff)
-                )
-                .order_by(
-                    PatientRow.priority_bucket,
-                    PatientRow.due_by.asc().nulls_last(),
-                    PatientRow.order_created.asc().nulls_last(),
-                    PatientRow.attempt_count,
-                )
-            )
-            result = await session.execute(stmt)
-            return [_row_to_patient(r) for r in result.scalars().all()]
+            result = await session.execute(select(PatientRow))
+            patients = [_row_to_patient(r) for r in result.scalars().all()]
 
-    async def get_next_candidate(self, max_attempts: int = 3, min_hours_between: int = 6) -> Optional[Patient]:
-        now = datetime.now(timezone.utc)
-        cutoff = now - timedelta(hours=min_hours_between)
+        filtered = [p for p in patients if _eligible_for_queue(p, settings, cutoff)]
+        return sorted(filtered, key=_sort_key)
 
-        async with AsyncSessionLocal() as session:
-            stmt = (
-                select(PatientRow)
-                .where(PatientRow.attempt_count < max_attempts)
-                .where(
-                    (PatientRow.last_outcome == None) |  # noqa: E711
-                    (PatientRow.last_outcome != "invalid_number")
-                )
-                .where(
-                    (PatientRow.last_attempt_at == None) |  # noqa: E711
-                    (PatientRow.last_attempt_at <= cutoff)
-                )
-                .order_by(
-                    PatientRow.priority_bucket,
-                    PatientRow.due_by.asc().nulls_last(),
-                    PatientRow.order_created.asc().nulls_last(),
-                    PatientRow.attempt_count,
-                )
-                .limit(1)
-            )
-            result = await session.execute(stmt)
-            row = result.scalar_one_or_none()
-            return _row_to_patient(row) if row else None
+    async def get_next_candidate(
+        self,
+        max_attempts_ordered: int = 4,
+        max_attempts_other: int = 4,
+        min_hours_between: int = 6,
+    ) -> Optional[Patient]:
+        queue = await self.get_outbound_queue(
+            max_attempts_ordered=max_attempts_ordered,
+            max_attempts_other=max_attempts_other,
+            min_hours_between=min_hours_between,
+        )
+        return queue[0] if queue else None
 
     async def update_patient_after_call(
         self,
@@ -262,13 +290,28 @@ class SimulationPatientProvider(BasePatientProvider):
             row = result.scalar_one_or_none()
             if row:
                 if increment_attempt:
-                    row.attempt_count += 1
+                    row.ai_attempt_count = (row.ai_attempt_count or 0) + 1
+                    row.attempt_count = (row.ai_attempt_count or 0) + (row.human_attempt_count or 0)
                 row.last_attempt_at = datetime.now(timezone.utc)
                 row.last_outcome = outcome
                 row.ai_called_before = True
-                row.priority_bucket = _compute_priority(
-                    row.has_abandoned_before, row.ai_called_before, row.has_called_in_before
-                )
+
+                # Mirror the live flow: flip to "Couldnt Schedule" when the
+                # patient hits their per-status cap.  Sim doesn't POST HL7.
+                from app.providers.settings_provider import get_settings_provider
+                settings = await get_settings_provider().get_settings()
+                cap = settings.dispatcher_settings.max_attempts_for_status(row.radflow_status)
+                if (
+                    row.hl7_sent_at is None
+                    and STATUS_RANK.get(row.radflow_status or "", 99) < 99
+                    and row.attempt_count >= cap
+                ):
+                    row.radflow_status = RadflowStatus.COULDNT_SCHEDULE.value
+                    row.hl7_sent_at = datetime.now(timezone.utc)
+                    logger.info("Sim patient %s hit max attempts (%s/%s) → Couldnt Schedule",
+                                patient_id, row.attempt_count, cap)
+
+                row.priority_bucket = STATUS_RANK.get(row.radflow_status or "", 99)
                 await session.commit()
 
     async def mark_patient_invalid_number(self, patient_id: str, reason: str):
@@ -300,11 +343,15 @@ class SimulationPatientProvider(BasePatientProvider):
                 has_called_in_before=patient.has_called_in_before,
                 has_abandoned_before=patient.has_abandoned_before,
                 ai_called_before=patient.ai_called_before,
-                attempt_count=patient.attempt_count,
+                ai_attempt_count=patient.ai_attempt_count,
+                human_attempt_count=patient.human_attempt_count,
+                attempt_count=patient.total_attempts,
                 last_attempt_at=patient.last_attempt_at,
                 last_outcome=patient.last_outcome,
                 due_by=patient.due_by,
-                priority_bucket=patient.priority_bucket,
+                radflow_status=patient.radflow_status or RadflowStatus.ORDERED.value,
+                hl7_sent_at=patient.hl7_sent_at,
+                priority_bucket=STATUS_RANK.get(patient.radflow_status or RadflowStatus.ORDERED.value, 99),
             )
             session.add(row)
             await session.commit()
@@ -330,6 +377,18 @@ class SimulationPatientProvider(BasePatientProvider):
                 has_abandoned = pd.get("has_abandoned_before", False)
                 ai_called = pd.get("ai_called_before", False)
                 has_called_in = pd.get("has_called_in_before", False)
+                # Scenarios can opt into a specific RadFlow status; otherwise
+                # infer from the legacy flags (abandoned → No Show).
+                raw_status = pd.get("radflow_status")
+                if raw_status:
+                    status = normalize_radflow_status(raw_status) or RadflowStatus.ORDERED.value
+                elif has_abandoned:
+                    status = RadflowStatus.NO_SHOW.value
+                else:
+                    status = RadflowStatus.ORDERED.value
+
+                ai_attempts = pd.get("ai_attempt_count", pd.get("attempt_count", 0) if ai_called else 0)
+                human_attempts = pd.get("human_attempt_count", 0)
 
                 row = PatientRow(
                     patient_id=f"SIM{i:03d}",
@@ -341,9 +400,12 @@ class SimulationPatientProvider(BasePatientProvider):
                     has_abandoned_before=has_abandoned,
                     has_called_in_before=has_called_in,
                     ai_called_before=ai_called,
-                    attempt_count=pd.get("attempt_count", 0),
+                    ai_attempt_count=ai_attempts,
+                    human_attempt_count=human_attempts,
+                    attempt_count=ai_attempts + human_attempts,
                     due_by=now + timedelta(days=2),
-                    priority_bucket=_compute_priority(has_abandoned, ai_called, has_called_in),
+                    radflow_status=status,
+                    priority_bucket=STATUS_RANK.get(status, 99),
                 )
                 session.add(row)
             await session.commit()
@@ -482,6 +544,35 @@ class LivePatientProvider(BasePatientProvider):
         except Exception as e:
             logger.warning("RadFlow write-back failed for patient %s: %s", patient_id, e)
 
+    async def _post_hl7_status(self, order_id: str, status_code: str) -> bool:
+        """POST the HL7 status update for a patient (max-attempts-reached).
+
+        Returns True on 2xx.  Skipped in mock mode.
+        """
+        from app.providers.settings_provider import get_settings_provider
+        settings = await get_settings_provider().get_settings()
+        if settings.mock_mode:
+            logger.info("HL7 status SKIPPED (mock mode): studyId=%s status=%s", order_id, status_code)
+            return False
+        if not order_id:
+            logger.warning("HL7 status SKIPPED: no order_id/studyId available")
+            return False
+
+        payload = [{"studyId": order_id, "status": status_code}]
+        try:
+            resp = await self._client.post(
+                HL7_STATUS_URL,
+                json=payload,
+                headers={"Accept": "application/json"},
+                auth=self._auth,
+            )
+            resp.raise_for_status()
+            logger.info("HL7 status sent OK: studyId=%s status=%s", order_id, status_code)
+            return True
+        except Exception as e:
+            logger.warning("HL7 status POST failed for studyId=%s: %s", order_id, e)
+            return False
+
     # -- Local state helpers -----------------------------------------------
 
     async def _get_local_state(self, session: AsyncSession, patient_id: str) -> Optional[PatientCallStateRow]:
@@ -496,14 +587,15 @@ class LivePatientProvider(BasePatientProvider):
 
     def _merge_local_state(self, patient: Patient, state: PatientCallStateRow) -> Patient:
         """Apply local call state on top of API-fetched patient data."""
-        patient.attempt_count = max(patient.attempt_count, state.attempt_count)
+        patient.ai_attempt_count = state.ai_attempt_count or 0
+        patient.attempt_count = patient.ai_attempt_count + patient.human_attempt_count
         patient.last_attempt_at = state.last_attempt_at
         patient.last_outcome = state.last_outcome or patient.last_outcome
         patient.ai_called_before = state.ai_called_before
-        # Recompute priority bucket with updated flags
-        patient.priority_bucket = _compute_priority(
-            patient.has_abandoned_before, patient.ai_called_before, patient.has_called_in_before
-        )
+        patient.hl7_sent_at = state.hl7_sent_at
+        if state.hl7_sent_at is not None:
+            patient.radflow_status = RadflowStatus.COULDNT_SCHEDULE.value
+        patient.priority_bucket = STATUS_RANK.get(patient.radflow_status or "", 99)
         return patient
 
     async def _is_mock_mode(self) -> bool:
@@ -513,13 +605,12 @@ class LivePatientProvider(BasePatientProvider):
 
     def _merge_mock_state(self, patient: Patient, st: dict) -> Patient:
         """Apply in-memory mock call state on top of API-fetched patient data."""
-        patient.attempt_count = max(patient.attempt_count, st.get("attempt_count", 0))
+        patient.ai_attempt_count = st.get("ai_attempt_count", st.get("attempt_count", 0))
+        patient.attempt_count = patient.ai_attempt_count + patient.human_attempt_count
         patient.last_attempt_at = st.get("last_attempt_at")
         patient.last_outcome = st.get("last_outcome") or patient.last_outcome
         patient.ai_called_before = True
-        patient.priority_bucket = _compute_priority(
-            patient.has_abandoned_before, patient.ai_called_before, patient.has_called_in_before
-        )
+        patient.priority_bucket = STATUS_RANK.get(patient.radflow_status or "", 99)
         return patient
 
     async def _merge_all(self, patients: list[Patient]) -> list[Patient]:
@@ -584,28 +675,36 @@ class LivePatientProvider(BasePatientProvider):
             patient = self._merge_local_state(patient, state)
         return patient
 
-    async def get_outbound_queue(self, max_attempts: int = 3, min_hours_between: int = 6) -> list[Patient]:
+    async def get_outbound_queue(
+        self,
+        max_attempts_ordered: int = 4,
+        max_attempts_other: int = 4,
+        min_hours_between: int = 6,
+    ) -> list[Patient]:
         patients = await self._fetch()
         patients = await self._merge_all(patients)
 
         now = datetime.now(timezone.utc)
         cutoff = now - timedelta(hours=min_hours_between)
+        settings = DispatcherSettings(
+            max_attempts_ordered=max_attempts_ordered,
+            max_attempts_other=max_attempts_other,
+        )
 
-        filtered = [
-            p for p in patients
-            if p.attempt_count < max_attempts
-            and (p.last_attempt_at is None or p.last_attempt_at <= cutoff)
-        ]
+        filtered = [p for p in patients if _eligible_for_queue(p, settings, cutoff)]
+        return sorted(filtered, key=_sort_key)
 
-        return sorted(filtered, key=lambda p: (
-            p.priority_bucket,
-            p.due_by or datetime.max.replace(tzinfo=timezone.utc),
-            p.order_created or datetime.max.replace(tzinfo=timezone.utc),
-            p.attempt_count,
-        ))
-
-    async def get_next_candidate(self, max_attempts: int = 3, min_hours_between: int = 6) -> Optional[Patient]:
-        queue = await self.get_outbound_queue(max_attempts, min_hours_between)
+    async def get_next_candidate(
+        self,
+        max_attempts_ordered: int = 4,
+        max_attempts_other: int = 4,
+        min_hours_between: int = 6,
+    ) -> Optional[Patient]:
+        queue = await self.get_outbound_queue(
+            max_attempts_ordered=max_attempts_ordered,
+            max_attempts_other=max_attempts_other,
+            min_hours_between=min_hours_between,
+        )
         return queue[0] if queue else None
 
     async def update_patient_after_call(
@@ -618,17 +717,19 @@ class LivePatientProvider(BasePatientProvider):
         if mock_mode:
             # Track in memory only — real patient state is untouched
             st = self._mock_state.setdefault(patient_id, {
+                "ai_attempt_count": 0,
                 "attempt_count": 0,
                 "last_attempt_at": None,
                 "last_outcome": None,
                 "invalid_number": False,
             })
             if increment_attempt:
-                st["attempt_count"] = st.get("attempt_count", 0) + 1
+                st["ai_attempt_count"] = st.get("ai_attempt_count", 0) + 1
+                st["attempt_count"] = st["ai_attempt_count"]
             st["last_attempt_at"] = datetime.now(timezone.utc)
             st["last_outcome"] = outcome
-            logger.info("Mock state updated: patient=%s outcome=%s attempts=%s (in-memory only)",
-                         patient_id, outcome, st["attempt_count"])
+            logger.info("Mock state updated: patient=%s outcome=%s ai_attempts=%s (in-memory only)",
+                         patient_id, outcome, st["ai_attempt_count"])
             # RadFlow write-back already skipped in mock mode
             await self._post_outcome_to_radflow(patient_id, None, outcome)
             return
@@ -637,30 +738,56 @@ class LivePatientProvider(BasePatientProvider):
         async with AsyncSessionLocal() as session:
             state = await self._get_local_state(session, patient_id)
             if state is None:
-                state = PatientCallStateRow(patient_id=patient_id, attempt_count=0)
+                state = PatientCallStateRow(patient_id=patient_id, attempt_count=0, ai_attempt_count=0)
                 session.add(state)
             if increment_attempt:
-                state.attempt_count = (state.attempt_count or 0) + 1
+                state.ai_attempt_count = (state.ai_attempt_count or 0) + 1
+                state.attempt_count = state.ai_attempt_count
             state.last_attempt_at = datetime.now(timezone.utc)
             state.last_outcome = outcome
             state.ai_called_before = True
             await session.commit()
-        logger.info("Local state updated: patient=%s outcome=%s attempts=%s",
-                     patient_id, outcome, state.attempt_count)
+            ai_attempts = state.ai_attempt_count or 0
+            hl7_already_sent = state.hl7_sent_at is not None
+        logger.info("Local state updated: patient=%s outcome=%s ai_attempts=%s",
+                     patient_id, outcome, ai_attempts)
 
         # 2. Write back to RadFlow (best-effort, non-blocking)
-        # Look up order_id from cache
-        order_id = None
+        # Look up cached patient record for order_id, status, and human count.
+        cached: Optional[Patient] = None
         for p in self._cache:
             if p.patient_id == patient_id:
-                order_id = p.order_id
+                cached = p
                 break
+        order_id = cached.order_id if cached else None
         await self._post_outcome_to_radflow(patient_id, order_id, outcome)
+
+        # 3. If this attempt pushed the patient past their status-specific cap,
+        # fire the HL7 "Couldnt Schedule" write-back exactly once.
+        if cached and not hl7_already_sent and increment_attempt:
+            from app.providers.settings_provider import get_settings_provider
+            settings = await get_settings_provider().get_settings()
+            ds = settings.dispatcher_settings
+            cap = ds.max_attempts_for_status(cached.radflow_status)
+            total = ai_attempts + (cached.human_attempt_count or 0)
+            if total >= cap:
+                ok = await self._post_hl7_status(order_id or "", HL7_STATUS_CODE_COULDNT_SCHEDULE)
+                if ok:
+                    async with AsyncSessionLocal() as session:
+                        state = await self._get_local_state(session, patient_id)
+                        if state is not None:
+                            state.hl7_sent_at = datetime.now(timezone.utc)
+                            await session.commit()
+                    logger.info(
+                        "Patient %s hit max attempts (%s/%s) for status=%s — HL7 Couldnt Schedule sent",
+                        patient_id, total, cap, cached.radflow_status,
+                    )
 
     async def mark_patient_invalid_number(self, patient_id: str, reason: str):
         mock_mode = await self._is_mock_mode()
         if mock_mode:
             st = self._mock_state.setdefault(patient_id, {
+                "ai_attempt_count": 0,
                 "attempt_count": 0,
                 "last_attempt_at": None,
                 "last_outcome": None,
@@ -676,7 +803,7 @@ class LivePatientProvider(BasePatientProvider):
         async with AsyncSessionLocal() as session:
             state = await self._get_local_state(session, patient_id)
             if state is None:
-                state = PatientCallStateRow(patient_id=patient_id, attempt_count=0)
+                state = PatientCallStateRow(patient_id=patient_id, attempt_count=0, ai_attempt_count=0)
                 session.add(state)
             state.invalid_number = True
             state.last_outcome = "invalid_number"

@@ -47,18 +47,11 @@ interface PatientQueueCardProps {
   lastUpdated?: Date | null;
 }
 
-const priorityLabels: Record<number, string> = {
-  1: "Abandoned, No AI Call",
-  2: "Abandoned, AI Called",
-  3: "No AI Call, Called In",
-  4: "No AI Call, Never Called",
-};
-
-const priorityColors: Record<number, "destructive" | "warning" | "secondary" | "outline"> = {
-  1: "destructive",
-  2: "warning",
-  3: "secondary",
-  4: "outline",
+const statusColors: Record<string, "destructive" | "warning" | "secondary" | "outline"> = {
+  "Ordered": "destructive",
+  "No Show": "warning",
+  "Needs to Reschedule": "secondary",
+  "Couldnt Schedule": "outline",
 };
 
 function formatLastUpdated(date: Date | null | undefined): string {
@@ -237,7 +230,7 @@ export function PatientQueueCard({
           <CardTitle className="flex items-center gap-2 text-lg">
             <Users className="h-5 w-5" />
             Outbound Queue
-            <InfoTooltip content="Patients awaiting outbound calls, sorted by priority. P1 = highest priority (abandoned, no AI call), P4 = lowest. Click Call to initiate." />
+            <InfoTooltip content="Patients awaiting outbound calls. Ordered by RadFlow status (Ordered → No Show → Needs to Reschedule), then by fewest total attempts (AI + human). At max attempts, status flips to Couldnt Schedule and the patient leaves the queue." />
           </CardTitle>
           <div className="flex items-center gap-2">
             <Badge
@@ -293,16 +286,24 @@ export function PatientQueueCard({
                         {index + 1}
                       </span>
                       <span className="text-sm font-medium truncate">{patient.name}</span>
-                      <Badge variant={priorityColors[patient.priority_bucket]} className="text-[10px] px-1.5 py-0">
-                        P{patient.priority_bucket}
-                      </Badge>
+                      {patient.radflow_status && (
+                        <Badge
+                          variant={statusColors[patient.radflow_status] || "outline"}
+                          className="text-[10px] px-1.5 py-0"
+                        >
+                          {patient.radflow_status}
+                        </Badge>
+                      )}
                     </div>
                     <div className="flex items-center gap-2.5 mt-1 ml-7 text-xs text-muted-foreground">
                       <span className="font-mono">{patient.patient_id}</span>
                       <span className="tabular-nums">{patient.phone}</span>
                       <span className="uppercase font-medium">{patient.language}</span>
-                      {patient.attempt_count > 0 && (
-                        <span className="tabular-nums">{patient.attempt_count} attempt{patient.attempt_count !== 1 ? "s" : ""}</span>
+                      {(patient.total_attempts ?? patient.attempt_count ?? 0) > 0 && (
+                        <span className="tabular-nums" title="Total attempts (AI + human)">
+                          {patient.total_attempts ?? patient.attempt_count} total
+                          {" "}(AI {patient.ai_attempt_count ?? 0} / human {patient.human_attempt_count ?? 0})
+                        </span>
                       )}
                     </div>
                   </div>

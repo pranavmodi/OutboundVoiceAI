@@ -93,10 +93,13 @@ def _row_to_settings(row: SystemSettingsRow) -> SystemSettings:
         stable_polls_required=qt.get("stable_polls_required", 3),
     )
     ds = row.dispatcher_settings if row.dispatcher_settings else {}
+    # Migrate legacy single max_attempts → per-status values on read.
+    legacy_max = int(ds.get("max_attempts", 4))
     settings.dispatcher_settings = DispatcherSettings(
         poll_interval=ds.get("poll_interval", 10),
         dispatch_timeout=ds.get("dispatch_timeout", 30),
-        max_attempts=ds.get("max_attempts", 3),
+        max_attempts_ordered=int(ds.get("max_attempts_ordered", legacy_max)),
+        max_attempts_other=int(ds.get("max_attempts_other", legacy_max)),
         min_hours_between=ds.get("min_hours_between", 6),
         verbose_logging=ds.get("verbose_logging", False),
     )
@@ -272,7 +275,8 @@ class SettingsProvider:
             row.dispatcher_settings = {
                 "poll_interval": dispatcher_settings.poll_interval,
                 "dispatch_timeout": dispatcher_settings.dispatch_timeout,
-                "max_attempts": dispatcher_settings.max_attempts,
+                "max_attempts_ordered": dispatcher_settings.max_attempts_ordered,
+                "max_attempts_other": dispatcher_settings.max_attempts_other,
                 "min_hours_between": dispatcher_settings.min_hours_between,
                 "verbose_logging": dispatcher_settings.verbose_logging,
             }

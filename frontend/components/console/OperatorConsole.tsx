@@ -101,7 +101,8 @@ export function OperatorConsole({
   const [dispatcherForm, setDispatcherForm] = useState<DispatcherSettings>({
     poll_interval: 10,
     dispatch_timeout: 30,
-    max_attempts: 3,
+    max_attempts_ordered: 4,
+    max_attempts_other: 4,
     min_hours_between: 6,
   });
 
@@ -293,42 +294,47 @@ export function OperatorConsole({
 
       <Separator />
 
-      {/* Voice Provider */}
-      <div className="space-y-3">
-        <div className="flex items-center gap-2">
-          <Bot className="h-4 w-4 text-muted-foreground" />
-          <h4 className="text-sm font-medium">Voice AI Provider</h4>
-          <InfoTooltip content="Choose which AI model powers the voice conversations. OpenAI uses GPT Realtime API. Gemini uses Google's Live API — typically faster and more natural sounding." />
-        </div>
-        <div className="flex items-center gap-4">
-          <Select value={settings?.voice_provider || "openai"} onValueChange={onVoiceProviderChange}>
-            <SelectTrigger className="w-48">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="openai">
-                <span className="flex items-center gap-2">
-                  OpenAI Realtime
-                </span>
-              </SelectItem>
-              <SelectItem value="gemini">
-                <span className="flex items-center gap-2">
-                  Google Gemini Live
-                </span>
-              </SelectItem>
-            </SelectContent>
-          </Select>
-          <Badge variant="outline" className={
-            (settings?.voice_provider || "openai") === "gemini"
-              ? "text-blue-600 border-blue-600"
-              : "text-emerald-600 border-emerald-600"
-          }>
-            {(settings?.voice_provider || "openai") === "gemini" ? "Gemini" : "OpenAI"}
-          </Badge>
-        </div>
-      </div>
+      {/* Voice Provider — hidden for now. Backend still respects settings.voice_provider;
+          switch via the PUT /api/settings/voice-provider endpoint if needed. */}
+      {false && (
+        <>
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <Bot className="h-4 w-4 text-muted-foreground" />
+              <h4 className="text-sm font-medium">Voice AI Provider</h4>
+              <InfoTooltip content="Choose which AI model powers the voice conversations. OpenAI uses GPT Realtime API. Gemini uses Google's Live API — typically faster and more natural sounding." />
+            </div>
+            <div className="flex items-center gap-4">
+              <Select value={settings?.voice_provider || "openai"} onValueChange={onVoiceProviderChange}>
+                <SelectTrigger className="w-48">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="openai">
+                    <span className="flex items-center gap-2">
+                      OpenAI Realtime
+                    </span>
+                  </SelectItem>
+                  <SelectItem value="gemini">
+                    <span className="flex items-center gap-2">
+                      Google Gemini Live
+                    </span>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+              <Badge variant="outline" className={
+                (settings?.voice_provider || "openai") === "gemini"
+                  ? "text-blue-600 border-blue-600"
+                  : "text-emerald-600 border-emerald-600"
+              }>
+                {(settings?.voice_provider || "openai") === "gemini" ? "Gemini" : "OpenAI"}
+              </Badge>
+            </div>
+          </div>
 
-      <Separator />
+          <Separator />
+        </>
+      )}
 
       {/* Queue Source */}
       <div className="space-y-3">
@@ -937,19 +943,39 @@ export function OperatorConsole({
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="max-attempts" className="text-xs text-muted-foreground flex items-center gap-1">
-              Max attempts per patient
-              <InfoTooltip content="Maximum number of call attempts for each patient. After this many tries, the patient is marked as exhausted and won't be called again." />
+            <Label htmlFor="max-attempts-ordered" className="text-xs text-muted-foreground flex items-center gap-1">
+              Max attempts — Ordered status
+              <InfoTooltip content="Max combined (AI + human) attempts before an Ordered-status patient is moved to Couldnt Schedule and HL7 is sent to RadFlow." />
             </Label>
             <Input
-              id="max-attempts"
+              id="max-attempts-ordered"
               type="number"
               min="1"
-              value={dispatcherForm.max_attempts}
+              value={dispatcherForm.max_attempts_ordered}
               onChange={(e) =>
                 setDispatcherForm({
                   ...dispatcherForm,
-                  max_attempts: parseInt(e.target.value) || 1,
+                  max_attempts_ordered: parseInt(e.target.value) || 1,
+                })
+              }
+              className="h-9"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="max-attempts-other" className="text-xs text-muted-foreground flex items-center gap-1">
+              Max attempts — No Show / Needs to Reschedule
+              <InfoTooltip content="Max combined (AI + human) attempts for No Show and Needs to Reschedule patients before they flip to Couldnt Schedule." />
+            </Label>
+            <Input
+              id="max-attempts-other"
+              type="number"
+              min="1"
+              value={dispatcherForm.max_attempts_other}
+              onChange={(e) =>
+                setDispatcherForm({
+                  ...dispatcherForm,
+                  max_attempts_other: parseInt(e.target.value) || 1,
                 })
               }
               className="h-9"

@@ -26,6 +26,7 @@ import {
   Circle,
   History,
   LogOut,
+  BarChart3,
 } from "lucide-react";
 import type { Patient, CallLog, QueueState, SystemSettings, SimulationScenario, TodayKpis } from "@/types";
 
@@ -473,17 +474,26 @@ export default function Dashboard() {
     setPatientsLastUpdated(new Date());
   }, [api]);
 
+  const [callsSearch, setCallsSearch] = useState<string>("");
+
   const handleRefreshCalls = useCallback(async () => {
-    const { calls: c, total: t } = await api.getCalls(CALLS_PAGE_SIZE);
+    const { calls: c, total: t } = await api.getCalls(CALLS_PAGE_SIZE, 0, callsSearch);
+    setCalls(c);
+    setCallsTotal(t);
+  }, [api, callsSearch]);
+
+  const handleLoadMoreCalls = useCallback(async () => {
+    const { calls: more, total: t } = await api.getCalls(CALLS_PAGE_SIZE, calls.length, callsSearch);
+    setCalls((prev) => [...prev, ...more]);
+    setCallsTotal(t);
+  }, [api, calls.length, callsSearch]);
+
+  const handleSearchChange = useCallback(async (search: string) => {
+    setCallsSearch(search);
+    const { calls: c, total: t } = await api.getCalls(CALLS_PAGE_SIZE, 0, search);
     setCalls(c);
     setCallsTotal(t);
   }, [api]);
-
-  const handleLoadMoreCalls = useCallback(async () => {
-    const { calls: more, total: t } = await api.getCalls(CALLS_PAGE_SIZE, calls.length);
-    setCalls((prev) => [...prev, ...more]);
-    setCallsTotal(t);
-  }, [api, calls.length]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -572,9 +582,9 @@ export default function Dashboard() {
               <History className="h-4 w-4" />
               History
             </TabsTrigger>
-            <TabsTrigger value="simulation" className="flex items-center gap-2 rounded-md px-4 text-sm">
-              <Terminal className="h-4 w-4" />
-              Simulation
+            <TabsTrigger value="analytics" className="flex items-center gap-2 rounded-md px-4 text-sm">
+              <BarChart3 className="h-4 w-4" />
+              Analytics
             </TabsTrigger>
           </TabsList>
 
@@ -685,6 +695,7 @@ export default function Dashboard() {
                 call_status: "in_progress",
                 call_disposition: "in_progress",
                 mock_mode: false,
+                voice_provider: "openai",
                 transfer_attempted: false,
                 transfer_success: false,
                 voicemail_left: false,
@@ -707,19 +718,16 @@ export default function Dashboard() {
 
           {/* History Tab */}
           <TabsContent value="history" className="space-y-6 animate-in">
-            <CallHistoryCard calls={calls} callsTotal={callsTotal} onRefresh={handleRefreshCalls} onLoadMore={handleLoadMoreCalls} hasMore={calls.length < callsTotal} />
+            <CallHistoryCard calls={calls} callsTotal={callsTotal} onRefresh={handleRefreshCalls} onLoadMore={handleLoadMoreCalls} hasMore={calls.length < callsTotal} onSearchChange={handleSearchChange} />
           </TabsContent>
 
-          {/* Simulation Tab */}
-          <TabsContent value="simulation" className="animate-in">
-            <SimulationConsole
-              scenarios={scenarios}
-              activeScenarioId={settings?.active_scenario_id || null}
-              onSaveScenario={handleSaveScenario}
-              onCreateScenario={handleCreateScenario}
-              onDeleteScenario={handleDeleteScenario}
-              onRefreshScenarios={handleRefreshScenarios}
-              onAddPatientToQueue={handleAddPatientToQueue}
+          {/* Analytics Tab */}
+          <TabsContent value="analytics" className="animate-in">
+            <iframe
+              src="/analytics"
+              className="w-full border-0 rounded-lg"
+              style={{ height: "calc(100vh - 200px)" }}
+              title="Call Time Performance"
             />
           </TabsContent>
         </Tabs>

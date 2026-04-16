@@ -27,16 +27,24 @@ class PatientRow(Base):
     has_called_in_before: Mapped[bool] = mapped_column(Boolean, default=False)
     has_abandoned_before: Mapped[bool] = mapped_column(Boolean, default=False)
     ai_called_before: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Legacy combined counter — retained so old code paths keep working during
+    # rollout. Priority logic now uses ai_attempt_count + human_attempt_count.
     attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    ai_attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    human_attempt_count: Mapped[int] = mapped_column(Integer, default=0)
     last_attempt_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     last_outcome: Mapped[str | None] = mapped_column(String(32), nullable=True)
     due_by: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     priority_bucket: Mapped[int] = mapped_column(Integer, default=4)
+    # RadFlow lifecycle status: Ordered / No Show / Needs to Reschedule / Couldnt Schedule
+    radflow_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Set when HL7 "Couldnt Schedule" POST succeeds — prevents duplicate sends
+    hl7_sent_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=_utcnow, onupdate=_utcnow)
 
     __table_args__ = (
-        Index("ix_patients_priority_due", "priority_bucket", "due_by"),
+        Index("ix_patients_status_attempts", "radflow_status", "ai_attempt_count", "human_attempt_count", "due_by"),
         Index("ix_patients_phone", "phone"),
     )
 
@@ -57,6 +65,7 @@ class CallLogRow(Base):
     call_status: Mapped[str] = mapped_column(String(32), default="in_progress")
     call_disposition: Mapped[str] = mapped_column(String(32), default="in_progress")
     mock_mode: Mapped[bool] = mapped_column(Boolean, default=False)
+    voice_provider: Mapped[str] = mapped_column(String(20), default="openai")
     # Audio recording (stored on disk, metadata only in DB)
     recording_sid: Mapped[str | None] = mapped_column(String(64), nullable=True)
     recording_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
@@ -147,11 +156,16 @@ class PatientCallStateRow(Base):
     __tablename__ = "patient_call_state"
 
     patient_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    # Legacy combined counter, kept for rollout compatibility.
     attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    # AI-only attempt count — authoritative going forward.  Human attempts
+    # in live mode are derived from the RadFlow VM+CB fields at fetch time.
+    ai_attempt_count: Mapped[int] = mapped_column(Integer, default=0)
     last_attempt_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     last_outcome: Mapped[str | None] = mapped_column(String(32), nullable=True)
     ai_called_before: Mapped[bool] = mapped_column(Boolean, default=False)
     invalid_number: Mapped[bool] = mapped_column(Boolean, default=False)
+    hl7_sent_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=_utcnow, onupdate=_utcnow)
 
     __table_args__ = (

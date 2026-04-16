@@ -40,7 +40,8 @@ class QueueThresholdsRequest(BaseModel):
 class DispatcherSettingsRequest(BaseModel):
     poll_interval: int = 10
     dispatch_timeout: int = 30
-    max_attempts: int = 3
+    max_attempts_ordered: int = 4
+    max_attempts_other: int = 4
     min_hours_between: int = 6
     verbose_logging: bool = False
 
@@ -164,7 +165,8 @@ async def settings_to_response(provider) -> SystemSettingsResponse:
         dispatcher_settings=DispatcherSettingsRequest(
             poll_interval=settings.dispatcher_settings.poll_interval,
             dispatch_timeout=settings.dispatcher_settings.dispatch_timeout,
-            max_attempts=settings.dispatcher_settings.max_attempts,
+            max_attempts_ordered=settings.dispatcher_settings.max_attempts_ordered,
+            max_attempts_other=settings.dispatcher_settings.max_attempts_other,
             min_hours_between=settings.dispatcher_settings.min_hours_between,
             verbose_logging=settings.dispatcher_settings.verbose_logging,
         ),
@@ -359,7 +361,8 @@ async def update_dispatcher_settings(request: DispatcherSettingsRequest):
     dispatcher_settings = DispatcherSettings(
         poll_interval=request.poll_interval,
         dispatch_timeout=request.dispatch_timeout,
-        max_attempts=request.max_attempts,
+        max_attempts_ordered=request.max_attempts_ordered,
+        max_attempts_other=request.max_attempts_other,
         min_hours_between=request.min_hours_between,
         verbose_logging=request.verbose_logging,
     )
@@ -370,7 +373,8 @@ async def update_dispatcher_settings(request: DispatcherSettingsRequest):
     get_dispatcher().update_config(
         poll_interval=request.poll_interval,
         dispatch_timeout=request.dispatch_timeout,
-        max_attempts=request.max_attempts,
+        max_attempts_ordered=request.max_attempts_ordered,
+        max_attempts_other=request.max_attempts_other,
         min_hours_between=request.min_hours_between,
         verbose_logging=request.verbose_logging,
     )

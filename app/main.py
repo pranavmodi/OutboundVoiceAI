@@ -38,7 +38,8 @@ async def lifespan(app: FastAPI):
     get_dispatcher().update_config(
         poll_interval=ds.poll_interval,
         dispatch_timeout=ds.dispatch_timeout,
-        max_attempts=ds.max_attempts,
+        max_attempts_ordered=ds.max_attempts_ordered,
+        max_attempts_other=ds.max_attempts_other,
         min_hours_between=ds.min_hours_between,
         verbose_logging=verbose,
     )

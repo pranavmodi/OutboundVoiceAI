@@ -182,7 +182,7 @@ export function ActiveCallCard({
             </div>
             <Badge variant="outline" className="text-xs flex items-center gap-1">
               P{call.priority_bucket}
-              <InfoTooltip content="Priority bucket: P1=Abandoned/No AI, P2=Abandoned/AI called, P3=Called in/No AI, P4=Never contacted. Lower = higher priority." />
+              <InfoTooltip content="Status rank at dispatch time: 1=Ordered, 2=No Show, 3=Needs to Reschedule. Lower = higher priority." />
             </Badge>
           </div>
         </div>

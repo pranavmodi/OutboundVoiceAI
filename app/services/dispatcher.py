@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_POLL_INTERVAL_SECONDS = 10
 DEFAULT_DISPATCH_TIMEOUT_SECONDS = 30
-DEFAULT_MAX_ATTEMPTS = 3
+DEFAULT_MAX_ATTEMPTS = 4
 DEFAULT_MIN_HOURS_BETWEEN = 6
 DEFAULT_COOLDOWN_SECONDS = 120  # wait between consecutive calls to different patients
 DECISION_LOG_MAX = 100
@@ -50,7 +50,8 @@ class AutoCallDispatcher:
         # Configurable parameters
         self.poll_interval: int = DEFAULT_POLL_INTERVAL_SECONDS
         self.dispatch_timeout: int = DEFAULT_DISPATCH_TIMEOUT_SECONDS
-        self.max_attempts: int = DEFAULT_MAX_ATTEMPTS
+        self.max_attempts_ordered: int = DEFAULT_MAX_ATTEMPTS
+        self.max_attempts_other: int = DEFAULT_MAX_ATTEMPTS
         self.min_hours_between: int = DEFAULT_MIN_HOURS_BETWEEN
         self.cooldown_seconds: int = DEFAULT_COOLDOWN_SECONDS
         self.verbose: bool = False
@@ -80,20 +81,22 @@ class AutoCallDispatcher:
         self._log_decision("stopped", "Dispatcher stopped")
 
     def update_config(self, poll_interval: int, dispatch_timeout: int,
-                       max_attempts: int, min_hours_between: int,
+                       max_attempts_ordered: int, max_attempts_other: int,
+                       min_hours_between: int,
                        verbose_logging: bool = False,
                        cooldown_seconds: int = DEFAULT_COOLDOWN_SECONDS):
         """Update dispatcher configuration."""
         self.poll_interval = poll_interval
         self.dispatch_timeout = dispatch_timeout
-        self.max_attempts = max_attempts
+        self.max_attempts_ordered = max_attempts_ordered
+        self.max_attempts_other = max_attempts_other
         self.min_hours_between = min_hours_between
         self.cooldown_seconds = cooldown_seconds
         self.verbose = verbose_logging
         self._log_decision("config_updated",
                            f"Config updated: poll={poll_interval}s, timeout={dispatch_timeout}s, "
-                           f"max_attempts={max_attempts}, min_hours={min_hours_between}, "
-                           f"cooldown={cooldown_seconds}s, verbose={verbose_logging}")
+                           f"max_attempts=ordered:{max_attempts_ordered}/other:{max_attempts_other}, "
+                           f"min_hours={min_hours_between}, cooldown={cooldown_seconds}s, verbose={verbose_logging}")
 
     def restart(self):
         """Restart the dispatcher (stop + start)."""
@@ -258,7 +261,8 @@ class AutoCallDispatcher:
                 if not settings.mock_mode:
                     from app.services.transfer_service import resolve_transfer_queue_for_language, find_queue_by_name
                     queue = await patient_provider.get_outbound_queue(
-                        max_attempts=self.max_attempts,
+                        max_attempts_ordered=self.max_attempts_ordered,
+                        max_attempts_other=self.max_attempts_other,
                         min_hours_between=self.min_hours_between)
                     for prospect in queue:
                         target_queue = resolve_transfer_queue_for_language(prospect.language)
@@ -273,7 +277,8 @@ class AutoCallDispatcher:
                             )
                 else:
                     candidate = await patient_provider.get_next_candidate(
-                        max_attempts=self.max_attempts,
+                        max_attempts_ordered=self.max_attempts_ordered,
+                        max_attempts_other=self.max_attempts_other,
                         min_hours_between=self.min_hours_between)
 
                 if candidate is None:
@@ -450,7 +455,8 @@ class AutoCallDispatcher:
             "config": {
                 "poll_interval": self.poll_interval,
                 "dispatch_timeout": self.dispatch_timeout,
-                "max_attempts": self.max_attempts,
+                "max_attempts_ordered": self.max_attempts_ordered,
+                "max_attempts_other": self.max_attempts_other,
                 "min_hours_between": self.min_hours_between,
                 "cooldown_seconds": self.cooldown_seconds,
             },

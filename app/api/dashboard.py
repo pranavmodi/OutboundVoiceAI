@@ -284,13 +284,15 @@ async def update_patient(
         if ai_called_before is not None:
             row.ai_called_before = ai_called_before
         if attempt_count is not None:
-            row.attempt_count = attempt_count
+            # UI still calls this "attempt_count"; treat it as the AI count
+            # since human attempts are RadFlow-sourced in live mode.
+            row.ai_attempt_count = attempt_count
+            row.attempt_count = attempt_count + (row.human_attempt_count or 0)
 
-        # Recompute priority
-        from app.providers.patient_provider import _compute_priority
-        row.priority_bucket = _compute_priority(
-            row.has_abandoned_before, row.ai_called_before, row.has_called_in_before
-        )
+        # Recompute priority bucket from the RadFlow status (legacy alias
+        # for consumers that still read priority_bucket).
+        from app.models import STATUS_RANK
+        row.priority_bucket = STATUS_RANK.get(row.radflow_status or "", 99)
 
         await session.commit()
         await session.refresh(row)
@@ -369,11 +371,14 @@ async def reset_patients():
 
 
 @router.get("/calls")
-async def get_calls(limit: int = 25, offset: int = 0):
-    """Get call history with pagination."""
+async def get_calls(limit: int = 25, offset: int = 0, search: Optional[str] = None):
+    """Get call history with pagination and optional server-side search."""
     call_log_provider = get_call_log_provider()
-    calls = await call_log_provider.get_all_calls(limit=limit, offset=offset)
-    total = await call_log_provider.get_total_call_count()
+    calls = await call_log_provider.get_all_calls(limit=limit, offset=offset, search=search)
+    if search and search.strip():
+        total = await call_log_provider.count_all_calls(search=search)
+    else:
+        total = await call_log_provider.get_total_call_count()
     return {"calls": [c.to_dict() for c in calls], "total": total}
 
 

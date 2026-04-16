@@ -270,7 +270,20 @@ async def twilio_media_websocket(websocket: WebSocket, stream_id: str):
         from app.services.call_orchestrator import get_orchestrator
         orchestrator = get_orchestrator()
         if orchestrator.is_call_active:
-            print(f"[TwilioMedia] Stream closed while call active — reason={disconnect_reason}, stream_id={stream_id}")
-            await orchestrator.end_call(CallOutcome.DISCONNECTED)
+            # Short grace period before ending the call: voicemail systems
+            # often close the media stream at the beep, but the AMD callback
+            # (answered_by=machine_*) can arrive a second or two later. If we
+            # end immediately we lose the chance to play the VM script.
+            print(f"[TwilioMedia] Stream closed while call active — waiting briefly for AMD (reason={disconnect_reason}, stream_id={stream_id})")
+            import asyncio as _asyncio
+            for _ in range(20):  # ~4 seconds total (20 * 0.2s)
+                await _asyncio.sleep(0.2)
+                if getattr(orchestrator, "_voicemail_handled", False) or not orchestrator.is_call_active:
+                    break
+            if orchestrator.is_call_active and not getattr(orchestrator, "_voicemail_handled", False):
+                print(f"[TwilioMedia] No AMD within grace period — ending as DISCONNECTED, stream_id={stream_id}")
+                await orchestrator.end_call(CallOutcome.DISCONNECTED)
+            else:
+                print(f"[TwilioMedia] Voicemail handler took over or call already ended, stream_id={stream_id}")
         else:
             print(f"[TwilioMedia] Stream closed (call already ended) — reason={disconnect_reason}, stream_id={stream_id}")

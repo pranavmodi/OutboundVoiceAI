@@ -1,5 +1,16 @@
-"""Google Gemini Live API voice service."""
+"""Google Gemini Live API voice service.
+
+Based on the working implementation at https://github.com/pranavmodi/autocaller.
+
+Key differences from OpenAI Realtime:
+- Gemini accepts 16kHz PCM16 input, outputs 24kHz PCM16
+- Twilio sends 8kHz mulaw — audio transcoding is required
+- Uses v1beta API endpoint with API key in query string
+- camelCase JSON wire format
+- Tool definitions use functionDeclarations format
+"""
 import asyncio
+import audioop
 import base64
 import json
 import os
@@ -19,8 +30,14 @@ if _env_path.exists():
     load_dotenv(dotenv_path=str(_env_path))
 
 
-GEMINI_MODEL = os.getenv("GEMINI_REALTIME_MODEL", "gemini-2.0-flash-live-001")
+GEMINI_MODEL = os.getenv("GEMINI_REALTIME_MODEL", "gemini-3.1-flash-live-preview")
 GEMINI_VOICE = os.getenv("GEMINI_VOICE", "Aoede")
+
+# Gemini WebSocket endpoint (v1beta)
+GEMINI_WS_URL = (
+    "wss://generativelanguage.googleapis.com/ws/"
+    "google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
+)
 
 
 @dataclass
@@ -40,6 +57,9 @@ class GeminiVoiceService(BaseVoiceService):
         self._ws = None
         self._session: Optional[GeminiSession] = None
         self._api_key = os.getenv("GEMINI_API_KEY", "")
+        # Audio transcoding state for mulaw ↔ PCM conversion (Twilio mode)
+        self._inbound_state = None   # mulaw 8kHz → PCM 16kHz
+        self._outbound_state = None  # PCM 24kHz → mulaw 8kHz
 
     @staticmethod
     def _language_instruction(language: Optional[str]) -> str:
@@ -57,13 +77,9 @@ class GeminiVoiceService(BaseVoiceService):
             return False
 
         try:
-            url = (
-                f"wss://generativelanguage.googleapis.com/ws/"
-                f"google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent"
-                f"?key={self._api_key}"
-            )
+            url = f"{GEMINI_WS_URL}?key={self._api_key}"
 
-            print(f"[GeminiVoice] Connecting to Gemini Live API...")
+            print(f"[GeminiVoice] Connecting to Gemini Live API (model={GEMINI_MODEL})...")
             self._ws = await websockets.connect(url)
             print(f"[GeminiVoice] WebSocket connected successfully")
 
@@ -72,6 +88,10 @@ class GeminiVoiceService(BaseVoiceService):
                 call_id=call_id,
                 patient_name=patient_name,
             )
+
+            # Reset transcoding state
+            self._inbound_state = None
+            self._outbound_state = None
 
             # Send setup message
             await self._configure_session(patient_name, patient_language)
@@ -96,33 +116,23 @@ class GeminiVoiceService(BaseVoiceService):
         language_instruction = self._language_instruction(patient_language)
         instructions = f"{SYSTEM_INSTRUCTIONS}\n\n{language_instruction}"
 
-        # Gemini audio format mapping
-        if self._audio_format == "g711_ulaw":
-            input_format = "MULAW"
-            output_format = "MULAW"
-            sample_rate = 8000
-        else:
-            input_format = "PCM"
-            output_format = "PCM"
-            sample_rate = 24000
-
-        # Tools in Gemini format
+        # Tools in Gemini functionDeclarations format
         tools = [
             {
                 "functionDeclarations": [
                     {
                         "name": "check_transfer_availability",
                         "description": "Check whether a scheduler is available to take a transfer right now.",
-                        "parameters": {"type": "OBJECT", "properties": {}},
+                        "parameters": {"type": "object", "properties": {}},
                     },
                     {
                         "name": "transfer_to_scheduler",
                         "description": "Transfer the patient to a human scheduler only after explicit consent.",
                         "parameters": {
-                            "type": "OBJECT",
+                            "type": "object",
                             "properties": {
                                 "confirmed": {
-                                    "type": "BOOLEAN",
+                                    "type": "boolean",
                                     "description": "Whether the patient confirmed they want to transfer",
                                 }
                             },
@@ -133,19 +143,19 @@ class GeminiVoiceService(BaseVoiceService):
                         "name": "end_call",
                         "description": "End the call.",
                         "parameters": {
-                            "type": "OBJECT",
+                            "type": "object",
                             "properties": {
                                 "reason": {
-                                    "type": "STRING",
+                                    "type": "string",
                                     "description": "The reason for ending the call",
                                     "enum": ["patient_busy", "wrong_number", "voicemail", "completed", "patient_request"],
                                 },
                                 "callback_requested": {
-                                    "type": "BOOLEAN",
+                                    "type": "boolean",
                                     "description": "Whether the patient requested a callback",
                                 },
                                 "preferred_callback_time": {
-                                    "type": "STRING",
+                                    "type": "string",
                                     "description": "Optional preferred callback preference",
                                 },
                             },
@@ -156,10 +166,10 @@ class GeminiVoiceService(BaseVoiceService):
                         "name": "send_sms",
                         "description": "Send an SMS to the patient with callback information.",
                         "parameters": {
-                            "type": "OBJECT",
+                            "type": "object",
                             "properties": {
                                 "message_type": {
-                                    "type": "STRING",
+                                    "type": "string",
                                     "description": "Type of message to send",
                                     "enum": ["callback_info", "appointment_reminder"],
                                 }
@@ -175,6 +185,7 @@ class GeminiVoiceService(BaseVoiceService):
             "setup": {
                 "model": f"models/{GEMINI_MODEL}",
                 "generationConfig": {
+                    "responseModalities": ["AUDIO"],
                     "speechConfig": {
                         "voiceConfig": {
                             "prebuiltVoiceConfig": {
@@ -182,19 +193,11 @@ class GeminiVoiceService(BaseVoiceService):
                             }
                         }
                     },
-                    "responseModalities": ["AUDIO"],
                 },
                 "systemInstruction": {
                     "parts": [{"text": instructions}]
                 },
                 "tools": tools,
-                "realtimeInputConfig": {
-                    "automaticActivityDetection": {
-                        "disabled": False,
-                    },
-                    "activityHandling": "START_OF_ACTIVITY_INTERRUPTS",
-                    "mediaResolution": "MEDIA_RESOLUTION_LOW",
-                },
                 "inputAudioTranscription": {},
                 "outputAudioTranscription": {},
             }
@@ -230,26 +233,33 @@ class GeminiVoiceService(BaseVoiceService):
                 print(f"[GeminiVoice] Received: {keys}")
 
             # Setup complete
-            if "setupComplete" in data:
+            if "setupComplete" in data or "setup_complete" in data:
                 print(f"[GeminiVoice] Setup complete")
                 return
 
             # Server content (audio, text, turn complete)
-            server_content = data.get("serverContent")
+            server_content = data.get("serverContent") or data.get("server_content")
             if server_content:
                 await self._handle_server_content(server_content)
                 return
 
             # Tool call
-            tool_call = data.get("toolCall")
+            tool_call = data.get("toolCall") or data.get("tool_call")
             if tool_call:
                 await self._handle_tool_call(tool_call)
                 return
 
             # Tool call cancellation
-            if "toolCallCancellation" in data:
+            if "toolCallCancellation" in data or "tool_call_cancellation" in data:
                 if self._verbose:
                     print(f"[GeminiVoice] Tool call cancelled")
+                return
+
+            # Go away (server disconnect signal)
+            if "goAway" in data or "go_away" in data:
+                print(f"[GeminiVoice] Server sent goAway")
+                if self.on_session_ended:
+                    await self.on_session_ended()
                 return
 
         except json.JSONDecodeError:
@@ -260,50 +270,79 @@ class GeminiVoiceService(BaseVoiceService):
 
     async def _handle_server_content(self, content: dict):
         """Handle serverContent messages (audio, transcript, turn complete)."""
-        model_turn = content.get("modelTurn")
+        model_turn = content.get("modelTurn") or content.get("model_turn")
         if model_turn:
             for part in model_turn.get("parts", []):
-                # Audio output
-                inline_data = part.get("inlineData")
+                # Audio output (24kHz PCM16 from Gemini)
+                inline_data = part.get("inlineData") or part.get("inline_data")
                 if inline_data:
                     audio_b64 = inline_data.get("data", "")
                     if audio_b64 and self.on_audio:
-                        audio_bytes = base64.b64decode(audio_b64)
-                        await self.on_audio(audio_bytes)
+                        pcm24k = base64.b64decode(audio_b64)
+                        if self._audio_format == "g711_ulaw":
+                            # Downsample 24kHz → 8kHz, then encode to mulaw
+                            audio_out = self._pcm24k_to_mulaw(pcm24k)
+                        else:
+                            audio_out = pcm24k
+                        await self.on_audio(audio_out)
 
                 # Text output (if any)
                 text = part.get("text")
                 if text and self.on_transcript:
                     await self.on_transcript("ai", text)
 
-        # Output audio transcription
-        output_transcription = content.get("outputTranscription")
+        # Output audio transcription (AI speech text)
+        output_transcription = content.get("outputTranscription") or content.get("output_transcription")
         if output_transcription:
             text = output_transcription.get("text", "")
             if text and self.on_transcript:
                 await self.on_transcript("ai", text)
 
         # Input (patient) transcription
-        input_transcription = content.get("inputTranscription")
+        input_transcription = content.get("inputTranscription") or content.get("input_transcription")
         if input_transcription:
             text = input_transcription.get("text", "")
             if text and text.strip() and self.on_transcript:
                 await self.on_transcript("patient", text.strip())
 
-        # Turn complete
-        if content.get("turnComplete"):
-            # Gemini signals turn is done; could trigger transcript finalization
-            pass
-
     async def _handle_tool_call(self, tool_call: dict):
         """Handle function calls from Gemini."""
-        function_calls = tool_call.get("functionCalls", [])
+        function_calls = tool_call.get("functionCalls") or tool_call.get("function_calls") or []
         for fc in function_calls:
             name = fc.get("name", "")
             args = fc.get("args", {})
+            # args can be a JSON string in some cases
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except json.JSONDecodeError:
+                    args = {}
             call_id = fc.get("id", "")
             if self.on_function_call:
                 await self.on_function_call(name, args, call_id)
+
+    # -- Audio transcoding (Twilio mulaw ↔ Gemini PCM) -------------------------
+
+    def _mulaw_to_pcm16k(self, mulaw_data: bytes) -> bytes:
+        """Convert 8kHz mulaw (from Twilio) to 16kHz PCM16 (for Gemini input)."""
+        # Decode mulaw to 16-bit PCM at 8kHz
+        pcm8k = audioop.ulaw2lin(mulaw_data, 2)
+        # Upsample 8kHz → 16kHz
+        pcm16k, self._inbound_state = audioop.ratecv(
+            pcm8k, 2, 1, 8000, 16000, self._inbound_state
+        )
+        return pcm16k
+
+    def _pcm24k_to_mulaw(self, pcm24k: bytes) -> bytes:
+        """Convert 24kHz PCM16 (from Gemini output) to 8kHz mulaw (for Twilio)."""
+        # Downsample 24kHz → 8kHz
+        pcm8k, self._outbound_state = audioop.ratecv(
+            pcm24k, 2, 1, 24000, 8000, self._outbound_state
+        )
+        # Encode to mulaw
+        return audioop.lin2ulaw(pcm8k, 2)
+
+    # -- Public interface -------------------------------------------------------
 
     async def _send(self, data: dict):
         """Send a message to Gemini."""
@@ -311,25 +350,27 @@ class GeminiVoiceService(BaseVoiceService):
             await self._ws.send(json.dumps(data))
 
     async def send_audio(self, audio_data: bytes) -> None:
-        """Send audio data to Gemini."""
+        """Send audio data to Gemini.
+
+        In Twilio mode (g711_ulaw), transcodes mulaw 8kHz → PCM 16kHz.
+        In web mode (pcm16), sends PCM at 16kHz.
+        """
         if not self._ws or not self._session or not self._session.is_active:
             return
 
-        audio_b64 = base64.b64encode(audio_data).decode("utf-8")
-
         if self._audio_format == "g711_ulaw":
-            mime_type = "audio/pcmu"
+            # Transcode mulaw → PCM 16kHz for Gemini
+            pcm16k = self._mulaw_to_pcm16k(audio_data)
+            audio_b64 = base64.b64encode(pcm16k).decode("utf-8")
         else:
-            mime_type = "audio/pcm;rate=24000"
+            audio_b64 = base64.b64encode(audio_data).decode("utf-8")
 
         await self._send({
             "realtimeInput": {
-                "mediaChunks": [
-                    {
-                        "mimeType": mime_type,
-                        "data": audio_b64,
-                    }
-                ]
+                "audio": {
+                    "mimeType": "audio/pcm;rate=16000",
+                    "data": audio_b64,
+                }
             }
         })
 
@@ -341,35 +382,28 @@ class GeminiVoiceService(BaseVoiceService):
                     "functionResponses": [
                         {
                             "id": call_id,
-                            "name": "",  # Gemini infers from id
-                            "response": result,
+                            "response": {
+                                "output": json.dumps(result),
+                            },
                         }
                     ]
                 }
             })
 
     async def start_conversation(self) -> None:
-        """Start the conversation with AI greeting."""
+        """Start the conversation with AI greeting.
+
+        Uses realtimeInput.text (not clientContent) to trigger Gemini to speak.
+        """
         if not self._ws:
             return
 
         patient_name = self._session.patient_name if self._session else "there"
         first_name = patient_name.split()[0] if patient_name else "there"
 
-        # Send a text message to trigger the greeting
         await self._send({
-            "clientContent": {
-                "turns": [
-                    {
-                        "role": "user",
-                        "parts": [
-                            {
-                                "text": f"[System: The call has just connected. The patient's name is {first_name}. Please greet them and begin the call.]"
-                            }
-                        ],
-                    }
-                ],
-                "turnComplete": True,
+            "realtimeInput": {
+                "text": f"[System: The call has just connected. The patient's name is {first_name}. Please greet them and begin the call.]"
             }
         })
 
@@ -379,7 +413,10 @@ class GeminiVoiceService(BaseVoiceService):
             self._session.is_active = False
 
         if self._ws:
-            await self._ws.close()
+            try:
+                await self._ws.close()
+            except Exception:
+                pass
             self._ws = None
 
         if self.on_session_ended:

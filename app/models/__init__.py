@@ -1,6 +1,6 @@
 """Data models."""
 from .queue_state import QueueInfo, GlobalQueueState
-from .patient import Patient, Language, IntakeStatus
+from .patient import Patient, Language, IntakeStatus, RadflowStatus, STATUS_RANK, normalize_radflow_status
 from .call_log import (
     CallLog,
     CallOutcome,
@@ -24,6 +24,9 @@ __all__ = [
     "Patient",
     "Language",
     "IntakeStatus",
+    "RadflowStatus",
+    "STATUS_RANK",
+    "normalize_radflow_status",
     "CallLog",
     "CallOutcome",
     "CallStatus",

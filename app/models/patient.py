@@ -16,6 +16,44 @@ class IntakeStatus(str, Enum):
     INCOMPLETE = "incomplete"
 
 
+class RadflowStatus(str, Enum):
+    """Patient lifecycle status sourced from RadFlow."""
+    ORDERED = "Ordered"
+    NO_SHOW = "No Show"
+    NEEDS_RESCHEDULE = "Needs to Reschedule"
+    COULDNT_SCHEDULE = "Couldnt Schedule"
+
+
+# Priority rank used for queue ordering. Lower = higher priority.
+# Any status not in this map is excluded from the outbound queue.
+STATUS_RANK: dict[str, int] = {
+    RadflowStatus.ORDERED.value: 1,
+    RadflowStatus.NO_SHOW.value: 2,
+    RadflowStatus.NEEDS_RESCHEDULE.value: 3,
+}
+
+
+def normalize_radflow_status(raw: Optional[str]) -> Optional[str]:
+    """Map a raw RadFlow status string to our canonical RadflowStatus value.
+
+    RadFlow sends these in inconsistent casing (e.g. 'NO SHOW', 'Ordered').
+    Returns None if the status is unrecognized, so callers can decide
+    whether to default or skip the patient.
+    """
+    if not raw:
+        return None
+    key = raw.strip().upper()
+    mapping = {
+        "ORDERED": RadflowStatus.ORDERED.value,
+        "NO SHOW": RadflowStatus.NO_SHOW.value,
+        "NEEDS TO RESCHEDULE": RadflowStatus.NEEDS_RESCHEDULE.value,
+        "COULDNT SCHEDULE": RadflowStatus.COULDNT_SCHEDULE.value,
+        "COULD NOT SCHEDULE": RadflowStatus.COULDNT_SCHEDULE.value,
+        "COULDNOT SCHEDULED": RadflowStatus.COULDNT_SCHEDULE.value,
+    }
+    return mapping.get(key)
+
+
 @dataclass
 class Patient:
     """Patient record for outbound calling."""
@@ -27,33 +65,41 @@ class Patient:
     order_created: Optional[datetime] = None
     intake_status: IntakeStatus = IntakeStatus.COMPLETE
 
-    # Priority bucket fields
+    # Legacy intent flags — retained for due_by calc and historical display
+    # only. Not used in priority sorting anymore.
     has_called_in_before: bool = False
     has_abandoned_before: bool = False
     ai_called_before: bool = False
 
-    # Attempt tracking
-    attempt_count: int = 0
+    # Split attempt tracking (priority uses total = ai + human)
+    ai_attempt_count: int = 0
+    human_attempt_count: int = 0
     last_attempt_at: Optional[datetime] = None
     last_outcome: Optional[str] = None
     due_by: Optional[datetime] = None
 
-    # Computed priority (1-4, lower is higher priority)
-    priority_bucket: int = field(init=False)
+    # RadFlow lifecycle status (None = unknown/simulation-only)
+    radflow_status: Optional[str] = None
+    hl7_sent_at: Optional[datetime] = None
+
+    # Legacy combined counter — kept so older consumers don't break while
+    # the UI transitions to showing ai/human separately.
+    attempt_count: int = 0
+
+    # Legacy priority bucket, computed from the new fields for display
+    # compatibility. Queue ordering no longer consults it.
+    priority_bucket: int = field(init=False, default=0)
 
     def __post_init__(self):
-        self.priority_bucket = self._compute_priority()
+        # Keep combined count in sync if caller only set the legacy field.
+        if self.ai_attempt_count == 0 and self.human_attempt_count == 0 and self.attempt_count:
+            self.ai_attempt_count = self.attempt_count
+        self.attempt_count = self.total_attempts
+        self.priority_bucket = STATUS_RANK.get(self.radflow_status or "", 99)
 
-    def _compute_priority(self) -> int:
-        """Compute priority bucket based on call history."""
-        if self.has_abandoned_before and not self.ai_called_before:
-            return 1  # Abandoned + never AI-called
-        elif self.has_abandoned_before and self.ai_called_before:
-            return 2  # Abandoned + AI-called before
-        elif not self.ai_called_before and self.has_called_in_before:
-            return 3  # Never AI-called + called in before
-        else:
-            return 4  # Never AI-called + never called in
+    @property
+    def total_attempts(self) -> int:
+        return self.ai_attempt_count + self.human_attempt_count
 
     def to_dict(self) -> dict:
         return {
@@ -67,9 +113,14 @@ class Patient:
             "has_called_in_before": self.has_called_in_before,
             "has_abandoned_before": self.has_abandoned_before,
             "ai_called_before": self.ai_called_before,
-            "attempt_count": self.attempt_count,
+            "ai_attempt_count": self.ai_attempt_count,
+            "human_attempt_count": self.human_attempt_count,
+            "total_attempts": self.total_attempts,
+            "attempt_count": self.total_attempts,  # legacy alias
             "last_attempt_at": self.last_attempt_at.isoformat() if self.last_attempt_at else None,
             "last_outcome": self.last_outcome,
             "due_by": self.due_by.isoformat() if self.due_by else None,
+            "radflow_status": self.radflow_status,
+            "hl7_sent_at": self.hl7_sent_at.isoformat() if self.hl7_sent_at else None,
             "priority_bucket": self.priority_bucket,
         }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -51,6 +51,7 @@ interface CallHistoryCardProps {
   onRefresh: () => void;
   onLoadMore: () => void;
   hasMore: boolean;
+  onSearchChange?: (search: string) => void;
 }
 
 const outcomeConfig: Record<
@@ -163,7 +164,7 @@ function getDateLabel(dateKey: string): string {
   return formatDate(new Date(`${dateKey}T12:00:00`));
 }
 
-export function CallHistoryCard({ calls, callsTotal, onRefresh, onLoadMore, hasMore }: CallHistoryCardProps) {
+export function CallHistoryCard({ calls, callsTotal, onRefresh, onLoadMore, hasMore, onSearchChange }: CallHistoryCardProps) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [transcriptCall, setTranscriptCall] = useState<CallLog | null>(null);
   const [eventsCall, setEventsCall] = useState<CallLog | null>(null);
@@ -171,6 +172,13 @@ export function CallHistoryCard({ calls, callsTotal, onRefresh, onLoadMore, hasM
   const [customDate, setCustomDate] = useState<string>("");
   const [collapsedDates, setCollapsedDates] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
+
+  // Debounce and forward the search query so the parent can refetch from the server.
+  useEffect(() => {
+    if (!onSearchChange) return;
+    const t = setTimeout(() => onSearchChange(searchQuery.trim()), 300);
+    return () => clearTimeout(t);
+  }, [searchQuery, onSearchChange]);
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [dispositionFilter, setDispositionFilter] = useState<string>("all");
   const [playingCallId, setPlayingCallId] = useState<string | null>(null);
@@ -534,6 +542,17 @@ export function CallHistoryCard({ calls, callsTotal, onRefresh, onLoadMore, hasM
                                       >
                                         {dispCfg.label}
                                       </Badge>
+                                      <Badge
+                                        variant="outline"
+                                        className={`text-[10px] px-1.5 py-0 shrink-0 ${
+                                          call.voice_provider === "gemini"
+                                            ? "border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-300"
+                                            : "border-violet-300 bg-violet-50 text-violet-700 dark:border-violet-800 dark:bg-violet-950/40 dark:text-violet-300"
+                                        }`}
+                                        title={`Voice provider: ${call.voice_provider || "openai"}`}
+                                      >
+                                        {(call.voice_provider || "openai") === "gemini" ? "Gemini" : "OpenAI"}
+                                      </Badge>
                                       {call.mock_mode && (
                                         <Badge
                                           variant="outline"
@@ -704,8 +723,13 @@ export function CallHistoryCard({ calls, callsTotal, onRefresh, onLoadMore, hasM
       <Dialog open={!!transcriptCall} onOpenChange={() => setTranscriptCall(null)}>
         <DialogContent className="max-w-2xl max-h-[85vh] overflow-hidden flex flex-col gap-0">
           {transcriptCall && (() => {
-            const config = outcomeConfig[transcriptCall.outcome] || outcomeConfig.completed;
-            const TIcon = config.icon;
+            // Prefer the new disposition/status; fall back to legacy outcome.
+            const dispCfg =
+              dispositionConfig[transcriptCall.call_disposition] ||
+              outcomeConfig[transcriptCall.outcome] ||
+              outcomeConfig.completed;
+            const statusCfg = statusConfig[transcriptCall.call_status] || statusConfig.in_progress;
+            const TIcon = dispCfg.icon;
             return (
               <>
                 {/* Header */}
@@ -717,7 +741,7 @@ export function CallHistoryCard({ calls, callsTotal, onRefresh, onLoadMore, hasM
                 <div className="rounded-lg border bg-muted/30 px-4 py-3 mb-4">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <div className={`flex h-9 w-9 items-center justify-center rounded-full ${config.color}`}>
+                      <div className={`flex h-9 w-9 items-center justify-center rounded-full ${dispCfg.color}`}>
                         <TIcon className="h-4 w-4" />
                       </div>
                       <div>
@@ -733,8 +757,11 @@ export function CallHistoryCard({ calls, callsTotal, onRefresh, onLoadMore, hasM
                         <Clock className="h-3 w-3" />
                         {formatDuration(transcriptCall.duration_seconds)}
                       </span>
-                      <Badge variant={config.variant} className="text-xs">
-                        {config.label}
+                      <Badge variant={statusCfg.variant} className="text-xs">
+                        {statusCfg.label}
+                      </Badge>
+                      <Badge variant="outline" className="text-xs">
+                        {dispCfg.label}
                       </Badge>
                     </div>
                   </div>
@@ -819,8 +846,12 @@ export function CallHistoryCard({ calls, callsTotal, onRefresh, onLoadMore, hasM
       <Dialog open={!!eventsCall} onOpenChange={() => setEventsCall(null)}>
         <DialogContent className="max-w-lg max-h-[70vh] overflow-hidden flex flex-col gap-0">
           {eventsCall && (() => {
-            const config = outcomeConfig[eventsCall.outcome] || outcomeConfig.completed;
-            const EIcon = config.icon;
+            const dispCfg =
+              dispositionConfig[eventsCall.call_disposition] ||
+              outcomeConfig[eventsCall.outcome] ||
+              outcomeConfig.completed;
+            const statusCfg = statusConfig[eventsCall.call_status] || statusConfig.in_progress;
+            const EIcon = dispCfg.icon;
             const systemEntries = eventsCall.transcript.filter((e) => e.speaker === "system");
 
             const categorize = (text: string) => {
@@ -841,7 +872,7 @@ export function CallHistoryCard({ calls, callsTotal, onRefresh, onLoadMore, hasM
                 <div className="rounded-lg border bg-muted/30 px-4 py-3 mb-4">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <div className={`flex h-9 w-9 items-center justify-center rounded-full ${config.color}`}>
+                      <div className={`flex h-9 w-9 items-center justify-center rounded-full ${dispCfg.color}`}>
                         <EIcon className="h-4 w-4" />
                       </div>
                       <div>
@@ -856,8 +887,11 @@ export function CallHistoryCard({ calls, callsTotal, onRefresh, onLoadMore, hasM
                       <Badge variant="outline" className="text-[10px] tabular-nums">
                         {systemEntries.length} event{systemEntries.length !== 1 ? "s" : ""}
                       </Badge>
-                      <Badge variant={config.variant} className="text-xs">
-                        {config.label}
+                      <Badge variant={statusCfg.variant} className="text-xs">
+                        {statusCfg.label}
+                      </Badge>
+                      <Badge variant="outline" className="text-xs">
+                        {dispCfg.label}
                       </Badge>
                     </div>
                   </div>

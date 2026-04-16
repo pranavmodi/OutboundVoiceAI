@@ -37,10 +37,15 @@ export interface Patient {
   has_called_in_before: boolean;
   has_abandoned_before: boolean;
   ai_called_before: boolean;
-  attempt_count: number;
+  ai_attempt_count: number;
+  human_attempt_count: number;
+  total_attempts: number;
+  attempt_count: number; // legacy alias for total_attempts
   last_attempt_at: string | null;
   last_outcome: string | null;
   due_by: string | null;
+  radflow_status: string | null;
+  hl7_sent_at: string | null;
   priority_bucket: number;
 }
 
@@ -64,6 +69,7 @@ export interface CallLog {
   call_status: string;         // "called" | "failed" | "in_progress"
   call_disposition: string;    // "transferred" | "hung_up" | "no_answer" | etc.
   mock_mode: boolean;          // true if this call was redirected to a test number
+  voice_provider: string;      // "openai" or "gemini"
   transfer_attempted: boolean;
   transfer_success: boolean;
   voicemail_left: boolean;
@@ -189,8 +195,10 @@ export interface QueueThresholds {
 export interface DispatcherSettings {
   poll_interval: number;
   dispatch_timeout: number;
-  max_attempts: number;
+  max_attempts_ordered: number;
+  max_attempts_other: number;
   min_hours_between: number;
+  verbose_logging?: boolean;
 }
 
 export interface DailyReportConfig {
@@ -226,6 +234,10 @@ export interface TimeSlotStats {
   voicemail: number;
   callback: number;
   hung_up: number;
+  wrong_number: number;
+  technical_error: number;
+  disconnected_number: number;
+  completed: number;
   transfer_rate: number;
   no_answer_rate: number;
   voicemail_rate: number;

@@ -84,6 +84,9 @@ function StatsTable<T extends DayStats | HourStats>({
               <th className="py-2 px-3 font-medium text-muted-foreground text-right">Voicemail</th>
               <th className="py-2 px-3 font-medium text-muted-foreground text-right">Callback</th>
               <th className="py-2 px-3 font-medium text-muted-foreground text-right">Hung Up</th>
+              <th className="py-2 px-3 font-medium text-muted-foreground text-right">Wrong #</th>
+              <th className="py-2 px-3 font-medium text-muted-foreground text-right">Error</th>
+              <th className="py-2 px-3 font-medium text-muted-foreground text-right">Disconn.</th>
             </tr>
           </thead>
           <tbody>
@@ -119,6 +122,9 @@ function StatsTable<T extends DayStats | HourStats>({
                   <td className="py-2 px-3 text-right text-muted-foreground">{row.voicemail}</td>
                   <td className="py-2 px-3 text-right text-muted-foreground">{row.callback}</td>
                   <td className="py-2 px-3 text-right text-muted-foreground">{row.hung_up}</td>
+                  <td className="py-2 px-3 text-right text-muted-foreground">{row.wrong_number}</td>
+                  <td className="py-2 px-3 text-right text-muted-foreground">{row.technical_error}</td>
+                  <td className="py-2 px-3 text-right text-muted-foreground">{row.disconnected_number}</td>
                 </tr>
               );
             })}
