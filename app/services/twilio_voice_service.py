@@ -48,6 +48,11 @@ def pop_bridge(stream_id: str) -> Optional["TwilioMediaBridge"]:
 class TwilioMediaBridge:
     """Bridges a Twilio media stream WebSocket with an OpenAI RealtimeVoiceService."""
 
+    # Twilio rings for up to ~30s before giving up.  After answer, it still
+    # needs to fetch TwiML, open the WebSocket, and send the "start" event.
+    # 60s gives headroom for ring + connection without false-positive timeouts.
+    DEFAULT_STREAM_TIMEOUT = 60.0
+
     def __init__(self, voice_service: RealtimeVoiceService, verbose: bool = False):
         self.voice_service = voice_service
         self._verbose = verbose
@@ -55,6 +60,7 @@ class TwilioMediaBridge:
         self._stream_sid: Optional[str] = None
         self._call_sid: Optional[str] = None
         self._connected = asyncio.Event()
+        self._aborted = asyncio.Event()
 
         # Wire OpenAI audio output → Twilio
         self._original_on_audio = voice_service.on_audio
@@ -122,12 +128,28 @@ class TwilioMediaBridge:
             self._twilio_ws = None
             self._connected.clear()
 
-    async def wait_for_connection(self, timeout: float = 30.0) -> bool:
-        """Wait for Twilio to connect the media stream."""
+    def abort(self):
+        """Signal that the call failed (canceled/no-answer/busy) so
+        wait_for_connection returns immediately instead of blocking
+        until the full timeout."""
+        self._aborted.set()
+
+    async def wait_for_connection(self, timeout: float | None = None) -> bool:
+        """Wait for Twilio to connect the media stream, or abort early
+        if the call is canceled/failed before media connects."""
+        if timeout is None:
+            timeout = self.DEFAULT_STREAM_TIMEOUT
         try:
-            await asyncio.wait_for(self._connected.wait(), timeout=timeout)
-            return True
-        except asyncio.TimeoutError:
+            done, _ = await asyncio.wait(
+                [
+                    asyncio.create_task(self._connected.wait()),
+                    asyncio.create_task(self._aborted.wait()),
+                ],
+                timeout=timeout,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            return self._connected.is_set() and not self._aborted.is_set()
+        except Exception:
             return False
 
 

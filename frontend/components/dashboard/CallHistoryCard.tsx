@@ -43,6 +43,7 @@ import {
   Play,
 } from "lucide-react";
 import { formatDate, formatTime, formatDuration } from "@/lib/utils";
+import { Skeleton } from "@/components/ui/skeleton";
 import type { CallLog } from "@/types";
 
 interface CallHistoryCardProps {
@@ -52,6 +53,7 @@ interface CallHistoryCardProps {
   onLoadMore: () => void;
   hasMore: boolean;
   onSearchChange?: (search: string) => void;
+  loading?: boolean;
 }
 
 const outcomeConfig: Record<
@@ -164,7 +166,7 @@ function getDateLabel(dateKey: string): string {
   return formatDate(new Date(`${dateKey}T12:00:00`));
 }
 
-export function CallHistoryCard({ calls, callsTotal, onRefresh, onLoadMore, hasMore, onSearchChange }: CallHistoryCardProps) {
+export function CallHistoryCard({ calls, callsTotal, onRefresh, onLoadMore, hasMore, onSearchChange, loading }: CallHistoryCardProps) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [transcriptCall, setTranscriptCall] = useState<CallLog | null>(null);
   const [eventsCall, setEventsCall] = useState<CallLog | null>(null);
@@ -437,7 +439,23 @@ export function CallHistoryCard({ calls, callsTotal, onRefresh, onLoadMore, hasM
         <CardContent className="flex-1 p-0">
           <ScrollArea className="h-[520px]">
             <div className="space-y-3 px-6 pb-6 pt-2">
-              {calls.length === 0 ? (
+              {loading ? (
+                <div className="space-y-3">
+                  {[0, 1, 2, 3, 4].map((i) => (
+                    <div key={i} className="rounded-lg border p-3 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <Skeleton className="h-4 w-36" />
+                        <Skeleton className="h-5 w-20 rounded-full" />
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <Skeleton className="h-3 w-24" />
+                        <Skeleton className="h-3 w-16" />
+                        <Skeleton className="h-3 w-12" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : calls.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
                   <History className="h-12 w-12 mb-3 opacity-10" />
                   <p className="text-sm font-medium">No calls yet</p>

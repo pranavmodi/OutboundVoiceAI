@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useMemo } from "react";
-import type { SystemStatus, Patient, CallLog, QueueState, SystemSettings, BusinessHours, QueueThresholds, DispatcherSettings, SimulationScenario, ScenarioPatient, TodayKpis, TimePerformance } from "@/types";
+import type { SystemStatus, Patient, CallLog, QueueState, SystemSettings, BusinessHours, QueueThresholds, DispatcherSettings, SimulationScenario, ScenarioPatient, TodayKpis, TimePerformance, AuditEvent } from "@/types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -440,6 +440,47 @@ export function useApi() {
     }
   }, []);
 
+  const updateCallGreeting = useCallback(async (callGreeting: string): Promise<SystemSettings | null> => {
+    try {
+      return await fetchApi<SystemSettings>("/api/settings/call-greeting", {
+        method: "PUT",
+        body: JSON.stringify({ call_greeting: callGreeting }),
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
+  const updateVoices = useCallback(async (openaiVoice: string, geminiVoice: string): Promise<SystemSettings | null> => {
+    try {
+      return await fetchApi<SystemSettings>("/api/settings/voices", {
+        method: "PUT",
+        body: JSON.stringify({ openai_voice: openaiVoice, gemini_voice: geminiVoice }),
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
+  const previewVoice = useCallback(async (provider: string, voice: string): Promise<string | null> => {
+    try {
+      const baseUrl = process.env.NEXT_PUBLIC_API_URL || "";
+      const resp = await fetch(`${baseUrl}/api/settings/voice-preview`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider, voice }),
+      });
+      if (!resp.ok) throw new Error(`Voice preview failed: ${resp.status}`);
+      const blob = await resp.blob();
+      return URL.createObjectURL(blob);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
   const setCallMode = useCallback(async (callMode: string): Promise<SystemSettings | null> => {
     try {
       return await fetchApi<SystemSettings>("/api/settings/call-mode", {
@@ -499,6 +540,33 @@ export function useApi() {
     }
   }, []);
 
+  const getAuditLog = useCallback(async (params: {
+    limit?: number;
+    offset?: number;
+    event_type?: string;
+    status?: string;
+    patient_id?: string;
+    search?: string;
+    start_date?: string;
+    end_date?: string;
+  } = {}): Promise<{ events: AuditEvent[]; total: number }> => {
+    try {
+      const sp = new URLSearchParams();
+      if (params.limit) sp.set("limit", String(params.limit));
+      if (params.offset) sp.set("offset", String(params.offset));
+      if (params.event_type && params.event_type !== "all") sp.set("event_type", params.event_type);
+      if (params.status && params.status !== "all") sp.set("status", params.status);
+      if (params.patient_id) sp.set("patient_id", params.patient_id);
+      if (params.search) sp.set("search", params.search);
+      if (params.start_date) sp.set("start_date", params.start_date);
+      if (params.end_date) sp.set("end_date", params.end_date);
+      return await fetchApi<{ events: AuditEvent[]; total: number }>(`/api/audit?${sp.toString()}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return { events: [], total: 0 };
+    }
+  }, []);
+
   const deleteAllCalls = useCallback(async (): Promise<boolean> => {
     try {
       await fetchApi("/api/calls", { method: "DELETE" });
@@ -554,11 +622,15 @@ export function useApi() {
     setQueueSource,
     setPatientSource,
     setVoiceProvider,
+    updateCallGreeting,
+    updateVoices,
+    previewVoice,
     setCallMode,
     setMockMode,
     updateDailyReport,
     sendTestDailyReport,
     getTimePerformance,
+    getAuditLog,
     getTimezones,
     deleteAllCalls,
   }), [
@@ -597,11 +669,15 @@ export function useApi() {
     setQueueSource,
     setPatientSource,
     setVoiceProvider,
+    updateCallGreeting,
+    updateVoices,
+    previewVoice,
     setCallMode,
     setMockMode,
     updateDailyReport,
     sendTestDailyReport,
     getTimePerformance,
+    getAuditLog,
     getTimezones,
     deleteAllCalls,
   ]);

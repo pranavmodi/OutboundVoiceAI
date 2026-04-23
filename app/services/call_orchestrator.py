@@ -82,29 +82,51 @@ class CallOrchestrator:
         if normalized.startswith("machine"):
             self._voicemail_handled = True
             call = self._current_call
-            call_log_provider = get_call_log_provider()
-            await call_log_provider.update_call(call.call_id, voicemail_left=True)
-            call.voicemail_left = True
             if self.on_status_update:
                 await self.on_status_update(f"Twilio AMD: voicemail detected ({answered_by})")
 
-            callback_number = get_callback_number().strip() or "800-558-2223"
-            message = (
-                "Hi, this is Ashley with Precise Imaging. We received your doctor's imaging order "
-                "and need to schedule your appointment. "
-                f"Please call us back at {callback_number}, Monday through Friday, 8 AM to 5 PM Pacific. "
-                "Thank you and have a good day."
-            )
-
-            try:
-                from app.services.twilio_voice_service import play_voicemail_and_hangup
-                await asyncio.to_thread(play_voicemail_and_hangup, call_sid, message)
-            except Exception as e:
-                logger.warning("Failed to play voicemail for call %s: %s", call.call_id, e)
-                if self.on_status_update:
-                    await self.on_status_update(f"Voicemail playback failed: {str(e)}")
-
-            await self.end_call(CallOutcome.VOICEMAIL)
+            # Instead of redirecting the Twilio call (which kills the media
+            # stream and prevents detecting iPhone Live Voicemail pickups),
+            # inject a system message so the AI speaks the voicemail inline.
+            # If the person picks up mid-message (iPhone Live Voicemail),
+            # the AI will hear them and switch to a live conversation.
+            if self._voice_service and self._voice_service.is_connected:
+                callback_number = get_callback_number().strip() or "800-558-2223"
+                await self._voice_service.inject_system_message(
+                    f"[System: You have reached a voicemail or answering machine. "
+                    f"The beep has played. Please leave a brief voicemail message now. "
+                    f"Say: 'Hi, this is Ashley with Precise Imaging. We received your doctor's "
+                    f"imaging order and need to schedule your appointment. Please call us back at "
+                    f"{callback_number}, Monday through Friday, 8 AM to 5 PM Pacific. "
+                    f"Thank you and have a good day.' "
+                    f"After speaking, call end_call with reason 'voicemail'. "
+                    f"IMPORTANT: If at any point a real person interrupts and says hello, "
+                    f"STOP the voicemail message and switch to the normal live conversation.]"
+                )
+                call_log_provider = get_call_log_provider()
+                await call_log_provider.update_call(call.call_id, voicemail_left=True)
+                call.voicemail_left = True
+                await call_log_provider.add_transcript(
+                    call.call_id, "system", f"AMD detected voicemail ({answered_by}) — AI leaving message inline"
+                )
+            else:
+                # Fallback: voice service not connected, try old redirect method
+                callback_number = get_callback_number().strip() or "800-558-2223"
+                message = (
+                    "Hi, this is Ashley with Precise Imaging. We received your doctor's imaging order "
+                    "and need to schedule your appointment. "
+                    f"Please call us back at {callback_number}, Monday through Friday, 8 AM to 5 PM Pacific. "
+                    "Thank you and have a good day."
+                )
+                try:
+                    from app.services.twilio_voice_service import play_voicemail_and_hangup
+                    await asyncio.to_thread(play_voicemail_and_hangup, call_sid, message)
+                except Exception as e:
+                    logger.warning("Failed to play voicemail for call %s: %s", call.call_id, e)
+                call_log_provider = get_call_log_provider()
+                await call_log_provider.update_call(call.call_id, voicemail_left=True)
+                call.voicemail_left = True
+                await self.end_call(CallOutcome.VOICEMAIL)
 
     async def handle_twilio_call_status(
         self,
@@ -113,8 +135,16 @@ class CallOrchestrator:
         error_code_raw: str = "",
         sip_response_code_raw: str = "",
     ):
-        """Delegate to CarrierFailureHandler."""
+        """Delegate to CarrierFailureHandler + abort media wait on terminal statuses."""
         self._sync_status_callback()
+
+        # If Twilio says the call is done before media connected, abort
+        # wait_for_connection immediately instead of burning the full timeout.
+        status = (call_status or "").strip().lower()
+        if status in ("canceled", "no-answer", "busy", "failed") and self._twilio_bridge:
+            print(f"[CallOrchestrator] Twilio status={status} — aborting media stream wait")
+            self._twilio_bridge.abort()
+
         await self._carrier_failure.handle_twilio_call_status(
             call_sid, call_status, error_code_raw, sip_response_code_raw,
         )
@@ -172,12 +202,13 @@ class CallOrchestrator:
         audio_format = "g711_ulaw" if call_mode == "twilio" else "pcm16"
         voice_provider = settings.voice_provider or "openai"
 
+        ds = settings.dispatcher_settings
         if voice_provider == "gemini":
             from app.services.gemini_voice import GeminiVoiceService
-            self._voice_service = GeminiVoiceService(audio_format=audio_format, verbose=self._verbose)
+            self._voice_service = GeminiVoiceService(audio_format=audio_format, verbose=self._verbose, voice=ds.gemini_voice, call_greeting=ds.call_greeting)
         else:
             from app.services.realtime_voice import RealtimeVoiceService
-            self._voice_service = RealtimeVoiceService(audio_format=audio_format, verbose=self._verbose)
+            self._voice_service = RealtimeVoiceService(audio_format=audio_format, verbose=self._verbose, voice=ds.openai_voice, call_greeting=ds.call_greeting)
 
         self._voice_service.on_transcript = self._handle_transcript
         self._voice_service.on_audio = self._handle_audio
@@ -294,10 +325,10 @@ class CallOrchestrator:
                 await self.on_status_update("Waiting for call to connect...")
             if self._verbose:
                 print(f"[CallOrchestrator] Waiting for Twilio media stream to connect for call {call.call_id}...")
-            connected = await self._twilio_bridge.wait_for_connection(timeout=30)
+            connected = await self._twilio_bridge.wait_for_connection()
             if not connected:
                 print(f"[CallOrchestrator] Twilio media stream timed out for call {call.call_id}")
-                self._last_start_error = "Twilio media stream did not connect within 30 seconds (call may not have been answered)"
+                self._last_start_error = "Twilio media stream did not connect (call may not have been answered)"
                 if self.on_error:
                     await self.on_error("Twilio media stream connection timed out")
                 await call_log_provider.update_call(

@@ -173,6 +173,32 @@ class PatientCallStateRow(Base):
     )
 
 
+class AuditEventRow(Base):
+    """Log of every external API call the system makes on behalf of a patient."""
+    __tablename__ = "audit_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    call_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    patient_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    patient_name: Mapped[str] = mapped_column(String(255), default="")
+    order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    event_type: Mapped[str] = mapped_column(String(32), nullable=False)  # radflow | hl7 | sms | email | slack
+    action: Mapped[str] = mapped_column(String(64), nullable=False)  # post_outcome | post_hl7_status | send_sms | send_email | send_slack
+    status: Mapped[str] = mapped_column(String(16), nullable=False)  # success | failed | skipped
+    request_summary: Mapped[str] = mapped_column(Text, default="")
+    request_payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    response_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=_utcnow)
+
+    __table_args__ = (
+        Index("ix_audit_events_created_at", "created_at"),
+        Index("ix_audit_events_patient_id", "patient_id"),
+        Index("ix_audit_events_event_type", "event_type"),
+        Index("ix_audit_events_call_id", "call_id"),
+    )
+
+
 class SimulationScenarioRow(Base):
     __tablename__ = "simulation_scenarios"
 

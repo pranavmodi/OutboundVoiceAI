@@ -1,18 +1,38 @@
 "use client";
 
 import { Card, CardContent } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { PhoneCall, PhoneForwarded, MessageSquare } from "lucide-react";
 import type { TodayKpis } from "@/types";
 
 interface KpiBarProps {
   kpis: TodayKpis | null;
+  loading?: boolean;
 }
 
-export function KpiBar({ kpis }: KpiBarProps) {
+export function KpiBar({ kpis, loading }: KpiBarProps) {
   const calls = kpis?.total_calls ?? 0;
   const transferred = kpis?.transferred ?? 0;
   const voicemails = kpis?.voicemails ?? 0;
   const sms = kpis?.sms ?? 0;
+
+  if (loading) {
+    return (
+      <div className="grid gap-4 md:grid-cols-3">
+        {[0, 1, 2].map((i) => (
+          <Card key={i} className="flex items-center">
+            <CardContent className="flex items-center gap-4 p-4 w-full">
+              <Skeleton className="h-11 w-11 rounded-full shrink-0" />
+              <div className="space-y-2 min-w-0">
+                <Skeleton className="h-3 w-20" />
+                <Skeleton className="h-7 w-12" />
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    );
+  }
 
   return (
     <div className="grid gap-4 md:grid-cols-3">

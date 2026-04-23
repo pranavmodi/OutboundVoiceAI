@@ -21,7 +21,7 @@ import websockets
 from dotenv import load_dotenv
 
 from app.services.voice_service_base import BaseVoiceService
-from app.services.realtime_voice import SYSTEM_INSTRUCTIONS
+from app.services.realtime_voice import build_system_instructions
 
 # Ensure .env is loaded
 _project_root = Path(__file__).resolve().parent.parent.parent
@@ -52,8 +52,10 @@ class GeminiSession:
 class GeminiVoiceService(BaseVoiceService):
     """Manages Google Gemini Live API connections for voice calls."""
 
-    def __init__(self, audio_format: str = "pcm16", verbose: bool = False):
+    def __init__(self, audio_format: str = "pcm16", verbose: bool = False, voice: str = "", call_greeting: str = ""):
         super().__init__(audio_format=audio_format, verbose=verbose)
+        self._voice = voice or GEMINI_VOICE
+        self._call_greeting = call_greeting
         self._ws = None
         self._session: Optional[GeminiSession] = None
         self._api_key = os.getenv("GEMINI_API_KEY", "")
@@ -114,7 +116,7 @@ class GeminiVoiceService(BaseVoiceService):
     async def _configure_session(self, patient_name: str, patient_language: str = "en"):
         """Send the BidiGenerateContent setup message."""
         language_instruction = self._language_instruction(patient_language)
-        instructions = f"{SYSTEM_INSTRUCTIONS}\n\n{language_instruction}"
+        instructions = f"{build_system_instructions(self._call_greeting)}\n\n{language_instruction}"
 
         # Tools in Gemini functionDeclarations format
         tools = [
@@ -189,7 +191,7 @@ class GeminiVoiceService(BaseVoiceService):
                     "speechConfig": {
                         "voiceConfig": {
                             "prebuiltVoiceConfig": {
-                                "voiceName": GEMINI_VOICE,
+                                "voiceName": self._voice,
                             }
                         }
                     },
@@ -212,16 +214,24 @@ class GeminiVoiceService(BaseVoiceService):
 
         try:
             async for message in self._ws:
+                if isinstance(message, bytes):
+                    try:
+                        message = message.decode("utf-8")
+                    except UnicodeDecodeError:
+                        continue
                 await self._handle_message(message)
             print(f"[GeminiVoice] WebSocket closed normally")
         except websockets.exceptions.ConnectionClosed as e:
             print(f"[GeminiVoice] WebSocket closed: code={e.code}, reason={e.reason}")
-            if self.on_session_ended:
-                await self.on_session_ended()
         except Exception as e:
             print(f"[GeminiVoice] Listen error: {type(e).__name__}: {e}")
             if self.on_error:
                 await self.on_error(f"Listen error: {str(e)}")
+        finally:
+            if self._session:
+                self._session.is_active = False
+            if self.on_session_ended:
+                await self.on_session_ended()
 
     async def _handle_message(self, message: str):
         """Handle incoming message from Gemini."""
@@ -291,12 +301,14 @@ class GeminiVoiceService(BaseVoiceService):
                 if text and self.on_transcript:
                     await self.on_transcript("ai", text)
 
-        # Output audio transcription (AI speech text)
+        # Output audio transcription — final text of what the AI said.
+        # Must use "ai_complete" (not "ai") so the orchestrator persists it
+        # to the call log. "ai" is treated as a streaming delta.
         output_transcription = content.get("outputTranscription") or content.get("output_transcription")
         if output_transcription:
             text = output_transcription.get("text", "")
             if text and self.on_transcript:
-                await self.on_transcript("ai", text)
+                await self.on_transcript("ai_complete", text)
 
         # Input (patient) transcription
         input_transcription = content.get("inputTranscription") or content.get("input_transcription")
@@ -406,6 +418,16 @@ class GeminiVoiceService(BaseVoiceService):
                 "text": f"[System: The call has just connected. The patient's name is {first_name}. Please greet them and begin the call.]"
             }
         })
+
+    async def inject_system_message(self, text: str) -> None:
+        """Inject a system-level text message into the active conversation.
+
+        Uses realtimeInput.text — clientContent.turns is rejected by
+        gemini-3.1-flash-live-preview with 'invalid argument'.
+        """
+        if not self._ws:
+            return
+        await self._send({"realtimeInput": {"text": text}})
 
     async def disconnect(self) -> None:
         """Disconnect from Gemini."""

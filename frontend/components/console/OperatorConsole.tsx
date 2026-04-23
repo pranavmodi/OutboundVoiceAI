@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
@@ -33,6 +34,10 @@ import {
   ChevronDown,
   MessageSquare,
   Bot,
+  Play,
+  Loader2,
+  FileText,
+  RotateCcw,
 } from "lucide-react";
 import { InfoTooltip } from "@/components/ui/info-tooltip";
 import type {
@@ -43,6 +48,111 @@ import type {
   DispatcherSettings,
   SimulationScenario,
 } from "@/types";
+
+const OPENAI_VOICES = ["alloy", "ash", "ballad", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer", "verse"];
+const GEMINI_VOICES = ["Aoede", "Charon", "Fenrir", "Kore", "Puck", "Leda", "Orus", "Perseus", "Zephyr"];
+
+function VoiceRow({
+  label,
+  provider,
+  voices,
+  currentVoice,
+  onVoiceChange,
+  onPreview,
+}: {
+  label: string;
+  provider: string;
+  voices: string[];
+  currentVoice: string;
+  onVoiceChange: (voice: string) => void;
+  onPreview: (provider: string, voice: string) => Promise<string | null>;
+}) {
+  const [previewing, setPreviewing] = useState<string | null>(null);
+
+  const handlePreview = async (voice: string) => {
+    setPreviewing(voice);
+    try {
+      const url = await onPreview(provider, voice);
+      if (url) {
+        const audio = new Audio(url);
+        audio.play();
+        audio.onended = () => {
+          setPreviewing(null);
+          URL.revokeObjectURL(url);
+        };
+      } else {
+        setPreviewing(null);
+      }
+    } catch {
+      setPreviewing(null);
+    }
+  };
+
+  return (
+    <div className="space-y-1.5">
+      <Label className="text-xs text-muted-foreground">{label}</Label>
+      <div className="flex items-center gap-2">
+        <Select value={currentVoice} onValueChange={onVoiceChange}>
+          <SelectTrigger className="w-40">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {voices.map((v) => (
+              <SelectItem key={v} value={v}>{v}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => handlePreview(currentVoice)}
+          disabled={previewing !== null}
+          className="h-9 px-3"
+        >
+          {previewing ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Play className="h-3.5 w-3.5" />
+          )}
+          <span className="ml-1.5">Preview</span>
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function VoiceSelector({
+  openaiVoice,
+  geminiVoice,
+  onSave,
+  onPreview,
+}: {
+  openaiVoice: string;
+  geminiVoice: string;
+  onSave: (openaiVoice: string, geminiVoice: string) => Promise<void>;
+  onPreview: (provider: string, voice: string) => Promise<string | null>;
+}) {
+  return (
+    <div className="space-y-3 mt-3">
+      <VoiceRow
+        label="OpenAI Voice"
+        provider="openai"
+        voices={OPENAI_VOICES}
+        currentVoice={openaiVoice}
+        onVoiceChange={(v) => onSave(v, geminiVoice)}
+        onPreview={onPreview}
+      />
+      <VoiceRow
+        label="Gemini Voice"
+        provider="gemini"
+        voices={GEMINI_VOICES}
+        currentVoice={geminiVoice}
+        onVoiceChange={(v) => onSave(openaiVoice, v)}
+        onPreview={onPreview}
+      />
+    </div>
+  );
+}
 
 interface OperatorConsoleProps {
   settings: SystemSettings | null;
@@ -61,6 +171,9 @@ interface OperatorConsoleProps {
   onSetQueueSource: (source: string) => Promise<void>;
   onSetPatientSource: (source: string) => Promise<void>;
   onSetActiveScenario: (id: string) => Promise<void>;
+  onUpdateVoices: (openaiVoice: string, geminiVoice: string) => Promise<void>;
+  onPreviewVoice: (provider: string, voice: string) => Promise<string | null>;
+  onUpdateCallGreeting: (greeting: string) => Promise<void>;
 }
 
 export function OperatorConsole({
@@ -80,6 +193,9 @@ export function OperatorConsole({
   onSetQueueSource,
   onSetPatientSource,
   onSetActiveScenario,
+  onUpdateVoices,
+  onPreviewVoice,
+  onUpdateCallGreeting,
 }: OperatorConsoleProps) {
   const [businessHoursForm, setBusinessHoursForm] = useState<BusinessHours>({
     start_time: "08:00",
@@ -106,6 +222,11 @@ export function OperatorConsole({
     min_hours_between: 6,
   });
 
+  const DEFAULT_GREETING = "Hi, this is Ashley with Precise Imaging. We received your doctor's imaging order and need to schedule your appointment. Are you available now to schedule your appointment?";
+  const [greetingText, setGreetingText] = useState(settings?.dispatcher_settings?.call_greeting || DEFAULT_GREETING);
+  const [greetingSaving, setGreetingSaving] = useState(false);
+  const [greetingSaved, setGreetingSaved] = useState(false);
+
   const [mockPhoneInput, setMockPhoneInput] = useState(settings?.mock_phone || "");
   const [holidayEditorOpen, setHolidayEditorOpen] = useState(false);
   const [dailyReportForm, setDailyReportForm] = useState({
@@ -123,6 +244,7 @@ export function OperatorConsole({
       setThresholdsForm(settings.queue_thresholds);
       setDispatcherForm(settings.dispatcher_settings);
       setMockPhoneInput(settings.mock_phone || "");
+      setGreetingText(settings.dispatcher_settings?.call_greeting || DEFAULT_GREETING);
       if (settings.daily_report) {
         setDailyReportForm({
           enabled: settings.daily_report.enabled,
@@ -294,47 +416,115 @@ export function OperatorConsole({
 
       <Separator />
 
-      {/* Voice Provider — hidden for now. Backend still respects settings.voice_provider;
-          switch via the PUT /api/settings/voice-provider endpoint if needed. */}
-      {false && (
-        <>
-          <div className="space-y-3">
-            <div className="flex items-center gap-2">
-              <Bot className="h-4 w-4 text-muted-foreground" />
-              <h4 className="text-sm font-medium">Voice AI Provider</h4>
-              <InfoTooltip content="Choose which AI model powers the voice conversations. OpenAI uses GPT Realtime API. Gemini uses Google's Live API — typically faster and more natural sounding." />
-            </div>
-            <div className="flex items-center gap-4">
-              <Select value={settings?.voice_provider || "openai"} onValueChange={onVoiceProviderChange}>
-                <SelectTrigger className="w-48">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="openai">
-                    <span className="flex items-center gap-2">
-                      OpenAI Realtime
-                    </span>
-                  </SelectItem>
-                  <SelectItem value="gemini">
-                    <span className="flex items-center gap-2">
-                      Google Gemini Live
-                    </span>
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-              <Badge variant="outline" className={
-                (settings?.voice_provider || "openai") === "gemini"
-                  ? "text-blue-600 border-blue-600"
-                  : "text-emerald-600 border-emerald-600"
-              }>
-                {(settings?.voice_provider || "openai") === "gemini" ? "Gemini" : "OpenAI"}
-              </Badge>
-            </div>
-          </div>
+      {/* Voice Provider */}
+      <div className="space-y-3">
+        <div className="flex items-center gap-2">
+          <Bot className="h-4 w-4 text-muted-foreground" />
+          <h4 className="text-sm font-medium">Voice AI Provider</h4>
+          <InfoTooltip content="Choose which AI model powers the voice conversations. OpenAI uses GPT Realtime API. Gemini uses Google's Live API — typically faster and more natural sounding." />
+        </div>
+        <div className="flex items-center gap-4">
+          <Select value={settings?.voice_provider || "openai"} onValueChange={onVoiceProviderChange}>
+            <SelectTrigger className="w-48">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="openai">
+                <span className="flex items-center gap-2">
+                  OpenAI Realtime
+                </span>
+              </SelectItem>
+              <SelectItem value="gemini">
+                <span className="flex items-center gap-2">
+                  Google Gemini Live
+                </span>
+              </SelectItem>
+            </SelectContent>
+          </Select>
+          <Badge variant="outline" className={
+            (settings?.voice_provider || "openai") === "gemini"
+              ? "text-blue-600 border-blue-600"
+              : "text-emerald-600 border-emerald-600"
+          }>
+            {(settings?.voice_provider || "openai") === "gemini" ? "Gemini" : "OpenAI"}
+          </Badge>
+        </div>
+        <VoiceSelector
+          openaiVoice={settings?.dispatcher_settings?.openai_voice || "alloy"}
+          geminiVoice={settings?.dispatcher_settings?.gemini_voice || "Aoede"}
+          onSave={onUpdateVoices}
+          onPreview={onPreviewVoice}
+        />
+      </div>
 
-          <Separator />
-        </>
-      )}
+      <Separator />
+
+      {/* Call Script / Greeting Editor */}
+      <div className="space-y-3">
+        <div className="flex items-center gap-2">
+          <FileText className="h-4 w-4 text-muted-foreground" />
+          <h4 className="text-sm font-medium">Call Script</h4>
+          <InfoTooltip content="The opening greeting Ashley speaks when a patient answers. This is what the AI says at the start of every call. Changes take effect on the next call." />
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Edit the initial greeting the AI speaks when a patient answers. The patient's first name is inserted automatically.
+        </p>
+        <Textarea
+          value={greetingText}
+          onChange={(e) => {
+            setGreetingText(e.target.value);
+            setGreetingSaved(false);
+          }}
+          rows={4}
+          className="text-sm font-mono"
+          placeholder="Hi, this is Ashley with Precise Imaging..."
+        />
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            onClick={async () => {
+              setGreetingSaving(true);
+              setGreetingSaved(false);
+              try {
+                await onUpdateCallGreeting(greetingText);
+                setGreetingSaved(true);
+                setTimeout(() => setGreetingSaved(false), 3000);
+              } finally {
+                setGreetingSaving(false);
+              }
+            }}
+            disabled={greetingSaving}
+          >
+            {greetingSaving ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
+            ) : (
+              <Save className="h-3.5 w-3.5 mr-1.5" />
+            )}
+            Save Greeting
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              const defaultGreeting =
+                "Hi, this is Ashley with Precise Imaging. We received your doctor's imaging order and need to schedule your appointment. Are you available now to schedule your appointment?";
+              setGreetingText(defaultGreeting);
+              setGreetingSaved(false);
+            }}
+          >
+            <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
+            Reset to Default
+          </Button>
+          {greetingSaved && (
+            <span className="text-xs text-emerald-600 flex items-center gap-1">
+              <CheckCircle className="h-3.5 w-3.5" />
+              Saved
+            </span>
+          )}
+        </div>
+      </div>
+
+      <Separator />
 
       {/* Queue Source */}
       <div className="space-y-3">

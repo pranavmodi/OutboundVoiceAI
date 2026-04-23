@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useApi } from "@/hooks/useApi";
 import type { TimePerformance, DayStats, HourStats } from "@/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { ArrowLeft, BarChart3, Clock, Calendar } from "lucide-react";
 import Link from "next/link";
 
@@ -191,8 +192,34 @@ export default function AnalyticsPage() {
         </div>
 
         {loading ? (
-          <div className="flex items-center justify-center py-20 text-muted-foreground">
-            Loading...
+          <div className="space-y-6">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              {[0, 1, 2, 3].map((i) => (
+                <Card key={i}>
+                  <CardContent className="pt-6 pb-4 text-center">
+                    <Skeleton className="h-3 w-20 mx-auto mb-2" />
+                    <Skeleton className="h-8 w-16 mx-auto mb-1" />
+                    <Skeleton className="h-3 w-28 mx-auto" />
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+            <Card>
+              <CardHeader><Skeleton className="h-5 w-40" /></CardHeader>
+              <CardContent>
+                <div className="space-y-3">
+                  {[0, 1, 2, 3, 4, 5, 6].map((i) => (
+                    <div key={i} className="flex gap-3">
+                      <Skeleton className="h-4 w-24" />
+                      <Skeleton className="h-4 w-12" />
+                      <Skeleton className="h-4 w-16 rounded-full" />
+                      <Skeleton className="h-4 w-16 rounded-full" />
+                      <Skeleton className="h-4 w-16 rounded-full" />
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
           </div>
         ) : !data || data.total_calls === 0 ? (
           <Card>

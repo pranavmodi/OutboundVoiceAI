@@ -39,6 +39,15 @@ class BaseVoiceService(ABC):
         ...
 
     @abstractmethod
+    async def inject_system_message(self, text: str) -> None:
+        """Inject a system-level text message into the conversation mid-call.
+
+        Used to notify the AI of events it can't detect from audio alone
+        (e.g., AMD detected voicemail — switch to voicemail mode).
+        """
+        ...
+
+    @abstractmethod
     async def disconnect(self) -> None:
         """Disconnect from the API."""
         ...

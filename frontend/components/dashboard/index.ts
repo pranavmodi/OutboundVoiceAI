@@ -4,3 +4,4 @@ export { ActiveCallCard } from "./ActiveCallCard";
 export { CallHistoryCard } from "./CallHistoryCard";
 export { DispatcherEventsCard } from "./DispatcherEventsCard";
 export { KpiBar } from "./KpiBar";
+export { AuditLogCard } from "./AuditLogCard";

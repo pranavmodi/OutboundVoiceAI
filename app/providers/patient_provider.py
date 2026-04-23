@@ -93,7 +93,9 @@ def _sort_key(p: Patient):
 
 def _eligible_for_queue(p: Patient, settings: DispatcherSettings, cutoff: datetime) -> bool:
     """Queue filter: in-scope status, under the per-status cap, past cooldown,
-    not flagged invalid."""
+    not flagged invalid, has phone number."""
+    if not (p.phone or "").strip():
+        return False  # No phone number — skip entirely
     if STATUS_RANK.get(p.radflow_status or "", 99) >= 99:
         return False  # Unknown status or already "Couldnt Schedule"
     if p.last_outcome == "invalid_number":
@@ -491,7 +493,7 @@ class LivePatientProvider(BasePatientProvider):
 
     # Maps our internal outcome to the RadFlow status code and a human-readable detail
     _OUTCOME_TO_RADFLOW = {
-        "transferred":        {"status": "PATIENT SCHEDULED", "details": "AI transferred to human scheduler"},
+        "transferred":        {"status": "CB", "details": "AI transferred to human scheduler — pending confirmation"},
         "voicemail":          {"status": "VM",                "details": "AI left voicemail"},
         "callback_requested": {"status": "CB",                "details": "Patient requested callback"},
         "completed":          {"status": "CB",                "details": "AI call completed"},
@@ -502,7 +504,7 @@ class LivePatientProvider(BasePatientProvider):
         "hung_up":            {"status": "CB",                "details": "Patient hung up"},
     }
 
-    async def _post_outcome_to_radflow(self, patient_id: str, order_id: Optional[str], outcome: str):
+    async def _post_outcome_to_radflow(self, patient_id: str, order_id: Optional[str], outcome: str, patient_name: str = ""):
         """POST call outcome back to RadFlow SaveCallListLog API.
 
         Skipped entirely when mock_mode is enabled (test calls should
@@ -511,15 +513,21 @@ class LivePatientProvider(BasePatientProvider):
         Payload fields per Danny/Neeraj agreement:
         - patientId, internalStudyId: identifiers
         - type: "Phone Call" (activity kind)
-        - status: PATIENT SCHEDULED / VM / CB / COULD NOT SCHEDULE PATIENT
+        - status: VM / CB / COULD NOT SCHEDULE PATIENT (never "PATIENT SCHEDULED" — this system only transfers, not schedules)
         - details: human-readable description (e.g. "AI transferred to human scheduler")
         - user: "AI"
         - logMethod: "Ordered Scheduler"
         """
         from app.providers.settings_provider import get_settings_provider
+        from app.services.audit_service import log_audit_event
         settings = await get_settings_provider().get_settings()
         if settings.mock_mode:
             logger.info("RadFlow write-back SKIPPED (mock mode): patient=%s outcome=%s", patient_id, outcome)
+            await log_audit_event(
+                event_type="radflow", action="post_outcome", status="skipped",
+                patient_id=patient_id, patient_name=patient_name, order_id=order_id,
+                request_summary=f"Skipped (mock mode) — outcome={outcome}",
+            )
             return
 
         mapping = self._OUTCOME_TO_RADFLOW.get(outcome, {"status": "CB", "details": f"AI call outcome: {outcome}"})
@@ -541,21 +549,44 @@ class LivePatientProvider(BasePatientProvider):
             )
             resp.raise_for_status()
             logger.info("RadFlow write-back OK: patient=%s status=%s details=%s", patient_id, mapping["status"], mapping["details"])
+            await log_audit_event(
+                event_type="radflow", action="post_outcome", status="success",
+                patient_id=patient_id, patient_name=patient_name, order_id=order_id,
+                request_summary=f"{mapping['status']} — {mapping['details']}",
+                request_payload=payload, response_status=resp.status_code,
+            )
         except Exception as e:
             logger.warning("RadFlow write-back failed for patient %s: %s", patient_id, e)
+            await log_audit_event(
+                event_type="radflow", action="post_outcome", status="failed",
+                patient_id=patient_id, patient_name=patient_name, order_id=order_id,
+                request_summary=f"{mapping['status']} — {mapping['details']}",
+                request_payload=payload, error_message=str(e),
+            )
 
-    async def _post_hl7_status(self, order_id: str, status_code: str) -> bool:
+    async def _post_hl7_status(self, order_id: str, status_code: str, patient_name: str = "") -> bool:
         """POST the HL7 status update for a patient (max-attempts-reached).
 
         Returns True on 2xx.  Skipped in mock mode.
         """
         from app.providers.settings_provider import get_settings_provider
+        from app.services.audit_service import log_audit_event
         settings = await get_settings_provider().get_settings()
         if settings.mock_mode:
             logger.info("HL7 status SKIPPED (mock mode): studyId=%s status=%s", order_id, status_code)
+            await log_audit_event(
+                event_type="hl7", action="post_hl7_status", status="skipped",
+                patient_name=patient_name, order_id=order_id,
+                request_summary=f"Skipped (mock mode) — status_code={status_code}",
+            )
             return False
         if not order_id:
             logger.warning("HL7 status SKIPPED: no order_id/studyId available")
+            await log_audit_event(
+                event_type="hl7", action="post_hl7_status", status="skipped",
+                patient_name=patient_name,
+                request_summary="Skipped — no order_id available",
+            )
             return False
 
         payload = [{"studyId": order_id, "status": status_code}]
@@ -568,9 +599,23 @@ class LivePatientProvider(BasePatientProvider):
             )
             resp.raise_for_status()
             logger.info("HL7 status sent OK: studyId=%s status=%s", order_id, status_code)
+            await log_audit_event(
+                event_type="hl7", action="post_hl7_status", status="success",
+                patient_name=patient_name, order_id=order_id,
+                request_summary=f"Status code {status_code} sent for studyId={order_id}",
+                request_payload={"studyId": order_id, "status": status_code},
+                response_status=resp.status_code,
+            )
             return True
         except Exception as e:
             logger.warning("HL7 status POST failed for studyId=%s: %s", order_id, e)
+            await log_audit_event(
+                event_type="hl7", action="post_hl7_status", status="failed",
+                patient_name=patient_name, order_id=order_id,
+                request_summary=f"Status code {status_code} for studyId={order_id}",
+                request_payload={"studyId": order_id, "status": status_code},
+                error_message=str(e),
+            )
             return False
 
     # -- Local state helpers -----------------------------------------------
@@ -691,7 +736,14 @@ class LivePatientProvider(BasePatientProvider):
             max_attempts_other=max_attempts_other,
         )
 
-        filtered = [p for p in patients if _eligible_for_queue(p, settings, cutoff)]
+        filtered = []
+        for p in patients:
+            if not (p.phone or "").strip():
+                from app.services.missing_phone_notifier import notify_missing_phone
+                await notify_missing_phone(p.patient_id, p.name, p.order_id or "")
+                continue
+            if _eligible_for_queue(p, settings, cutoff):
+                filtered.append(p)
         return sorted(filtered, key=_sort_key)
 
     async def get_next_candidate(
@@ -731,7 +783,12 @@ class LivePatientProvider(BasePatientProvider):
             logger.info("Mock state updated: patient=%s outcome=%s ai_attempts=%s (in-memory only)",
                          patient_id, outcome, st["ai_attempt_count"])
             # RadFlow write-back already skipped in mock mode
-            await self._post_outcome_to_radflow(patient_id, None, outcome)
+            mock_name = ""
+            for p in self._cache:
+                if p.patient_id == patient_id:
+                    mock_name = p.name
+                    break
+            await self._post_outcome_to_radflow(patient_id, None, outcome, patient_name=mock_name)
             return
 
         # 1. Update local state table (live mode)
@@ -760,7 +817,7 @@ class LivePatientProvider(BasePatientProvider):
                 cached = p
                 break
         order_id = cached.order_id if cached else None
-        await self._post_outcome_to_radflow(patient_id, order_id, outcome)
+        await self._post_outcome_to_radflow(patient_id, order_id, outcome, patient_name=cached.name if cached else "")
 
         # 3. If this attempt pushed the patient past their status-specific cap,
         # fire the HL7 "Couldnt Schedule" write-back exactly once.
@@ -771,7 +828,7 @@ class LivePatientProvider(BasePatientProvider):
             cap = ds.max_attempts_for_status(cached.radflow_status)
             total = ai_attempts + (cached.human_attempt_count or 0)
             if total >= cap:
-                ok = await self._post_hl7_status(order_id or "", HL7_STATUS_CODE_COULDNT_SCHEDULE)
+                ok = await self._post_hl7_status(order_id or "", HL7_STATUS_CODE_COULDNT_SCHEDULE, patient_name=cached.name if cached else "")
                 if ok:
                     async with AsyncSessionLocal() as session:
                         state = await self._get_local_state(session, patient_id)
@@ -797,7 +854,12 @@ class LivePatientProvider(BasePatientProvider):
             st["last_outcome"] = "invalid_number"
             st["last_attempt_at"] = datetime.now(timezone.utc)
             logger.info("Mock state: patient %s flagged invalid_number (in-memory only): %s", patient_id, reason)
-            await self._post_outcome_to_radflow(patient_id, None, "disconnected")
+            mock_name = ""
+            for p in self._cache:
+                if p.patient_id == patient_id:
+                    mock_name = p.name
+                    break
+            await self._post_outcome_to_radflow(patient_id, None, "disconnected", patient_name=mock_name)
             return
 
         async with AsyncSessionLocal() as session:
@@ -813,11 +875,13 @@ class LivePatientProvider(BasePatientProvider):
 
         # Write back to RadFlow
         order_id = None
+        cached_name = ""
         for p in self._cache:
             if p.patient_id == patient_id:
                 order_id = p.order_id
+                cached_name = p.name
                 break
-        await self._post_outcome_to_radflow(patient_id, order_id, "disconnected")
+        await self._post_outcome_to_radflow(patient_id, order_id, "disconnected", patient_name=cached_name)
 
 
 # ---------------------------------------------------------------------------

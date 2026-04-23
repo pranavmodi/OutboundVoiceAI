@@ -94,6 +94,7 @@ async def send_daily_report(for_date: Optional[date] = None) -> bool:
     stats = await provider.get_stats_for_date(for_date, tz_name=tz_name)
     payload = _format_slack_message(stats)
 
+    from app.services.audit_service import log_audit_event
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(webhook_url, json=payload)
@@ -103,9 +104,20 @@ async def send_daily_report(for_date: Optional[date] = None) -> bool:
             stats.get("date"), stats.get("total_calls", 0),
             stats.get("dispositions", {}).get("transferred", 0),
         )
+        await log_audit_event(
+            event_type="slack", action="send_daily_report", status="success",
+            request_summary=f"Daily report for {stats.get('date')} — {stats.get('total_calls', 0)} calls",
+            request_payload={"date": stats.get("date"), "total_calls": stats.get("total_calls", 0)},
+            response_status=resp.status_code,
+        )
         return True
     except Exception as e:
         logger.warning("Failed to send daily report to Slack: %s", e)
+        await log_audit_event(
+            event_type="slack", action="send_daily_report", status="failed",
+            request_summary=f"Daily report for {stats.get('date')} failed",
+            error_message=str(e),
+        )
         return False
 
 

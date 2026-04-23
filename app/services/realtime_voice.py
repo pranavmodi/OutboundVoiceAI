@@ -32,7 +32,16 @@ class VoiceSession:
     conversation_id: Optional[str] = None
 
 
-SYSTEM_INSTRUCTIONS = """You are Ashley, an outbound voice assistant calling patients on behalf of Precise Imaging.
+from app.models.system_settings import DEFAULT_CALL_GREETING
+
+
+def build_system_instructions(call_greeting: str = "") -> str:
+    """Build the system prompt, injecting the configurable call greeting."""
+    greeting = call_greeting.strip() if call_greeting else DEFAULT_CALL_GREETING
+    return _SYSTEM_INSTRUCTIONS_TEMPLATE.replace("{{CALL_GREETING}}", greeting)
+
+
+_SYSTEM_INSTRUCTIONS_TEMPLATE = """You are Ashley, an outbound voice assistant calling patients on behalf of Precise Imaging.
 
 Your ONLY goal is to determine whether the patient is available to be transferred to a scheduling team member right now.
 
@@ -46,7 +55,7 @@ Your ONLY goal is to determine whether the patient is available to be transferre
 
 ## Call Opening
 Say exactly (using the patient's first name):
-"Hi, this is Ashley with Precise Imaging. We received your doctor's imaging order and need to schedule your appointment. Are you available now to schedule your appointment?"
+"{{CALL_GREETING}}"
 
 ## If Patient Says YES (available now)
 1. Say: "Ok, please hold while I transfer you to the next available team member that can schedule your exam. You will be put on a brief hold."
@@ -67,7 +76,53 @@ Say exactly (using the patient's first name):
 - Do NOT offer transfer.
 
 ## If You Reach Voicemail
-- End the call using `end_call` with reason `voicemail`.
+You MUST detect voicemail greetings and respond appropriately. Voicemail indicators include ANY of these phrases (from the patient side):
+- "Your call has been forwarded to voicemail"
+- "The person you're trying to reach is not available"
+- "is not available, at the tone please record your message"
+- "Please leave a message after the beep"
+- "Leave your message after the tone"
+- "The number you have dialed is not available"
+- "The mailbox is full"
+- Any standard carrier or phone voicemail greeting
+
+When you detect voicemail:
+1. STOP speaking immediately if you were mid-sentence.
+2. WAIT for the beep/tone before speaking.
+3. After the beep, leave this message: "Hi, this is Ashley with Precise Imaging. We received your doctor's imaging order and need to schedule your appointment. Please call us back at 800-558-2223, Monday through Friday, 8 AM to 5 PM Pacific. Thank you and have a good day."
+4. Then call `end_call` with reason `voicemail`.
+
+CRITICAL: Do NOT talk over the voicemail greeting. Do NOT continue your normal script when you hear voicemail phrases. STOP and wait for the beep.
+
+If the system tells you "[System: You have reached a voicemail]", follow the same steps above.
+
+IMPORTANT — iPhone Live Voicemail: On iPhones, the person can SEE a live transcript of your voicemail on their screen and PICK UP mid-message. If at any point during your voicemail a real person interrupts with "Hello?", "Hi", "Yeah?", or similar:
+- STOP the voicemail message immediately.
+- Treat them as a live person who just answered.
+- Start the normal call opening: "Hi, this is Ashley with Precise Imaging. We received your doctor's imaging order and need to schedule your appointment. Are you available now to schedule?"
+- Continue the call normally from there.
+
+## If You Hit Google Voice or Call Screening
+Phone calls may be intercepted by Google Voice or similar call-screening services BEFORE reaching the actual person. You will recognize this by phrases like:
+- "If you record your name and reason for calling, I'll see if this person is available"
+- "Please state your name after the tone"
+- "Who may I say is calling?"
+- "Screening your call"
+
+When you detect call screening:
+1. Respond clearly: "This is Ashley from Precise Imaging calling about a medical imaging appointment."
+2. Then WAIT SILENTLY for the screening system to connect you to the real person.
+3. You may hear "Please stay on the line" or "Thanks, please hold" — just wait.
+4. Once the real person answers (e.g., "Hello?", "Hi", "Yeah?"), start the normal call opening.
+5. If the screening system says "This person is not available" or "Please leave a message" — call `end_call` with reason `voicemail`.
+
+IMPORTANT:
+- Do NOT treat the screening system's voice as the patient.
+- Do NOT start your full greeting until you hear the REAL person respond.
+- Do NOT say "I didn't catch that" or ask clarifying questions to the screening system — just wait.
+
+## If You Hit a Voicemail Menu
+If you hear automated menu options like "Press 1 to leave a message, press 2 to..." — this is a voicemail system, not a person. Call `end_call` with reason `voicemail`.
 
 ## If Patient Asks to Stop Being Called
 - Say: "I understand, I'm sorry for the inconvenience. I'll make a note to update our records. Goodbye."
@@ -122,19 +177,16 @@ Say exactly (using the patient's first name):
 #    and answer from the knowledge base before ending the call.
 
 
+SYSTEM_INSTRUCTIONS = build_system_instructions()
+
+
 class RealtimeVoiceService(BaseVoiceService):
     """Manages OpenAI Realtime API connections for voice calls."""
 
-    def __init__(self, audio_format: str = "pcm16", verbose: bool = False):
-        """Initialize voice service.
-
-        Args:
-            audio_format: Audio format for OpenAI Realtime API.
-                          "pcm16" for browser WebSocket (24kHz 16-bit PCM).
-                          "g711_ulaw" for Twilio media streams (8kHz mulaw).
-            verbose: Whether to log detailed message-level info.
-        """
+    def __init__(self, audio_format: str = "pcm16", verbose: bool = False, voice: str = "", call_greeting: str = ""):
         super().__init__(audio_format=audio_format, verbose=verbose)
+        self._voice = voice or os.getenv("OPENAI_VOICE", "alloy")
+        self._call_greeting = call_greeting
         self._ws = None  # WebSocket connection
         self._session: Optional[VoiceSession] = None
         self._api_key = os.getenv("OPENAI_API_KEY", "")
@@ -237,16 +289,16 @@ class RealtimeVoiceService(BaseVoiceService):
     async def _configure_session(self, patient_name: str, patient_language: str = "en"):
         """Configure the realtime session."""
         language_instruction = self._language_instruction(patient_language)
-        # Update session with instructions
+        instructions = build_system_instructions(self._call_greeting)
         config = {
             "type": "session.update",
             "session": {
                 "modalities": ["text", "audio"],
                 "instructions": (
-                    f"{SYSTEM_INSTRUCTIONS.replace('{patient_name}', patient_name)}\n\n"
+                    f"{instructions}\n\n"
                     f"{language_instruction}"
                 ),
-                "voice": "alloy",
+                "voice": self._voice,
                 "input_audio_format": self._audio_format,
                 "output_audio_format": self._audio_format,
                 "input_audio_transcription": {
@@ -490,6 +542,25 @@ class RealtimeVoiceService(BaseVoiceService):
                     {
                         "type": "input_text",
                         "text": f"[System: The call has just connected. The patient's name is {first_name}. Please greet them and begin the call.]",
+                    }
+                ],
+            },
+        })
+        await self._send({"type": "response.create"})
+
+    async def inject_system_message(self, text: str) -> None:
+        """Inject a system-level text message into the active conversation."""
+        if not self._ws:
+            return
+        await self._send({
+            "type": "conversation.item.create",
+            "item": {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": text,
                     }
                 ],
             },

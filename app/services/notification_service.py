@@ -114,9 +114,18 @@ class CallNotificationService:
                     await self.on_status_update(
                         f"SMS sent ({reason}) in twilio mode to {patient.phone}{status_detail} [sid={sid}]"
                     )
+                from app.services.audit_service import log_audit_event
+                await log_audit_event(
+                    event_type="sms", action="send_sms", status="success",
+                    call_id=call.call_id, patient_id=patient.patient_id,
+                    patient_name=patient.name, order_id=call.order_id,
+                    request_summary=f"SMS to {sms_to} — {body}",
+                    request_payload={"to": sms_to, "body": body, "sid": sid},
+                )
                 return True
             except Exception as e:
                 logger.warning("SMS send failed for call %s: %s", call.call_id, e)
+                from app.services.audit_service import log_audit_event
                 if is_twilio_opt_out_error(e):
                     await self._log_call_event(
                         call.call_id,
@@ -124,10 +133,24 @@ class CallNotificationService:
                     )
                     if self.on_status_update:
                         await self.on_status_update(f"SMS blocked ({reason}): recipient opted out")
+                    await log_audit_event(
+                        event_type="sms", action="send_sms", status="failed",
+                        call_id=call.call_id, patient_id=patient.patient_id,
+                        patient_name=patient.name, order_id=call.order_id,
+                        request_summary=f"SMS blocked (opt-out) to {patient.phone}",
+                        error_message="Recipient opted out",
+                    )
                     return False
                 await self._log_call_event(call.call_id, f"SMS failed ({reason}): {str(e)}")
                 if self.on_status_update:
                     await self.on_status_update(f"SMS failed ({reason}): {str(e)}")
+                await log_audit_event(
+                    event_type="sms", action="send_sms", status="failed",
+                    call_id=call.call_id, patient_id=patient.patient_id,
+                    patient_name=patient.name, order_id=call.order_id,
+                    request_summary=f"SMS failed to {patient.phone}",
+                    error_message=str(e),
+                )
                 return False
 
     async def maybe_send_issue_email(self, call: CallLog, outcome: CallOutcome):
@@ -145,6 +168,7 @@ class CallNotificationService:
 
         status_text = call.error_message or outcome.value
 
+        from app.services.audit_service import log_audit_event
         try:
             if outcome == CallOutcome.WRONG_NUMBER:
                 print(f"[Notifications] Sending wrong_number email for call {call.call_id} (patient={call.patient_id})")
@@ -154,11 +178,14 @@ class CallNotificationService:
                 await self._log_call_event(call.call_id, f"Email sent (wrong_number) [message_id={message_id or 'n/a'}]")
                 if self.on_status_update:
                     await self.on_status_update("Email sent (wrong_number) to scheduling team")
+                await log_audit_event(
+                    event_type="email", action="send_email", status="success",
+                    call_id=call.call_id, patient_id=call.patient_id,
+                    patient_name=call.patient_name, order_id=call.order_id,
+                    request_summary=f"Wrong number alert — patient {call.patient_id} phone {call.phone}",
+                )
                 return
 
-            # Only send disconnected email for actual carrier failures (invalid
-            # numbers), NOT for patient hang-ups or generic call failures.
-            # Check error_code to distinguish real carrier issues from other failures.
             carrier_error_codes = {"32005", "32009"}
             is_carrier_failure = (
                 call.error_code in carrier_error_codes
@@ -175,11 +202,24 @@ class CallNotificationService:
                 )
                 if self.on_status_update:
                     await self.on_status_update("Email sent (invalid/disconnected) to scheduling team")
+                await log_audit_event(
+                    event_type="email", action="send_email", status="success",
+                    call_id=call.call_id, patient_id=call.patient_id,
+                    patient_name=call.patient_name, order_id=call.order_id,
+                    request_summary=f"Disconnected/invalid number — {status_text}",
+                )
         except Exception as e:
             print(f"[Notifications] Email failed for call {call.call_id}: {e}")
             await self._log_call_event(call.call_id, f"Email failed: {str(e)}")
             if self.on_status_update:
                 await self.on_status_update(f"Email failed: {str(e)}")
+            await log_audit_event(
+                event_type="email", action="send_email", status="failed",
+                call_id=call.call_id, patient_id=call.patient_id,
+                patient_name=call.patient_name, order_id=call.order_id,
+                request_summary="Email notification failed",
+                error_message=str(e),
+            )
 
     def cleanup_call(self, call_id: str):
         """Remove idempotency state for a completed call."""

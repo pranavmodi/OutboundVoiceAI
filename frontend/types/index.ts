@@ -199,6 +199,9 @@ export interface DispatcherSettings {
   max_attempts_other: number;
   min_hours_between: number;
   verbose_logging?: boolean;
+  openai_voice?: string;
+  gemini_voice?: string;
+  call_greeting?: string;
 }
 
 export interface DailyReportConfig {
@@ -284,4 +287,20 @@ export interface SimulationScenario {
   patients: ScenarioPatient[];
   created_at: string;
   updated_at: string;
+}
+
+export interface AuditEvent {
+  id: number;
+  call_id: string | null;
+  patient_id: string | null;
+  patient_name: string;
+  order_id: string | null;
+  event_type: string;  // radflow | hl7 | sms | email | slack
+  action: string;
+  status: string;      // success | failed | skipped
+  request_summary: string;
+  request_payload: Record<string, unknown> | null;
+  response_status: number | null;
+  error_message: string | null;
+  created_at: string | null;
 }

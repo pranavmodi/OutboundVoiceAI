@@ -30,6 +30,13 @@ class QueueThresholds:
     stable_polls_required: int = 3
 
 
+DEFAULT_CALL_GREETING = (
+    "Hi, this is Ashley with Precise Imaging. We received your doctor's "
+    "imaging order and need to schedule your appointment. Are you available "
+    "now to schedule your appointment?"
+)
+
+
 @dataclass
 class DispatcherSettings:
     """Dispatcher configuration parameters."""
@@ -42,6 +49,9 @@ class DispatcherSettings:
     max_attempts_other: int = 4
     min_hours_between: int = 6
     verbose_logging: bool = False
+    openai_voice: str = "alloy"
+    gemini_voice: str = "Aoede"
+    call_greeting: str = DEFAULT_CALL_GREETING
 
     @property
     def max_attempts(self) -> int:

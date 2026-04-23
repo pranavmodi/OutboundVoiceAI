@@ -12,6 +12,7 @@ import {
   CallHistoryCard,
   DispatcherEventsCard,
   KpiBar,
+  AuditLogCard,
 } from "@/components/dashboard";
 import { SimulationConsole, OperatorConsole } from "@/components/console";
 import { useApi } from "@/hooks/useApi";
@@ -27,6 +28,8 @@ import {
   History,
   LogOut,
   BarChart3,
+  FileText,
+  Loader2,
 } from "lucide-react";
 import type { Patient, CallLog, QueueState, SystemSettings, SimulationScenario, TodayKpis } from "@/types";
 
@@ -55,6 +58,7 @@ export default function Dashboard() {
   const [todayKpis, setTodayKpis] = useState<TodayKpis | null>(null);
   const [activeCall, setActiveCall] = useState<CallLog | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
+  const [loadProgress, setLoadProgress] = useState({ done: 0, total: 7 });
   const [lastCallInfo, setLastCallInfo] = useState<{ patientName: string; duration: number } | null>(null);
   const [callStartTime, setCallStartTime] = useState<number | null>(null);
   const [callingPatientName, setCallingPatientName] = useState<string>("");
@@ -77,32 +81,42 @@ export default function Dashboard() {
     if (isLoaded) return;
 
     const loadData = async () => {
-      const [status, patientList, callData, settingsData, tzList, scenarioList, kpis] = await Promise.all([
-        api.getStatus(),
-        api.getOutboundQueue(),
-        api.getCalls(CALLS_PAGE_SIZE),
-        api.getSettings(),
-        api.getTimezones(),
-        api.getScenarios(),
-        api.getTodayKpis(),
-      ]);
+      let done = 0;
+      const tick = () => setLoadProgress({ done: ++done, total: 7 });
 
-      if (status) {
-        setQueueState(status.queue_state);
-        setActiveCall(status.active_call);
+      const wrap = <T,>(p: Promise<T>): Promise<T> => p.then((v) => { tick(); return v; }, (e) => { tick(); throw e; });
+
+      try {
+        const [status, patientList, callData, settingsData, tzList, scenarioList, kpis] = await Promise.all([
+          wrap(api.getStatus()),
+          wrap(api.getOutboundQueue()),
+          wrap(api.getCalls(CALLS_PAGE_SIZE)),
+          wrap(api.getSettings()),
+          wrap(api.getTimezones()),
+          wrap(api.getScenarios()),
+          wrap(api.getTodayKpis()),
+        ]);
+
+        if (status) {
+          setQueueState(status.queue_state);
+          setActiveCall(status.active_call);
+        }
+        setPatients(patientList);
+        setPatientsLastUpdated(new Date());
+        setCalls(callData.calls);
+        setCallsTotal(callData.total);
+        setTodayKpis(kpis);
+        setSettings(settingsData);
+        if (settingsData?.call_mode) {
+          setCallMode(settingsData.call_mode);
+        }
+        setTimezones(tzList);
+        setScenarios(scenarioList);
+      } catch (e) {
+        console.error("[Dashboard] Initial load failed:", e);
+      } finally {
+        setIsLoaded(true);
       }
-      setPatients(patientList);
-      setPatientsLastUpdated(new Date());
-      setCalls(callData.calls);
-      setCallsTotal(callData.total);
-      setTodayKpis(kpis);
-      setSettings(settingsData);
-      if (settingsData?.call_mode) {
-        setCallMode(settingsData.call_mode);
-      }
-      setTimezones(tzList);
-      setScenarios(scenarioList);
-      setIsLoaded(true);
     };
 
     loadData();
@@ -497,6 +511,27 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-background">
+      {!isLoaded && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-background/80 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-4">
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            <div className="text-center">
+              <p className="text-sm font-medium">Loading dashboard</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                {loadProgress.done < loadProgress.total
+                  ? `${loadProgress.done} of ${loadProgress.total} services ready`
+                  : "Finalizing..."}
+              </p>
+            </div>
+            <div className="w-48 h-1.5 bg-muted rounded-full overflow-hidden">
+              <div
+                className="h-full bg-primary rounded-full transition-all duration-300"
+                style={{ width: `${(loadProgress.done / loadProgress.total) * 100}%` }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
       {/* Header */}
       <header className="sticky top-0 z-50 border-b bg-card/80 backdrop-blur-lg">
         <div className="container mx-auto px-6 h-16 flex items-center justify-between">
@@ -582,6 +617,10 @@ export default function Dashboard() {
               <History className="h-4 w-4" />
               History
             </TabsTrigger>
+            <TabsTrigger value="audit" className="flex items-center gap-2 rounded-md px-4 text-sm">
+              <FileText className="h-4 w-4" />
+              Audit Log
+            </TabsTrigger>
             <TabsTrigger value="analytics" className="flex items-center gap-2 rounded-md px-4 text-sm">
               <BarChart3 className="h-4 w-4" />
               Analytics
@@ -591,7 +630,7 @@ export default function Dashboard() {
           {/* Dashboard Tab */}
           <TabsContent value="dashboard" className="space-y-6 animate-in">
             {/* KPI row — today's headline numbers */}
-            <KpiBar kpis={todayKpis} />
+            <KpiBar kpis={todayKpis} loading={!isLoaded} />
 
             {/* 1. System Settings - at the top, expanded by default */}
             <Collapsible open={operatorOpen} onOpenChange={setOperatorOpen}>
@@ -650,6 +689,15 @@ export default function Dashboard() {
                       onSetQueueSource={handleSetQueueSource}
                       onSetPatientSource={handleSetPatientSource}
                       onSetActiveScenario={handleSetActiveScenario}
+                      onUpdateVoices={async (ov, gv) => {
+                        const newSettings = await api.updateVoices(ov, gv);
+                        if (newSettings) setSettings(newSettings);
+                      }}
+                      onPreviewVoice={api.previewVoice}
+                      onUpdateCallGreeting={async (greeting) => {
+                        const newSettings = await api.updateCallGreeting(greeting);
+                        if (newSettings) setSettings(newSettings);
+                      }}
                     />
                   </CardContent>
                 </CollapsibleContent>
@@ -661,9 +709,11 @@ export default function Dashboard() {
               <QueueStatusCard
                 queueState={queueState}
                 source={settings?.queue_source as "simulation" | "live" | undefined}
+                loading={!isLoaded}
               />
               <PatientQueueCard
                 patients={patients}
+                loading={!isLoaded}
                 onCallPatient={handleCallPatient}
                 onRefresh={handleRefreshPatients}
                 onReloadScenario={settings?.active_scenario_id ? () => handleSetActiveScenario(settings.active_scenario_id!) : undefined}
@@ -718,7 +768,12 @@ export default function Dashboard() {
 
           {/* History Tab */}
           <TabsContent value="history" className="space-y-6 animate-in">
-            <CallHistoryCard calls={calls} callsTotal={callsTotal} onRefresh={handleRefreshCalls} onLoadMore={handleLoadMoreCalls} hasMore={calls.length < callsTotal} onSearchChange={handleSearchChange} />
+            <CallHistoryCard calls={calls} callsTotal={callsTotal} onRefresh={handleRefreshCalls} onLoadMore={handleLoadMoreCalls} hasMore={calls.length < callsTotal} onSearchChange={handleSearchChange} loading={!isLoaded} />
+          </TabsContent>
+
+          {/* Audit Log Tab */}
+          <TabsContent value="audit" className="animate-in">
+            <AuditLogCard />
           </TabsContent>
 
           {/* Analytics Tab */}

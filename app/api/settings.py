@@ -1,5 +1,7 @@
 """Settings API endpoints."""
+import asyncio
 import logging
+import os
 from typing import List
 
 from fastapi import APIRouter
@@ -44,6 +46,9 @@ class DispatcherSettingsRequest(BaseModel):
     max_attempts_other: int = 4
     min_hours_between: int = 6
     verbose_logging: bool = False
+    openai_voice: str = "alloy"
+    gemini_voice: str = "Aoede"
+    call_greeting: str = ""
 
 
 class SourceRequest(BaseModel):
@@ -169,6 +174,9 @@ async def settings_to_response(provider) -> SystemSettingsResponse:
             max_attempts_other=settings.dispatcher_settings.max_attempts_other,
             min_hours_between=settings.dispatcher_settings.min_hours_between,
             verbose_logging=settings.dispatcher_settings.verbose_logging,
+            openai_voice=settings.dispatcher_settings.openai_voice,
+            gemini_voice=settings.dispatcher_settings.gemini_voice,
+            call_greeting=settings.dispatcher_settings.call_greeting,
         ),
         allow_live_calls=settings.allow_live_calls,
         allowed_phones=settings.allowed_phones,
@@ -365,6 +373,9 @@ async def update_dispatcher_settings(request: DispatcherSettingsRequest):
         max_attempts_other=request.max_attempts_other,
         min_hours_between=request.min_hours_between,
         verbose_logging=request.verbose_logging,
+        openai_voice=request.openai_voice,
+        gemini_voice=request.gemini_voice,
+        call_greeting=request.call_greeting,
     )
 
     await provider.update_dispatcher_settings(dispatcher_settings)
@@ -547,3 +558,224 @@ async def update_daily_report(request: DailyReportRequest):
 async def get_timezones():
     """Get list of available timezones."""
     return COMMON_TIMEZONES
+
+
+# -- Call greeting / script editor ---------------------------------------------
+
+class CallGreetingRequest(BaseModel):
+    call_greeting: str
+
+
+@router.get("/call-greeting")
+async def get_call_greeting():
+    """Return the current call greeting text."""
+    from app.models.system_settings import DEFAULT_CALL_GREETING
+    provider = get_settings_provider()
+    settings = await provider.get_settings()
+    return {
+        "call_greeting": settings.dispatcher_settings.call_greeting,
+        "default_greeting": DEFAULT_CALL_GREETING,
+    }
+
+
+@router.put("/call-greeting", response_model=SystemSettingsResponse)
+async def update_call_greeting(request: CallGreetingRequest):
+    """Update the call greeting text."""
+    provider = get_settings_provider()
+    settings = await provider.get_settings()
+    ds = settings.dispatcher_settings
+    ds.call_greeting = request.call_greeting.strip()
+    await provider.update_dispatcher_settings(ds)
+    print(f"[SETTINGS] call_greeting updated ({len(ds.call_greeting)} chars)")
+    return await settings_response_and_broadcast(provider)
+
+
+# -- Voice preview + selection ------------------------------------------------
+
+OPENAI_VOICES = ["alloy", "ash", "ballad", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer", "verse"]
+GEMINI_VOICES = ["Aoede", "Charon", "Fenrir", "Kore", "Puck", "Leda", "Orus", "Perseus", "Zephyr"]
+
+
+class VoicePreviewRequest(BaseModel):
+    provider: str  # "openai" or "gemini"
+    voice: str
+    text: str = (
+        "Hi, this is Ashley with Precise Imaging. "
+        "We received your doctor's imaging order and need to schedule your appointment. "
+        "Are you available now?"
+    )
+
+
+class VoiceSettingsRequest(BaseModel):
+    openai_voice: str = "alloy"
+    gemini_voice: str = "Aoede"
+
+
+@router.get("/voices")
+async def get_voices():
+    """Return available voices for each provider + current selection."""
+    provider = get_settings_provider()
+    settings = await provider.get_settings()
+    return {
+        "openai_voices": OPENAI_VOICES,
+        "gemini_voices": GEMINI_VOICES,
+        "openai_voice": settings.dispatcher_settings.openai_voice,
+        "gemini_voice": settings.dispatcher_settings.gemini_voice,
+    }
+
+
+@router.put("/voices", response_model=SystemSettingsResponse)
+async def update_voices(request: VoiceSettingsRequest):
+    """Update the selected voice for each provider."""
+    from fastapi import HTTPException
+    if request.openai_voice not in OPENAI_VOICES:
+        raise HTTPException(400, f"Invalid OpenAI voice: {request.openai_voice}")
+    if request.gemini_voice not in GEMINI_VOICES:
+        raise HTTPException(400, f"Invalid Gemini voice: {request.gemini_voice}")
+
+    provider = get_settings_provider()
+    settings = await provider.get_settings()
+    ds = settings.dispatcher_settings
+    ds.openai_voice = request.openai_voice
+    ds.gemini_voice = request.gemini_voice
+    await provider.update_dispatcher_settings(ds)
+    print(f"[SETTINGS] voices → openai={request.openai_voice}, gemini={request.gemini_voice}")
+    return await settings_response_and_broadcast(provider)
+
+
+@router.post("/voice-preview")
+async def voice_preview(request: VoicePreviewRequest):
+    """Generate a voice preview clip on demand. Returns audio bytes."""
+    from fastapi import HTTPException
+    from fastapi.responses import Response as FastResponse
+    import base64
+    import json as _json
+    import struct
+    import websockets
+
+    logger.info("[VoicePreview] provider=%s voice=%s", request.provider, request.voice)
+
+    if request.provider == "openai":
+        if request.voice not in OPENAI_VOICES:
+            raise HTTPException(400, f"Invalid OpenAI voice: {request.voice}")
+        api_key = os.getenv("OPENAI_API_KEY", "")
+        if not api_key:
+            raise HTTPException(500, "OPENAI_API_KEY not configured")
+        try:
+            from openai import OpenAI
+            client = OpenAI(api_key=api_key)
+            response = client.audio.speech.create(
+                model="tts-1",
+                voice=request.voice,
+                input=request.text,
+                response_format="mp3",
+            )
+            audio_bytes = response.read()
+            logger.info("[VoicePreview] OpenAI OK, %d bytes", len(audio_bytes))
+            return FastResponse(content=audio_bytes, media_type="audio/mpeg")
+        except Exception as e:
+            logger.error("[VoicePreview] OpenAI TTS failed: %s", e)
+            raise HTTPException(500, f"OpenAI TTS failed: {e}")
+
+    elif request.provider == "gemini":
+        if request.voice not in GEMINI_VOICES:
+            raise HTTPException(400, f"Invalid Gemini voice: {request.voice}")
+        api_key = os.getenv("GEMINI_API_KEY", "")
+        if not api_key:
+            raise HTTPException(500, "GEMINI_API_KEY not configured")
+
+        gemini_model = os.getenv("GEMINI_REALTIME_MODEL", "gemini-3.1-flash-live-preview")
+        ws_url = (
+            "wss://generativelanguage.googleapis.com/ws/"
+            "google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
+            f"?key={api_key}"
+        )
+        logger.info("[VoicePreview] Gemini connecting model=%s voice=%s", gemini_model, request.voice)
+        try:
+            ws = await websockets.connect(ws_url)
+        except Exception as e:
+            logger.error("[VoicePreview] Gemini WS connect failed: %s", e)
+            raise HTTPException(500, f"Gemini connect failed: {e}")
+
+        try:
+            setup = {
+                "setup": {
+                    "model": f"models/{gemini_model}",
+                    "generationConfig": {
+                        "responseModalities": ["AUDIO"],
+                        "speechConfig": {
+                            "voiceConfig": {
+                                "prebuiltVoiceConfig": {"voiceName": request.voice}
+                            }
+                        },
+                    },
+                    "systemInstruction": {
+                        "parts": [{"text": "You are a voice preview generator. Say exactly what the user asks, nothing more."}]
+                    },
+                }
+            }
+            await ws.send(_json.dumps(setup))
+            msg = await asyncio.wait_for(ws.recv(), timeout=10)
+            if isinstance(msg, bytes):
+                msg = msg.decode("utf-8")
+            data = _json.loads(msg)
+            if "setupComplete" not in data and "setup_complete" not in data:
+                logger.error("[VoicePreview] Gemini setup failed: %s", list(data.keys()))
+                raise HTTPException(500, f"Gemini Live setup failed: {list(data.keys())}")
+            logger.info("[VoicePreview] Gemini setup complete")
+
+            await ws.send(_json.dumps({
+                "realtimeInput": {
+                    "text": f"Say exactly: {request.text}"
+                }
+            }))
+
+            audio_chunks: list[bytes] = []
+            deadline = asyncio.get_event_loop().time() + 15
+            while asyncio.get_event_loop().time() < deadline:
+                try:
+                    raw = await asyncio.wait_for(ws.recv(), timeout=5)
+                except asyncio.TimeoutError:
+                    logger.warning("[VoicePreview] Gemini recv timeout after %d chunks", len(audio_chunks))
+                    break
+                if isinstance(raw, bytes):
+                    try:
+                        raw = raw.decode("utf-8")
+                    except UnicodeDecodeError:
+                        continue
+                ev = _json.loads(raw)
+                sc = ev.get("serverContent") or ev.get("server_content") or {}
+                mt = sc.get("modelTurn") or sc.get("model_turn") or {}
+                for part in mt.get("parts", []):
+                    inline = part.get("inlineData") or part.get("inline_data")
+                    if inline and inline.get("data"):
+                        audio_chunks.append(base64.b64decode(inline["data"]))
+                if sc.get("turnComplete") or sc.get("turn_complete"):
+                    break
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error("[VoicePreview] Gemini error: %s", e)
+            raise HTTPException(500, f"Gemini voice preview failed: {e}")
+        finally:
+            await ws.close()
+
+        if not audio_chunks:
+            logger.error("[VoicePreview] Gemini returned no audio")
+            raise HTTPException(500, "Gemini Live returned no audio")
+
+        pcm_data = b"".join(audio_chunks)
+        data_size = len(pcm_data)
+        logger.info("[VoicePreview] Gemini OK, %d chunks, %d bytes", len(audio_chunks), data_size)
+        wav_header = struct.pack(
+            "<4sI4s4sIHHIIHH4sI",
+            b"RIFF", 36 + data_size, b"WAVE",
+            b"fmt ", 16, 1, 1,
+            24000, 24000 * 2,
+            2, 16,
+            b"data", data_size,
+        )
+        return FastResponse(content=wav_header + pcm_data, media_type="audio/wav")
+
+    else:
+        raise HTTPException(400, f"provider must be 'openai' or 'gemini'")

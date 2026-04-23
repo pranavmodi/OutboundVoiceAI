@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/select";
 import { Users, Phone, RefreshCw, UserRound, Clock, RotateCcw, Pencil, Trash2 } from "lucide-react";
 import { InfoTooltip } from "@/components/ui/info-tooltip";
+import { Skeleton } from "@/components/ui/skeleton";
 import type { Patient } from "@/types";
 
 interface PatientQueueCardProps {
@@ -31,6 +32,7 @@ interface PatientQueueCardProps {
   onCallPatient: (patientId: string) => void;
   onRefresh: () => void;
   onReloadScenario?: () => void;
+  loading?: boolean;
   onDeletePatient?: (patientId: string) => Promise<void>;
   onUpdatePatient?: (patientId: string, data: {
     name?: string;
@@ -75,6 +77,7 @@ export function PatientQueueCard({
   onUpdatePatient,
   isCallActive,
   outboundAllowed,
+  loading,
   source = "simulation",
   lastUpdated,
 }: PatientQueueCardProps) {
@@ -268,7 +271,20 @@ export function PatientQueueCard({
       <CardContent className="flex-1 p-0">
         <ScrollArea className="h-[400px]">
           <div className="space-y-1.5 px-6 pb-6">
-            {patients.length === 0 ? (
+            {loading ? (
+              <div className="space-y-2">
+                {[0, 1, 2, 3, 4].map((i) => (
+                  <div key={i} className="flex items-center gap-3 rounded-lg bg-muted/40 px-3 py-2.5">
+                    <Skeleton className="h-4 w-4 shrink-0" />
+                    <div className="flex-1 space-y-1.5">
+                      <Skeleton className="h-4 w-32" />
+                      <Skeleton className="h-3 w-48" />
+                    </div>
+                    <Skeleton className="h-8 w-16" />
+                  </div>
+                ))}
+              </div>
+            ) : patients.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
                 <UserRound className="h-10 w-10 mb-3 opacity-20" />
                 <p className="text-sm font-medium">No patients in queue</p>

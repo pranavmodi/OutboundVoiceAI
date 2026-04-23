@@ -15,6 +15,7 @@ from app.models import (
     DailyReportConfig,
     SystemSettings,
 )
+from app.models.system_settings import DEFAULT_CALL_GREETING
 from typing import List
 
 
@@ -102,6 +103,9 @@ def _row_to_settings(row: SystemSettingsRow) -> SystemSettings:
         max_attempts_other=int(ds.get("max_attempts_other", legacy_max)),
         min_hours_between=ds.get("min_hours_between", 6),
         verbose_logging=ds.get("verbose_logging", False),
+        openai_voice=ds.get("openai_voice", "alloy"),
+        gemini_voice=ds.get("gemini_voice", "Aoede"),
+        call_greeting=ds.get("call_greeting", DEFAULT_CALL_GREETING),
     )
     settings.allow_live_calls = row.allow_live_calls if row.allow_live_calls is not None else False
     settings.allowed_phones = row.allowed_phones if row.allowed_phones is not None else []
@@ -279,6 +283,9 @@ class SettingsProvider:
                 "max_attempts_other": dispatcher_settings.max_attempts_other,
                 "min_hours_between": dispatcher_settings.min_hours_between,
                 "verbose_logging": dispatcher_settings.verbose_logging,
+                "openai_voice": dispatcher_settings.openai_voice,
+                "gemini_voice": dispatcher_settings.gemini_voice,
+                "call_greeting": dispatcher_settings.call_greeting,
             }
             await session.commit()
             return _row_to_settings(row)
