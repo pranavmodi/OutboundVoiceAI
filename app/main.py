@@ -43,6 +43,8 @@ async def lifespan(app: FastAPI):
         max_attempts_other=ds.max_attempts_other,
         min_hours_between=ds.min_hours_between,
         verbose_logging=verbose,
+        max_parallel_calls=ds.max_parallel_calls,
+        dispatch_pacing_seconds=ds.dispatch_pacing_seconds,
     )
     # If sources are "simulation" and active_scenario_id is set, activate the scenario
     if (settings.queue_source == "simulation" or settings.patient_source == "simulation") and settings.active_scenario_id:

@@ -489,7 +489,16 @@ async def twilio_status_callback(
     print(" | ".join(parts))
 
     try:
-        orchestrator = get_orchestrator()
+        # Route to the session that placed this Twilio call. Falls back to the
+        # singleton orchestrator when the registry has no binding (e.g. during
+        # a race between call placement and the first status callback, or for
+        # legacy calls placed before Phase 2 shipped).
+        from app.services.orchestrator_registry import get_registry
+        registry = get_registry()
+        routed = registry.by_twilio_sid(CallSid)
+        if routed is None:
+            print(f"[TwilioStatus] No registry binding for SID={CallSid}; falling back to singleton orchestrator")
+        orchestrator = routed or get_orchestrator()
         if AnsweredBy:
             safe_create_task(
                 orchestrator.handle_twilio_amd_status(CallSid, AnsweredBy),

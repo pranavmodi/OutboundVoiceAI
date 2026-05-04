@@ -26,9 +26,21 @@ done
 
 BACKEND_PORT=${BACKEND_PORT:-8000}
 
+# Tee stdout+stderr to logs/backend.log AND the terminal. Each run starts a
+# new timestamped file; logs/backend.log is a symlink to the latest so
+# `tail -f logs/backend.log` always tracks the current run.
+mkdir -p logs
+LOG_TS=$(date +%Y%m%d-%H%M%S)
+LOG_FILE="logs/backend-${LOG_TS}.log"
+ln -sfn "backend-${LOG_TS}.log" logs/backend.log
+
 echo "Starting backend on http://localhost:$BACKEND_PORT"
+echo "  Logging to: $LOG_FILE (symlink: logs/backend.log)"
 [ "$VERBOSE_LOGGING" = "true" ] && echo "  Verbose logging enabled"
 [ -n "$RELOAD_FLAG" ] && echo "  Dev mode (auto-reload) — DO NOT use during live calls"
 
 source .venv/bin/activate
-uvicorn app.main:app --host 0.0.0.0 --port $BACKEND_PORT $RELOAD_FLAG --log-level warning
+# Force unbuffered Python so logs flush in real time — otherwise print()
+# stays in the stdout buffer until the process exits, breaking `tail -f`.
+export PYTHONUNBUFFERED=1
+uvicorn app.main:app --host 0.0.0.0 --port $BACKEND_PORT $RELOAD_FLAG --log-level warning 2>&1 | tee -a "$LOG_FILE"

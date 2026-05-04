@@ -40,12 +40,21 @@ class PatientRow(Base):
     radflow_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
     # Set when HL7 "Couldnt Schedule" POST succeeds — prevents duplicate sends
     hl7_sent_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    # Parallel-call dialing lock — set while a call is being placed/running so
+    # concurrent dispatcher ticks (and manual calls) can't double-dial.
+    dialing_call_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    dialing_started_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=_utcnow, onupdate=_utcnow)
 
     __table_args__ = (
         Index("ix_patients_status_attempts", "radflow_status", "ai_attempt_count", "human_attempt_count", "due_by"),
         Index("ix_patients_phone", "phone"),
+        Index(
+            "ix_patients_dialing_call_id",
+            "dialing_call_id",
+            postgresql_where="dialing_call_id IS NOT NULL",
+        ),
     )
 
 
@@ -166,10 +175,18 @@ class PatientCallStateRow(Base):
     ai_called_before: Mapped[bool] = mapped_column(Boolean, default=False)
     invalid_number: Mapped[bool] = mapped_column(Boolean, default=False)
     hl7_sent_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    # Parallel-call dialing lock (mirrors PatientRow.dialing_call_id for live mode).
+    dialing_call_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    dialing_started_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=_utcnow, onupdate=_utcnow)
 
     __table_args__ = (
         Index("ix_patient_call_state_updated", "updated_at"),
+        Index(
+            "ix_patient_call_state_dialing_call_id",
+            "dialing_call_id",
+            postgresql_where="dialing_call_id IS NOT NULL",
+        ),
     )
 
 

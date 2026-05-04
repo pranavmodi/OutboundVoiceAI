@@ -49,6 +49,8 @@ class DispatcherSettingsRequest(BaseModel):
     openai_voice: str = "alloy"
     gemini_voice: str = "Aoede"
     call_greeting: str = ""
+    max_parallel_calls: int = 1
+    dispatch_pacing_seconds: int = 1
 
 
 class SourceRequest(BaseModel):
@@ -177,6 +179,8 @@ async def settings_to_response(provider) -> SystemSettingsResponse:
             openai_voice=settings.dispatcher_settings.openai_voice,
             gemini_voice=settings.dispatcher_settings.gemini_voice,
             call_greeting=settings.dispatcher_settings.call_greeting,
+            max_parallel_calls=settings.dispatcher_settings.max_parallel_calls,
+            dispatch_pacing_seconds=settings.dispatcher_settings.dispatch_pacing_seconds,
         ),
         allow_live_calls=settings.allow_live_calls,
         allowed_phones=settings.allowed_phones,
@@ -376,6 +380,8 @@ async def update_dispatcher_settings(request: DispatcherSettingsRequest):
         openai_voice=request.openai_voice,
         gemini_voice=request.gemini_voice,
         call_greeting=request.call_greeting,
+        max_parallel_calls=request.max_parallel_calls,
+        dispatch_pacing_seconds=request.dispatch_pacing_seconds,
     )
 
     await provider.update_dispatcher_settings(dispatcher_settings)
@@ -388,6 +394,8 @@ async def update_dispatcher_settings(request: DispatcherSettingsRequest):
         max_attempts_other=request.max_attempts_other,
         min_hours_between=request.min_hours_between,
         verbose_logging=request.verbose_logging,
+        max_parallel_calls=request.max_parallel_calls,
+        dispatch_pacing_seconds=request.dispatch_pacing_seconds,
     )
 
     return await settings_response_and_broadcast(provider)

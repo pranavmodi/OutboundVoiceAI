@@ -79,7 +79,11 @@ class CallLogProvider:
     """Stores and retrieves call logs in PostgreSQL."""
 
     def __init__(self):
-        self._active_call_id: Optional[str] = None
+        # Track all in-flight call_ids. Insertion-ordered (Python 3.7+ dict
+        # preserves insertion order) so get_active_call() returns "the
+        # earliest still-running call" deterministically at MAX_PARALLEL_CALLS > 1.
+        # The value is unused — only the keys matter.
+        self._active_call_ids: dict[str, None] = {}
 
     async def create_call(
         self,
@@ -112,7 +116,7 @@ class CallLogProvider:
             session.add(row)
             await session.commit()
 
-        self._active_call_id = call_id
+        self._active_call_ids[call_id] = None
         # Return as dataclass
         cl = CallLog.__new__(CallLog)
         cl.call_id = call_id
@@ -154,9 +158,21 @@ class CallLogProvider:
             return _row_to_call_log(row) if row else None
 
     async def get_active_call(self) -> Optional[CallLog]:
-        if self._active_call_id is None:
+        """Return the earliest in-flight call (insertion-ordered).
+        Callers wanting all live calls should use get_active_calls()."""
+        if not self._active_call_ids:
             return None
-        return await self.get_call(self._active_call_id)
+        call_id = next(iter(self._active_call_ids))
+        return await self.get_call(call_id)
+
+    async def get_active_calls(self) -> list[CallLog]:
+        """Return every in-flight call the provider is tracking."""
+        calls: list[CallLog] = []
+        for call_id in list(self._active_call_ids):
+            c = await self.get_call(call_id)
+            if c:
+                calls.append(c)
+        return calls
 
     async def get_all_calls(
         self,
@@ -265,8 +281,7 @@ class CallLogProvider:
                 row.call_status = status.value
                 row.call_disposition = disposition.value
                 await session.commit()
-        if self._active_call_id == call_id:
-            self._active_call_id = None
+        self._active_call_ids.pop(call_id, None)
 
     async def update_call(
         self,
@@ -325,16 +340,22 @@ class CallLogProvider:
                 await session.commit()
 
     def clear_active_call(self):
-        self._active_call_id = None
+        self._active_call_ids.clear()
 
     async def reset(self):
         async with AsyncSessionLocal() as session:
             await session.execute(delete(CallLogRow))
             await session.commit()
-        self._active_call_id = None
+        self._active_call_ids.clear()
 
-    def has_active_call(self) -> bool:
-        return self._active_call_id is not None
+    def has_active_call(self, call_id: Optional[str] = None) -> bool:
+        """True if any call is in flight (or a specific call when call_id is given)."""
+        if call_id is None:
+            return bool(self._active_call_ids)
+        return call_id in self._active_call_ids
+
+    def active_call_count(self) -> int:
+        return len(self._active_call_ids)
 
     async def get_stats_for_date(self, target_date, tz_name: str = "America/Los_Angeles") -> dict:
         """Get a full disposition breakdown for a specific local date.

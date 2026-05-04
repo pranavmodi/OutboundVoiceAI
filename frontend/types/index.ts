@@ -202,6 +202,10 @@ export interface DispatcherSettings {
   openai_voice?: string;
   gemini_voice?: string;
   call_greeting?: string;
+  // Phase 7: parallel-call cap (1 = single-call legacy behavior; ceiling 10).
+  max_parallel_calls?: number;
+  // Minimum gap (seconds) between consecutive call starts.
+  dispatch_pacing_seconds?: number;
 }
 
 export interface DailyReportConfig {

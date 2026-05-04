@@ -52,6 +52,13 @@ class DispatcherSettings:
     openai_voice: str = "alloy"
     gemini_voice: str = "Aoede"
     call_greeting: str = DEFAULT_CALL_GREETING
+    # Phase 7: parallel-call cap. 1 means single-call (legacy behavior).
+    # Hard ceiling enforced in the settings provider; keep low (1-10) until
+    # Twilio-side concurrency limits and from-number pool are validated.
+    max_parallel_calls: int = 1
+    # Minimum gap (seconds) between successive call starts. Avoids tripping
+    # carrier per-second rate limits when max_parallel_calls > 1.
+    dispatch_pacing_seconds: int = 1
 
     @property
     def max_attempts(self) -> int:

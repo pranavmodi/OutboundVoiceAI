@@ -220,6 +220,8 @@ export function OperatorConsole({
     max_attempts_ordered: 4,
     max_attempts_other: 4,
     min_hours_between: 6,
+    max_parallel_calls: 1,
+    dispatch_pacing_seconds: 1,
   });
 
   const DEFAULT_GREETING = "Hi, this is Ashley with Precise Imaging. We received your doctor's imaging order and need to schedule your appointment. Are you available now to schedule your appointment?";
@@ -1186,6 +1188,47 @@ export function OperatorConsole({
                 setDispatcherForm({
                   ...dispatcherForm,
                   min_hours_between: parseInt(e.target.value) || 0,
+                })
+              }
+              className="h-9"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="max-parallel-calls" className="text-xs text-muted-foreground flex items-center gap-1">
+              Parallel calls
+              <InfoTooltip content="How many outbound calls run at the same time. 1 = sequential (one call ends before the next starts). Voicemails are counted as 'done' the moment AMD detects the beep, so the next call can start while the AI finishes leaving the message. Capped at 10." />
+            </Label>
+            <Input
+              id="max-parallel-calls"
+              type="number"
+              min="1"
+              max="10"
+              value={dispatcherForm.max_parallel_calls ?? 1}
+              onChange={(e) =>
+                setDispatcherForm({
+                  ...dispatcherForm,
+                  max_parallel_calls: Math.max(1, Math.min(10, parseInt(e.target.value) || 1)),
+                })
+              }
+              className="h-9"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="dispatch-pacing" className="text-xs text-muted-foreground flex items-center gap-1">
+              Dispatch pacing (s)
+              <InfoTooltip content="Minimum gap between successive call starts. Prevents bursting past Twilio's per-second rate limits when running parallel calls. 1s is enough for typical accounts." />
+            </Label>
+            <Input
+              id="dispatch-pacing"
+              type="number"
+              min="0"
+              value={dispatcherForm.dispatch_pacing_seconds ?? 1}
+              onChange={(e) =>
+                setDispatcherForm({
+                  ...dispatcherForm,
+                  dispatch_pacing_seconds: Math.max(0, parseInt(e.target.value) || 0),
                 })
               }
               className="h-9"

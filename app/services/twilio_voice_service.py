@@ -175,15 +175,16 @@ def place_twilio_call(
         "to": to_number,
         "from_": from_number,
         "url": twiml_url,
-        # AMD for voicemail detection. Use "Enable" (not "DetectMessageEnd") so
-        # Twilio classifies the call early (as "machine_start") while the call
-        # is still in-progress — lets us redirect to play our VM script before
-        # the call ends. "DetectMessageEnd" waits for the beep, by which time
-        # the call has often completed and the redirect fails with 21220.
-        "machine_detection": "Enable",
-        # Keep a reasonable timeout so Twilio still classifies voicemails with
-        # long greetings (default 30s is the max).
-        "machine_detection_timeout": 15,
+        # AMD for voicemail detection. "DetectMessageEnd" waits for the
+        # voicemail greeting to finish and the beep to play before firing
+        # the callback.  This lets us suppress the AI greeting on
+        # "machine_start" (early signal) and inject the voicemail script
+        # only after "machine_end_beep" (beep detected) so the AI never
+        # talks over the VM greeting.
+        "machine_detection": "DetectMessageEnd",
+        # Max seconds Twilio will wait while trying to classify the call.
+        # 30s accommodates long voicemail greetings.
+        "machine_detection_timeout": 30,
     }
     if status_callback_url:
         create_kwargs["status_callback"] = status_callback_url

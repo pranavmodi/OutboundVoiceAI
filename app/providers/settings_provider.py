@@ -32,6 +32,22 @@ COMMON_TIMEZONES = [
 ]
 
 
+MAX_PARALLEL_CALLS_CEILING = 10  # hard cap until Twilio capacity is validated higher
+
+
+def _clamp_parallel(value) -> int:
+    """Bound max_parallel_calls into [1, MAX_PARALLEL_CALLS_CEILING]."""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return 1
+    if n < 1:
+        return 1
+    if n > MAX_PARALLEL_CALLS_CEILING:
+        return MAX_PARALLEL_CALLS_CEILING
+    return n
+
+
 def _normalize_holidays(raw_holidays) -> List[HolidayEntry]:
     items = raw_holidays if isinstance(raw_holidays, list) else []
     normalized: List[HolidayEntry] = []
@@ -106,6 +122,8 @@ def _row_to_settings(row: SystemSettingsRow) -> SystemSettings:
         openai_voice=ds.get("openai_voice", "alloy"),
         gemini_voice=ds.get("gemini_voice", "Aoede"),
         call_greeting=ds.get("call_greeting", DEFAULT_CALL_GREETING),
+        max_parallel_calls=_clamp_parallel(ds.get("max_parallel_calls", 1)),
+        dispatch_pacing_seconds=int(ds.get("dispatch_pacing_seconds", 1)),
     )
     settings.allow_live_calls = row.allow_live_calls if row.allow_live_calls is not None else False
     settings.allowed_phones = row.allowed_phones if row.allowed_phones is not None else []
@@ -171,6 +189,8 @@ class SettingsProvider:
                 "max_attempts": settings.dispatcher_settings.max_attempts,
                 "min_hours_between": settings.dispatcher_settings.min_hours_between,
                 "verbose_logging": settings.dispatcher_settings.verbose_logging,
+                "max_parallel_calls": _clamp_parallel(settings.dispatcher_settings.max_parallel_calls),
+                "dispatch_pacing_seconds": int(settings.dispatcher_settings.dispatch_pacing_seconds),
             }
             row.allow_live_calls = settings.allow_live_calls
             row.allowed_phones = settings.allowed_phones
@@ -286,6 +306,8 @@ class SettingsProvider:
                 "openai_voice": dispatcher_settings.openai_voice,
                 "gemini_voice": dispatcher_settings.gemini_voice,
                 "call_greeting": dispatcher_settings.call_greeting,
+                "max_parallel_calls": _clamp_parallel(dispatcher_settings.max_parallel_calls),
+                "dispatch_pacing_seconds": int(dispatcher_settings.dispatch_pacing_seconds),
             }
             await session.commit()
             return _row_to_settings(row)

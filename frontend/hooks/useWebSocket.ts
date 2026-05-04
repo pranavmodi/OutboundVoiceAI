@@ -25,6 +25,13 @@ export interface DispatcherDecision {
   repeatCount?: number;
 }
 
+export interface DispatcherActiveCall {
+  patient_id: string;
+  patient_name: string;
+  phase: "dispatched" | "active" | "voicemail";
+  call_id: string | null;
+}
+
 interface UseDashboardWSReturn {
   connected: boolean;
   queueState: QueueState | null;
@@ -37,6 +44,10 @@ interface UseDashboardWSReturn {
   pushEvent: (decision: string, detail: string) => void;
   onCallEnded: React.MutableRefObject<(() => void) | null>;
   onSettingsUpdated: React.MutableRefObject<((settings: any) => void) | null>;
+  // Phase 7: snapshots from each queue_update tick so the UI can render
+  // an N-tile view of in-flight calls.
+  activeCalls: DispatcherActiveCall[];
+  maxParallelCalls: number;
 }
 
 export function useDashboardWS(): UseDashboardWSReturn {
@@ -47,6 +58,8 @@ export function useDashboardWS(): UseDashboardWSReturn {
   const [statistics, setStatistics] = useState<Statistics | null>(null);
   const [lastStatus, setLastStatus] = useState<string | null>(null);
   const [dispatchedPatient, setDispatchedPatient] = useState<DispatchedPatient | null>(null);
+  const [activeCalls, setActiveCalls] = useState<DispatcherActiveCall[]>([]);
+  const [maxParallelCalls, setMaxParallelCalls] = useState<number>(1);
   const onCallEndedRef = useRef<(() => void) | null>(null);
   const onSettingsUpdatedRef = useRef<((settings: any) => void) | null>(null);
   const [dispatcherEvents, setDispatcherEvents] = useState<DispatcherDecision[]>([]);
@@ -163,6 +176,12 @@ export function useDashboardWS(): UseDashboardWSReturn {
 
           case "queue_update":
             setQueueState(message.queue_state as QueueState);
+            if (Array.isArray((message as any).active_calls)) {
+              setActiveCalls((message as any).active_calls as DispatcherActiveCall[]);
+            }
+            if (typeof (message as any).max_parallel_calls === "number") {
+              setMaxParallelCalls((message as any).max_parallel_calls as number);
+            }
             if (message.decision) {
               const decision = message.decision as DispatcherDecision;
               if (!decision.timestamp) {
@@ -249,7 +268,7 @@ export function useDashboardWS(): UseDashboardWSReturn {
     };
   }, [connect, isDev]);
 
-  return { connected, queueState, activeCall, statistics, lastStatus, dispatchedPatient, clearDispatch, dispatcherEvents, pushEvent, onCallEnded: onCallEndedRef, onSettingsUpdated: onSettingsUpdatedRef };
+  return { connected, queueState, activeCall, statistics, lastStatus, dispatchedPatient, clearDispatch, dispatcherEvents, pushEvent, onCallEnded: onCallEndedRef, onSettingsUpdated: onSettingsUpdatedRef, activeCalls, maxParallelCalls };
 }
 
 interface UseVoiceWSReturn {

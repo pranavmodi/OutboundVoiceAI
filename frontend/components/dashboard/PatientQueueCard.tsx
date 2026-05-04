@@ -47,6 +47,14 @@ interface PatientQueueCardProps {
   outboundAllowed: boolean;
   source?: "simulation" | "live";
   lastUpdated?: Date | null;
+  // Phase 7: live in-flight calls reported by the dispatcher tick.
+  activeCalls?: Array<{
+    patient_id: string;
+    patient_name: string;
+    phase: "dispatched" | "active" | "voicemail";
+    call_id: string | null;
+  }>;
+  maxParallelCalls?: number;
 }
 
 const statusColors: Record<string, "destructive" | "warning" | "secondary" | "outline"> = {
@@ -80,6 +88,8 @@ export function PatientQueueCard({
   loading,
   source = "simulation",
   lastUpdated,
+  activeCalls = [],
+  maxParallelCalls = 1,
 }: PatientQueueCardProps) {
   const [editingPatient, setEditingPatient] = useState<Patient | null>(null);
   const [editForm, setEditForm] = useState({
@@ -267,6 +277,25 @@ export function PatientQueueCard({
             Updated {formatLastUpdated(lastUpdated)}
           </div>
         )}
+        {maxParallelCalls > 1 && (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            <span className="text-xs text-muted-foreground">
+              Active calls {activeCalls.filter((c) => c.phase !== "voicemail").length}/{maxParallelCalls}
+            </span>
+            {activeCalls.map((c) => (
+              <Badge
+                key={c.patient_id}
+                variant={c.phase === "voicemail" ? "secondary" : c.phase === "active" ? "default" : "outline"}
+                className="text-[10px] tabular-nums"
+                title={`call_id=${c.call_id ?? "(pending)"}`}
+              >
+                {c.patient_name || c.patient_id}
+                {c.phase === "voicemail" && " · VM"}
+                {c.phase === "dispatched" && " · dialing"}
+              </Badge>
+            ))}
+          </div>
+        )}
       </CardHeader>
       <CardContent className="flex-1 p-0">
         <ScrollArea className="h-[400px]">
@@ -315,12 +344,10 @@ export function PatientQueueCard({
                       <span className="font-mono">{patient.patient_id}</span>
                       <span className="tabular-nums">{patient.phone}</span>
                       <span className="uppercase font-medium">{patient.language}</span>
-                      {(patient.total_attempts ?? patient.attempt_count ?? 0) > 0 && (
-                        <span className="tabular-nums" title="Total attempts (AI + human)">
-                          {patient.total_attempts ?? patient.attempt_count} total
-                          {" "}(AI {patient.ai_attempt_count ?? 0} / human {patient.human_attempt_count ?? 0})
-                        </span>
-                      )}
+                      <span className="tabular-nums" title="Total attempts (AI + human)">
+                        {patient.total_attempts ?? patient.attempt_count ?? 0} total
+                        {" "}(AI {patient.ai_attempt_count ?? 0} / human {patient.human_attempt_count ?? 0})
+                      </span>
                     </div>
                   </div>
                   <div className="flex items-center gap-1 ml-3 shrink-0">

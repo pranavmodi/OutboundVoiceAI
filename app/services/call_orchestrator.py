@@ -19,8 +19,17 @@ from app.services.twilio_sms_service import get_callback_number
 logger = logging.getLogger(__name__)
 
 
-class CallOrchestrator:
-    """Orchestrates outbound calls with OpenAI Realtime voice."""
+class CallSession:
+    """Per-call orchestrator. One instance per outbound call.
+
+    Phase 2b split: previously a singleton holding *the* current call,
+    now intended to be created per-call by OrchestratorManager. The
+    legacy `CallOrchestrator` alias below is preserved so existing
+    imports keep working; for web-mode/voice-WS we still use a single
+    long-lived instance because the browser can only run one call at
+    a time. Twilio-mode dispatches use a fresh session per call so
+    parallel calls don't share `_current_call`/`_twilio_call_sid`.
+    """
 
     def __init__(self):
         self._voice_service: Optional[BaseVoiceService] = None
@@ -32,6 +41,7 @@ class CallOrchestrator:
         self._mock_phone: str = ""
         self._twilio_call_sid: Optional[str] = None
         self._voicemail_handled: bool = False
+        self._machine_detected: bool = False  # early AMD signal — suppresses greeting
         self._web_voicemail_simulated: bool = False
         self._ending_call: bool = False  # prevents re-entrant end_call from race conditions
         self._transfer_in_progress: bool = False  # set during SIP transfer to prevent DISCONNECTED override
@@ -64,7 +74,17 @@ class CallOrchestrator:
         self._carrier_failure.verbose = self._verbose
 
     async def handle_twilio_amd_status(self, call_sid: str, answered_by: str):
-        """Handle Twilio AMD callback values (machine/human)."""
+        """Handle Twilio AMD callback values.
+
+        With DetectMessageEnd, Twilio fires two signals for machines:
+        - "machine_start"  — early: voicemail greeting is still playing.
+          We use this to suppress the AI greeting so it doesn't talk over
+          the VM system.  No voicemail message is left yet.
+        - "machine_end_beep" / "machine_end_silence" / "machine_end_other"
+          — the greeting finished (beep detected or silence).  NOW we
+          inject the voicemail script so the AI speaks after the beep.
+        For humans, Twilio fires "human" and we do nothing special.
+        """
         if not self._current_call or not call_sid or call_sid != self._twilio_call_sid:
             return
         if self._voicemail_handled:
@@ -79,17 +99,91 @@ class CallOrchestrator:
                 await self.on_status_update("Twilio AMD: human detected")
             return
 
-        if normalized.startswith("machine"):
-            self._voicemail_handled = True
-            call = self._current_call
+        # --- Early signal: machine greeting is playing -----------------
+        if normalized == "machine_start":
+            self._machine_detected = True
             if self.on_status_update:
-                await self.on_status_update(f"Twilio AMD: voicemail detected ({answered_by})")
+                await self.on_status_update("Twilio AMD: machine detected — greeting suppressed, waiting for beep")
+            call_log_provider = get_call_log_provider()
+            await call_log_provider.add_transcript(
+                self._current_call.call_id, "system",
+                f"AMD detected machine ({answered_by}) — suppressing AI greeting, waiting for beep",
+            )
+            return
 
-            # Instead of redirecting the Twilio call (which kills the media
-            # stream and prevents detecting iPhone Live Voicemail pickups),
-            # inject a system message so the AI speaks the voicemail inline.
+        # --- Beep / end-of-greeting signal -----------------------------
+        if normalized in ("machine_end_beep", "machine_end_silence", "machine_end_other"):
+            self._voicemail_handled = True
+            self._machine_detected = True  # in case machine_start was missed
+            call = self._current_call
+            # Free the dispatcher slot now so the next call can start while
+            # the AI leaves the voicemail (Danny's ask — VM duration no
+            # longer blocks dispatch).
+            try:
+                from app.services.dispatcher import get_dispatcher
+                if call and getattr(call, "patient_id", None):
+                    get_dispatcher().notify_voicemail_started(call.patient_id)
+            except Exception as e:
+                logger.warning("notify_voicemail_started failed: %s", e)
+            if self.on_status_update:
+                await self.on_status_update(f"Twilio AMD: voicemail beep detected ({answered_by}) — leaving message")
+
+            # Inject voicemail script so the AI speaks after the beep.
             # If the person picks up mid-message (iPhone Live Voicemail),
             # the AI will hear them and switch to a live conversation.
+            if self._voice_service and self._voice_service.is_connected:
+                callback_number = get_callback_number().strip() or "800-558-2223"
+                await self._voice_service.inject_system_message(
+                    f"[System: You have reached a voicemail or answering machine. "
+                    f"The beep has played. Please leave a brief voicemail message now. "
+                    f"Say: 'Hi, this is Ashley with Precise Imaging. We received your doctor's "
+                    f"imaging order and need to schedule your appointment. Please call us back at "
+                    f"{callback_number}, Monday through Friday, 8 AM to 5 PM Pacific. "
+                    f"Thank you and have a good day.' "
+                    f"After speaking, call end_call with reason 'voicemail'. "
+                    f"IMPORTANT: If at any point a real person interrupts and says hello, "
+                    f"STOP the voicemail message and switch to the normal live conversation.]"
+                )
+                call_log_provider = get_call_log_provider()
+                await call_log_provider.update_call(call.call_id, voicemail_left=True)
+                call.voicemail_left = True
+                await call_log_provider.add_transcript(
+                    call.call_id, "system", f"AMD voicemail beep ({answered_by}) — AI leaving message inline"
+                )
+            else:
+                # Fallback: voice service not connected, try TwiML redirect
+                callback_number = get_callback_number().strip() or "800-558-2223"
+                message = (
+                    "Hi, this is Ashley with Precise Imaging. We received your doctor's imaging order "
+                    "and need to schedule your appointment. "
+                    f"Please call us back at {callback_number}, Monday through Friday, 8 AM to 5 PM Pacific. "
+                    "Thank you and have a good day."
+                )
+                try:
+                    from app.services.twilio_voice_service import play_voicemail_and_hangup
+                    await asyncio.to_thread(play_voicemail_and_hangup, call_sid, message)
+                except Exception as e:
+                    logger.warning("Failed to play voicemail for call %s: %s", call.call_id, e)
+                call_log_provider = get_call_log_provider()
+                await call_log_provider.update_call(call.call_id, voicemail_left=True)
+                call.voicemail_left = True
+                await self.end_call(CallOutcome.VOICEMAIL)
+            return
+
+        # --- Legacy fallback: plain "machine" from Enable mode ---------
+        if normalized.startswith("machine"):
+            self._voicemail_handled = True
+            self._machine_detected = True
+            call = self._current_call
+            # Free the dispatcher slot — see machine_end_* branch for rationale.
+            try:
+                from app.services.dispatcher import get_dispatcher
+                if call and getattr(call, "patient_id", None):
+                    get_dispatcher().notify_voicemail_started(call.patient_id)
+            except Exception as e:
+                logger.warning("notify_voicemail_started failed: %s", e)
+            if self.on_status_update:
+                await self.on_status_update(f"Twilio AMD: voicemail detected ({answered_by})")
             if self._voice_service and self._voice_service.is_connected:
                 callback_number = get_callback_number().strip() or "800-558-2223"
                 await self._voice_service.inject_system_message(
@@ -110,7 +204,6 @@ class CallOrchestrator:
                     call.call_id, "system", f"AMD detected voicemail ({answered_by}) — AI leaving message inline"
                 )
             else:
-                # Fallback: voice service not connected, try old redirect method
                 callback_number = get_callback_number().strip() or "800-558-2223"
                 message = (
                     "Hi, this is Ashley with Precise Imaging. We received your doctor's imaging order "
@@ -145,6 +238,20 @@ class CallOrchestrator:
             print(f"[CallOrchestrator] Twilio status={status} — aborting media stream wait")
             self._twilio_bridge.abort()
 
+        # If Twilio says the call completed while we're still waiting for
+        # the voicemail beep (machine_start received but machine_end_* not
+        # yet), the remote voicemail system hung up before the beep arrived.
+        # End the call now instead of waiting indefinitely.
+        if (
+            status == "completed"
+            and self._machine_detected
+            and not self._voicemail_handled
+            and self._current_call
+        ):
+            print(f"[CallOrchestrator] Twilio completed during machine_start — ending as DISCONNECTED (no beep received)")
+            await self.end_call(CallOutcome.DISCONNECTED)
+            return
+
         await self._carrier_failure.handle_twilio_call_status(
             call_sid, call_status, error_code_raw, sip_response_code_raw,
         )
@@ -152,9 +259,11 @@ class CallOrchestrator:
     async def start_call(self, patient_id: str, call_mode: str = "web") -> Optional[CallLog]:
         """Start an outbound call to a patient."""
         self._last_start_error = None
-        call_log_provider = get_call_log_provider()
-        if call_log_provider.has_active_call():
-            self._last_start_error = "A call is already in progress"
+        # Per-session refusal: a single CallSession can only hold one live
+        # call at a time. Parallelism comes from creating multiple sessions,
+        # not from reusing one. Dispatcher gating handles cross-session caps.
+        if self._current_call is not None:
+            self._last_start_error = "Session already has an active call"
             if self.on_error:
                 await self.on_error(self._last_start_error)
             return None
@@ -167,10 +276,15 @@ class CallOrchestrator:
                 await self.on_error(f"Patient {patient_id} not found")
             return None
 
+        # Pull queue state and settings up-front. We have to also re-check
+        # has_active_call against the global call log provider here so the
+        # legacy singleton (web mode) doesn't double-start when MAX_PARALLEL_CALLS == 1.
+        # At max>1, dispatcher gating is authoritative — this check just protects
+        # against a manual-WS double-click on the legacy default session.
+        call_log_provider = get_call_log_provider()
         queue_provider = get_queue_provider()
         queue_state = queue_provider.get_state()
 
-        # Read settings upfront so we can stamp mock_mode on the call log entry
         settings_provider = get_settings_provider()
         settings = await settings_provider.get_settings()
 
@@ -191,7 +305,13 @@ class CallOrchestrator:
         self._current_patient = patient
         self._call_mode = call_mode
         self._web_voicemail_simulated = False
+        self._machine_detected = False
         self._verbose = settings.dispatcher_settings.verbose_logging
+
+        # Register with the orchestrator registry so Twilio webhooks can
+        # route to this session by call_id (and later by SID).
+        from app.services.orchestrator_registry import get_registry
+        get_registry().register(call.call_id, patient.patient_id, self)
 
         mode_label = "Twilio" if call_mode == "twilio" else "Web"
         print(f"[CallOrchestrator] Starting call to {patient.name} ({patient.phone}) in {mode_label} mode")
@@ -234,6 +354,7 @@ class CallOrchestrator:
             )
             await call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
             await self._mark_patient_attempt(patient, "failed")
+            get_registry().unregister(call.call_id)
             self._voice_service = None
             self._current_call = None
             self._current_patient = None
@@ -263,6 +384,9 @@ class CallOrchestrator:
                 bridge = TwilioMediaBridge(self._voice_service, verbose=self._verbose)
                 register_bridge(stream_id, bridge)
                 self._twilio_bridge = bridge
+                # Bind stream_id → this session so the media WS handler can
+                # route the drain-on-close logic to the right call at max>1.
+                get_registry().bind_stream_id(call.call_id, stream_id)
 
                 backend_host = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
                 if not backend_host:
@@ -286,6 +410,8 @@ class CallOrchestrator:
                 )
                 self._twilio_call_sid = call_sid
                 self._voicemail_handled = False
+                self._machine_detected = False
+                get_registry().bind_twilio_sid(call.call_id, call_sid)
                 if self._verbose:
                     print(f"[CallOrchestrator] Twilio call placed: SID={call_sid}, call_id={call.call_id}, to={dial_number}")
 
@@ -301,6 +427,7 @@ class CallOrchestrator:
                 )
                 await call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
                 await self._mark_patient_attempt(patient, "failed")
+                get_registry().unregister(call.call_id)
                 voice = self._voice_service
                 self._voice_service = None
                 self._current_call = None
@@ -349,6 +476,7 @@ class CallOrchestrator:
                 )
                 await call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
                 await self._mark_patient_attempt(patient, "failed")
+                get_registry().unregister(call.call_id)
                 voice = self._voice_service
                 self._voice_service = None
                 self._current_call = None
@@ -362,9 +490,19 @@ class CallOrchestrator:
             if self.on_status_update:
                 await self.on_status_update("Connected - AI Speaking")
 
-        await self._voice_service.start_conversation()
-        if self._verbose:
-            print(f"[CallOrchestrator] Conversation started for call {call.call_id}")
+        # If AMD already flagged this as a machine (machine_start arrived
+        # while we were waiting for the media stream), skip the greeting.
+        # The AI will stay silent until machine_end_beep triggers the VM
+        # script, or the system prompt's own voicemail detection kicks in.
+        if self._machine_detected:
+            if self._verbose:
+                print(f"[CallOrchestrator] Skipping greeting — AMD machine_start already received for call {call.call_id}")
+            if self.on_status_update:
+                await self.on_status_update("Machine detected — waiting for beep before speaking")
+        else:
+            await self._voice_service.start_conversation()
+            if self._verbose:
+                print(f"[CallOrchestrator] Conversation started for call {call.call_id}")
 
         return call
 
@@ -411,8 +549,8 @@ class CallOrchestrator:
             else:
                 print(f"[CallOrchestrator] Skipping SMS for call {call.call_id} — outcome={outcome.value}")
 
-            # Hang up the Twilio phone call (skip for transfers/voicemail which handle it themselves)
-            if call_mode == "twilio" and twilio_call_sid and outcome not in (CallOutcome.TRANSFERRED, CallOutcome.VOICEMAIL):
+            # Hang up the Twilio phone call (skip for transfers which handle hangup themselves)
+            if call_mode == "twilio" and twilio_call_sid and outcome != CallOutcome.TRANSFERRED:
                 try:
                     from app.services.twilio_voice_service import hangup_twilio_call
                     if self._verbose:
@@ -453,8 +591,11 @@ class CallOrchestrator:
                 await self.on_status_update("Call Ended")
         finally:
             self._notifications.cleanup_call(call.call_id)
+            from app.services.orchestrator_registry import get_registry
+            get_registry().unregister(call.call_id)
             self._twilio_call_sid = None
             self._voicemail_handled = False
+            self._machine_detected = False
             self._web_voicemail_simulated = False
             self._ending_call = False
             self._transfer_in_progress = False
@@ -636,13 +777,60 @@ class CallOrchestrator:
         return self._current_call
 
 
-# Global instance
-_orchestrator: Optional[CallOrchestrator] = None
+# --- Backward-compatibility alias ---------------------------------------
+# Old code imports `CallOrchestrator`. New code prefers `CallSession` for
+# semantic clarity (per-call instance) but the two are the same class.
+CallOrchestrator = CallSession
 
 
-def get_orchestrator() -> CallOrchestrator:
-    """Get the global call orchestrator instance."""
+# --- OrchestratorManager ------------------------------------------------
+class OrchestratorManager:
+    """Creates and tracks per-call CallSession instances.
+
+    The manager owns a 'default session' for legacy single-call callers
+    (voice WS / web mode), and creates fresh sessions on demand for
+    Twilio-mode dispatches that need to run in parallel.
+    """
+
+    def __init__(self) -> None:
+        self._default_session: Optional[CallSession] = None
+
+    def default_session(self) -> CallSession:
+        """The legacy singleton — keep using it for web/voice-WS callers
+        that attach callbacks once per WS connection lifetime."""
+        if self._default_session is None:
+            self._default_session = CallSession()
+        return self._default_session
+
+    def create_session(self) -> CallSession:
+        """Build a fresh session. Caller is responsible for wiring callbacks
+        before calling `session.start_call(...)`."""
+        return CallSession()
+
+
+# Global instances
+_orchestrator: Optional[CallSession] = None
+_manager: Optional[OrchestratorManager] = None
+
+
+def get_manager() -> OrchestratorManager:
+    """Returns the singleton OrchestratorManager."""
+    global _manager
+    if _manager is None:
+        _manager = OrchestratorManager()
+    return _manager
+
+
+def get_orchestrator() -> CallSession:
+    """Get the legacy singleton CallSession (a.k.a. the default session).
+
+    DEPRECATED for new code: prefer `get_manager().create_session()` and
+    wire callbacks explicitly. Still used by:
+      - voice WS (one browser session at a time, naturally singleton)
+      - dispatcher's web-mode path (paired with the voice WS singleton)
+      - dashboard's Twilio webhook fallback (only when registry has no binding)
+    """
     global _orchestrator
     if _orchestrator is None:
-        _orchestrator = CallOrchestrator()
+        _orchestrator = get_manager().default_session()
     return _orchestrator

@@ -719,10 +719,18 @@ export default function Dashboard() {
                 onReloadScenario={settings?.active_scenario_id ? () => handleSetActiveScenario(settings.active_scenario_id!) : undefined}
                 onDeletePatient={handleDeletePatient}
                 onUpdatePatient={handleUpdatePatient}
-                isCallActive={voice.isCallActive}
+                // Disable manual call when at the parallel cap (counts the
+                // dispatcher's in-flight calls, not just the local web call).
+                // Voicemail-phase calls don't count, matching backend logic.
+                isCallActive={
+                  voice.isCallActive ||
+                  dashboard.activeCalls.filter((c) => c.phase !== "voicemail").length >= dashboard.maxParallelCalls
+                }
                 outboundAllowed={queueState?.outbound_allowed ?? false}
                 source={settings?.patient_source as "simulation" | "live" | undefined}
                 lastUpdated={patientsLastUpdated}
+                activeCalls={dashboard.activeCalls}
+                maxParallelCalls={dashboard.maxParallelCalls}
               />
             </div>
 

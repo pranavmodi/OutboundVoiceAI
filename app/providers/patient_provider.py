@@ -80,12 +80,13 @@ def _row_to_patient(row: PatientRow) -> Patient:
 
 
 def _sort_key(p: Patient):
-    """Danny's spec: order by status rank, then strict round-robin on
-    combined attempts, then due date, then order creation date."""
+    """Priority: fewest combined attempts first (interleaves across statuses),
+    then status rank as tiebreaker (Ordered > No Show > Needs to Reschedule),
+    then earliest due date, then oldest order."""
     far_future = datetime.max.replace(tzinfo=timezone.utc)
     return (
-        STATUS_RANK.get(p.radflow_status or "", 99),
         p.total_attempts,
+        STATUS_RANK.get(p.radflow_status or "", 99),
         p.due_by or far_future,
         p.order_created or far_future,
     )
@@ -225,6 +226,39 @@ class BasePatientProvider(ABC):
     async def mark_patient_invalid_number(self, patient_id: str, reason: str):
         ...
 
+    @abstractmethod
+    async def reserve_for_dialing(self, patient_id: str, call_id: str) -> bool:
+        """Atomically claim a patient for dialing. Returns True on success,
+        False if the patient is already claimed by another caller. Used to
+        prevent double-dial races when dispatcher ticks overlap."""
+        ...
+
+    @abstractmethod
+    async def rekey_dialing(self, patient_id: str, old_call_id: str, new_call_id: str) -> bool:
+        """Atomically swap the dialing lock from old_call_id to new_call_id.
+        Returns False if the lock no longer matches old_call_id (someone
+        else released or re-keyed it). Used by the dispatcher to swap a
+        provisional dispatch-* lock for the real call_id once start_call
+        succeeds, without ever leaving the patient unlocked."""
+        ...
+
+    @abstractmethod
+    async def release_dialing(self, patient_id: str) -> None:
+        """Release a dialing claim. Safe to call on an already-released patient."""
+        ...
+
+    @abstractmethod
+    async def reap_stale_dialing(self, older_than_seconds: int) -> int:
+        """Clear dialing claims older than the cutoff (stuck-dial reaper).
+        Returns the number of claims cleared."""
+        ...
+
+    @abstractmethod
+    async def clear_all_dialing(self) -> int:
+        """Clear every dialing claim — called once on dispatcher startup.
+        Returns the number of claims cleared."""
+        ...
+
 
 # ---------------------------------------------------------------------------
 # Simulation (DB-backed) provider
@@ -260,7 +294,11 @@ class SimulationPatientProvider(BasePatientProvider):
         )
 
         async with AsyncSessionLocal() as session:
-            result = await session.execute(select(PatientRow))
+            # Exclude patients currently being dialed — prevents a second
+            # dispatcher tick from picking a patient we've already claimed.
+            result = await session.execute(
+                select(PatientRow).where(PatientRow.dialing_call_id.is_(None))
+            )
             patients = [_row_to_patient(r) for r in result.scalars().all()]
 
         filtered = [p for p in patients if _eligible_for_queue(p, settings, cutoff)]
@@ -422,6 +460,73 @@ class SimulationPatientProvider(BasePatientProvider):
             await seed_sample_patients(session)
             await session.commit()
 
+    # -- Dialing lock (simulation) -----------------------------------------
+
+    async def reserve_for_dialing(self, patient_id: str, call_id: str) -> bool:
+        from sqlalchemy import update
+        now = datetime.now(timezone.utc)
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                update(PatientRow)
+                .where(
+                    PatientRow.patient_id == patient_id,
+                    PatientRow.dialing_call_id.is_(None),
+                )
+                .values(dialing_call_id=call_id, dialing_started_at=now)
+            )
+            await session.commit()
+            return (result.rowcount or 0) > 0
+
+    async def rekey_dialing(self, patient_id: str, old_call_id: str, new_call_id: str) -> bool:
+        from sqlalchemy import update
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                update(PatientRow)
+                .where(
+                    PatientRow.patient_id == patient_id,
+                    PatientRow.dialing_call_id == old_call_id,
+                )
+                .values(dialing_call_id=new_call_id)
+            )
+            await session.commit()
+            return (result.rowcount or 0) > 0
+
+    async def release_dialing(self, patient_id: str) -> None:
+        from sqlalchemy import update
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                update(PatientRow)
+                .where(PatientRow.patient_id == patient_id)
+                .values(dialing_call_id=None, dialing_started_at=None)
+            )
+            await session.commit()
+
+    async def reap_stale_dialing(self, older_than_seconds: int) -> int:
+        from sqlalchemy import update
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=older_than_seconds)
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                update(PatientRow)
+                .where(
+                    PatientRow.dialing_call_id.is_not(None),
+                    PatientRow.dialing_started_at < cutoff,
+                )
+                .values(dialing_call_id=None, dialing_started_at=None)
+            )
+            await session.commit()
+            return result.rowcount or 0
+
+    async def clear_all_dialing(self) -> int:
+        from sqlalchemy import update
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                update(PatientRow)
+                .where(PatientRow.dialing_call_id.is_not(None))
+                .values(dialing_call_id=None, dialing_started_at=None)
+            )
+            await session.commit()
+            return result.rowcount or 0
+
 
 # ---------------------------------------------------------------------------
 # Live (RadFlow CallListData API) provider
@@ -475,11 +580,21 @@ class LivePatientProvider(BasePatientProvider):
                 return []
             records = json.loads(raw) if isinstance(raw, str) else raw
             patients = [_api_record_to_patient(r) for r in records]
-            # Deduplicate by PatientId (API may return multiple rows per study)
+            # Deduplicate by PatientId (API may return multiple rows per
+            # study).  Collect all InternalStudyIds so the HL7 POST can
+            # send them as a comma-separated value.
             seen: dict[str, Patient] = {}
+            study_ids: dict[str, list[str]] = {}
             for p in patients:
                 if p.patient_id not in seen:
                     seen[p.patient_id] = p
+                    study_ids[p.patient_id] = []
+                if p.order_id:
+                    study_ids[p.patient_id].append(p.order_id)
+            for pid, p in seen.items():
+                ids = study_ids.get(pid, [])
+                if ids:
+                    p.order_id = ", ".join(ids)
             deduped = list(seen.values())
             if patient_id is None:
                 self._cache = deduped
@@ -658,23 +773,27 @@ class LivePatientProvider(BasePatientProvider):
         patient.priority_bucket = STATUS_RANK.get(patient.radflow_status or "", 99)
         return patient
 
-    async def _merge_all(self, patients: list[Patient]) -> list[Patient]:
+    async def _merge_all(self, patients: list[Patient], *, exclude_dialing: bool = False) -> list[Patient]:
         """Merge local state into all patients.
 
         In mock mode, only the in-memory mock_state is applied — the real
         patient_call_state DB table is left untouched so production state
         remains pristine.  In live mode, the DB state is applied as usual.
+
+        When exclude_dialing is True, patients with an outstanding dialing
+        lock (local state row) are dropped. Used by get_outbound_queue so
+        a second dispatcher tick can't pick a patient mid-call.
         """
         mock_mode = await self._is_mock_mode()
         if mock_mode:
-            if not self._mock_state:
-                return patients
             merged = []
             for p in patients:
                 st = self._mock_state.get(p.patient_id)
                 if st:
                     if st.get("invalid_number"):
                         continue  # Skip invalid numbers entirely
+                    if exclude_dialing and st.get("dialing_call_id"):
+                        continue
                     p = self._merge_mock_state(p, st)
                 merged.append(p)
             return merged
@@ -689,6 +808,8 @@ class LivePatientProvider(BasePatientProvider):
             if st:
                 if st.invalid_number:
                     continue  # Skip invalid numbers entirely
+                if exclude_dialing and st.dialing_call_id is not None:
+                    continue
                 p = self._merge_local_state(p, st)
             merged.append(p)
         return merged
@@ -727,7 +848,7 @@ class LivePatientProvider(BasePatientProvider):
         min_hours_between: int = 6,
     ) -> list[Patient]:
         patients = await self._fetch()
-        patients = await self._merge_all(patients)
+        patients = await self._merge_all(patients, exclude_dialing=True)
 
         now = datetime.now(timezone.utc)
         cutoff = now - timedelta(hours=min_hours_between)
@@ -882,6 +1003,138 @@ class LivePatientProvider(BasePatientProvider):
                 cached_name = p.name
                 break
         await self._post_outcome_to_radflow(patient_id, order_id, "disconnected", patient_name=cached_name)
+
+    # -- Dialing lock (live) -----------------------------------------------
+
+    async def reserve_for_dialing(self, patient_id: str, call_id: str) -> bool:
+        """Claim the local-state row (or mock entry) so no other tick re-picks."""
+        from sqlalchemy import update
+        from sqlalchemy.exc import IntegrityError
+        if await self._is_mock_mode():
+            st = self._mock_state.setdefault(patient_id, {
+                "ai_attempt_count": 0,
+                "attempt_count": 0,
+                "last_attempt_at": None,
+                "last_outcome": None,
+                "invalid_number": False,
+                "dialing_call_id": None,
+                "dialing_started_at": None,
+            })
+            if st.get("dialing_call_id"):
+                return False
+            st["dialing_call_id"] = call_id
+            st["dialing_started_at"] = datetime.now(timezone.utc)
+            return True
+
+        now = datetime.now(timezone.utc)
+        async with AsyncSessionLocal() as session:
+            state = await self._get_local_state(session, patient_id)
+            if state is None:
+                state = PatientCallStateRow(
+                    patient_id=patient_id, attempt_count=0, ai_attempt_count=0,
+                    dialing_call_id=call_id, dialing_started_at=now,
+                )
+                session.add(state)
+                try:
+                    await session.commit()
+                    return True
+                except IntegrityError:
+                    # Another process inserted the row first. Roll back, then
+                    # fall through to the UPDATE path below to claim the lock
+                    # only if it's still free.
+                    await session.rollback()
+            else:
+                if state.dialing_call_id is not None:
+                    return False
+            result = await session.execute(
+                update(PatientCallStateRow)
+                .where(
+                    PatientCallStateRow.patient_id == patient_id,
+                    PatientCallStateRow.dialing_call_id.is_(None),
+                )
+                .values(dialing_call_id=call_id, dialing_started_at=now)
+            )
+            await session.commit()
+            return (result.rowcount or 0) > 0
+
+    async def rekey_dialing(self, patient_id: str, old_call_id: str, new_call_id: str) -> bool:
+        from sqlalchemy import update
+        if await self._is_mock_mode():
+            st = self._mock_state.get(patient_id)
+            if st and st.get("dialing_call_id") == old_call_id:
+                st["dialing_call_id"] = new_call_id
+                return True
+            return False
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                update(PatientCallStateRow)
+                .where(
+                    PatientCallStateRow.patient_id == patient_id,
+                    PatientCallStateRow.dialing_call_id == old_call_id,
+                )
+                .values(dialing_call_id=new_call_id)
+            )
+            await session.commit()
+            return (result.rowcount or 0) > 0
+
+    async def release_dialing(self, patient_id: str) -> None:
+        from sqlalchemy import update
+        if await self._is_mock_mode():
+            st = self._mock_state.get(patient_id)
+            if st:
+                st["dialing_call_id"] = None
+                st["dialing_started_at"] = None
+            return
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                update(PatientCallStateRow)
+                .where(PatientCallStateRow.patient_id == patient_id)
+                .values(dialing_call_id=None, dialing_started_at=None)
+            )
+            await session.commit()
+
+    async def reap_stale_dialing(self, older_than_seconds: int) -> int:
+        from sqlalchemy import update
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=older_than_seconds)
+        if await self._is_mock_mode():
+            cleared = 0
+            for st in self._mock_state.values():
+                started = st.get("dialing_started_at")
+                if started is not None and started < cutoff:
+                    st["dialing_call_id"] = None
+                    st["dialing_started_at"] = None
+                    cleared += 1
+            return cleared
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                update(PatientCallStateRow)
+                .where(
+                    PatientCallStateRow.dialing_call_id.is_not(None),
+                    PatientCallStateRow.dialing_started_at < cutoff,
+                )
+                .values(dialing_call_id=None, dialing_started_at=None)
+            )
+            await session.commit()
+            return result.rowcount or 0
+
+    async def clear_all_dialing(self) -> int:
+        from sqlalchemy import update
+        if await self._is_mock_mode():
+            cleared = 0
+            for st in self._mock_state.values():
+                if st.get("dialing_call_id"):
+                    st["dialing_call_id"] = None
+                    st["dialing_started_at"] = None
+                    cleared += 1
+            return cleared
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                update(PatientCallStateRow)
+                .where(PatientCallStateRow.dialing_call_id.is_not(None))
+                .values(dialing_call_id=None, dialing_started_at=None)
+            )
+            await session.commit()
+            return result.rowcount or 0
 
 
 # ---------------------------------------------------------------------------

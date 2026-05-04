@@ -107,7 +107,11 @@ async def voice_websocket(websocket: WebSocket):
         })
 
     async def on_call_ended(call):
-        get_dispatcher().notify_call_ended()
+        # Thread the call's patient_id through so the dispatcher drops the
+        # right entry from _active_calls at MAX_PARALLEL_CALLS > 1. (The
+        # legacy no-arg form falls back to the oldest entry, which is
+        # ambiguous when multiple calls are in flight.)
+        get_dispatcher().notify_call_ended(getattr(call, "patient_id", None))
         try:
             await websocket.send_json({
                 "type": "call_ended",
@@ -267,22 +271,28 @@ async def twilio_media_websocket(websocket: WebSocket, stream_id: str):
         disconnect_reason = f"error: {type(e).__name__}: {e}"
         print(f"[TwilioMedia] Stream error: stream_id={stream_id}, {disconnect_reason}")
     finally:
+        # Look up the session that owns this stream rather than using the
+        # global singleton — at MAX_PARALLEL_CALLS > 1 the singleton is the
+        # wrong session for Twilio-mode calls.
+        from app.services.orchestrator_registry import get_registry
         from app.services.call_orchestrator import get_orchestrator
-        orchestrator = get_orchestrator()
-        if orchestrator.is_call_active:
-            # Short grace period before ending the call: voicemail systems
-            # often close the media stream at the beep, but the AMD callback
-            # (answered_by=machine_*) can arrive a second or two later. If we
-            # end immediately we lose the chance to play the VM script.
-            print(f"[TwilioMedia] Stream closed while call active — waiting briefly for AMD (reason={disconnect_reason}, stream_id={stream_id})")
+        session = get_registry().by_stream_id(stream_id) or get_orchestrator()
+        if session.is_call_active:
+            # Grace period before ending the call: with DetectMessageEnd,
+            # the media stream may close while AMD is still waiting for
+            # the beep.  If _machine_detected is set (machine_start
+            # received), wait longer for the machine_end_* signal.
+            machine_early = getattr(session, "_machine_detected", False)
+            grace_iters = 75 if machine_early else 20  # ~15s vs ~4s
+            print(f"[TwilioMedia] Stream closed while call active — waiting for AMD (machine_early={machine_early}, grace={grace_iters*0.2:.0f}s, reason={disconnect_reason}, stream_id={stream_id})")
             import asyncio as _asyncio
-            for _ in range(20):  # ~4 seconds total (20 * 0.2s)
+            for _ in range(grace_iters):
                 await _asyncio.sleep(0.2)
-                if getattr(orchestrator, "_voicemail_handled", False) or not orchestrator.is_call_active:
+                if getattr(session, "_voicemail_handled", False) or not session.is_call_active:
                     break
-            if orchestrator.is_call_active and not getattr(orchestrator, "_voicemail_handled", False):
+            if session.is_call_active and not getattr(session, "_voicemail_handled", False):
                 print(f"[TwilioMedia] No AMD within grace period — ending as DISCONNECTED, stream_id={stream_id}")
-                await orchestrator.end_call(CallOutcome.DISCONNECTED)
+                await session.end_call(CallOutcome.DISCONNECTED)
             else:
                 print(f"[TwilioMedia] Voicemail handler took over or call already ended, stream_id={stream_id}")
         else:
