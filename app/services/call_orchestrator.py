@@ -84,34 +84,44 @@ class CallSession:
         Tenant scoping is deferred: there is no tenant_id on patients today,
         so we always pass None. The gate treats an empty allowlist as "no
         scoping" so this is a no-op until tenant data is plumbed through.
+
+        The entire body is wrapped: shadow-mode must NEVER break v1
+        fall-through, so any failure here (bad settings shape, gate bug,
+        import error) is swallowed with a loud log.
         """
-        from app.services.intake_v2_gate import IntakeV2Gate
-        from app.services.dispatcher import get_dispatcher
-
-        gate = IntakeV2Gate(intake_v2_settings)
-        decision = gate.evaluate(patient.order_id, tenant_id=None)
-
-        if decision.eligible:
-            from app.api.intake import get_intake_status
-            try:
-                status = await get_intake_status(patient.order_id)
-                outstanding = len(status.outstanding_tasks)
-            except Exception as e:
-                outstanding = -1  # sentinel: stub call failed
-                logger.warning("intake_v2 stub call failed for call %s: %s", call.call_id, e)
-            detail = (
-                f"call_id={call.call_id} order_id={patient.order_id} "
-                f"outstanding={outstanding}"
-            )
-            decision_label = "intake_v2_eligible"
-        else:
-            detail = f"call_id={call.call_id} reason={decision.reason}"
-            decision_label = "intake_v2_skipped"
-
         try:
-            get_dispatcher()._log_decision(decision_label, detail)
+            from app.services.intake_v2_gate import IntakeV2Gate
+            from app.services.dispatcher import get_dispatcher
+
+            gate = IntakeV2Gate(intake_v2_settings)
+            decision = gate.evaluate(patient.order_id, tenant_id=None)
+
+            if decision.eligible:
+                from app.api.intake import get_intake_status
+                try:
+                    status = await get_intake_status(patient.order_id)
+                    outstanding = len(status.outstanding_tasks)
+                except Exception as e:
+                    outstanding = -1  # sentinel: stub call failed
+                    logger.warning("intake_v2 stub call failed for call %s: %s", call.call_id, e)
+                detail = (
+                    f"call_id={call.call_id} order_id={patient.order_id} "
+                    f"outstanding={outstanding}"
+                )
+                decision_label = "intake_v2_eligible"
+            else:
+                detail = f"call_id={call.call_id} reason={decision.reason}"
+                decision_label = "intake_v2_skipped"
+
+            try:
+                get_dispatcher()._log_decision(decision_label, detail)
+            except Exception as e:
+                logger.warning("intake_v2 decision log failed for call %s: %s", call.call_id, e)
         except Exception as e:
-            logger.warning("intake_v2 decision log failed for call %s: %s", call.call_id, e)
+            logger.exception(
+                "intake_v2 gate eval crashed for call %s — v1 fall-through preserved: %s",
+                getattr(call, "call_id", "?"), e,
+            )
 
     async def handle_twilio_amd_status(self, call_sid: str, answered_by: str):
         """Handle Twilio AMD callback values.

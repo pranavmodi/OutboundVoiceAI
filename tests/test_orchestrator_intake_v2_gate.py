@@ -133,3 +133,29 @@ async def test_dispatcher_logging_failure_does_not_raise(call_and_patient):
     # break the call. v1 fall-through is sacred.
     with patch("app.services.dispatcher.get_dispatcher", return_value=fake_dispatcher):
         await session._evaluate_intake_v2_gate(call, patient, _settings(master_enabled=False))
+
+
+@pytest.mark.asyncio
+async def test_gate_construction_crash_does_not_raise(call_and_patient):
+    """If IntakeV2Gate itself ever explodes, the call must still start.
+
+    This pins the outer try/except — without it, a future bug in the gate
+    (bad settings shape, deserialization error, anything) would crash every
+    v1 call, since the gate eval runs on every call regardless of master flag.
+    """
+    call, patient = call_and_patient
+    session = CallSession()
+    fake_dispatcher = MagicMock()
+
+    with patch(
+        "app.services.intake_v2_gate.IntakeV2Gate",
+        side_effect=RuntimeError("synthetic gate explosion"),
+    ), patch("app.services.dispatcher.get_dispatcher", return_value=fake_dispatcher):
+        # Must not raise. Returns None either way.
+        result = await session._evaluate_intake_v2_gate(
+            call, patient, _settings(master_enabled=True, order_canary_pct=100),
+        )
+        assert result is None
+
+    # Dispatcher never gets a chance to log — the crash precedes that path.
+    fake_dispatcher._log_decision.assert_not_called()
