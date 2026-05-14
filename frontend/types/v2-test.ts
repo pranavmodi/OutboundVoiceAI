@@ -52,3 +52,25 @@ export interface GateEvaluateResponse {
   reason: string;
   canary_bucket: number | null;
 }
+
+export interface StartCallResponse {
+  call_id: string;
+}
+
+export interface EndCallResponse {
+  ended: boolean;
+}
+
+export interface RecentRunSummary {
+  call_id: string;
+  patient_name: string;
+  order_id: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  outcome: string;
+  duration_seconds: number;
+}
+
+export interface RecentRunsResponse {
+  runs: RecentRunSummary[];
+}

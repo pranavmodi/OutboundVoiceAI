@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -8,6 +8,9 @@ import {
   CircleSlash,
   FlaskConical,
   Info,
+  Loader2,
+  Phone,
+  PhoneOff,
   RefreshCw,
 } from "lucide-react";
 
@@ -22,6 +25,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
   SelectContent,
@@ -37,12 +41,15 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 
+import { useAudio } from "@/hooks/useAudio";
 import { useV2Test } from "@/hooks/useV2Test";
+import { useVoiceWS } from "@/hooks/useWebSocket";
 import type {
   FlagOverrides,
   GateEvaluateResponse,
   Modality,
   OutstandingTaskSpec,
+  RecentRunSummary,
   Scenario,
 } from "@/types/v2-test";
 
@@ -127,8 +134,12 @@ export default function V2TestPage() {
 }
 
 
+type CallPhase = "idle" | "starting" | "active" | "ending" | "ended";
+
 function V2TestPageInner() {
-  const { listScenarios, evaluateGate } = useV2Test();
+  const { listScenarios, evaluateGate, startCall, endCall, listRecentRuns } = useV2Test();
+  const voice = useVoiceWS();
+  const audio = useAudio();
 
   const [catalog, setCatalog] = useState<Scenario[]>([]);
   const [catalogError, setCatalogError] = useState<string | null>(null);
@@ -136,6 +147,19 @@ function V2TestPageInner() {
   const [gate, setGate] = useState<GateEvaluateResponse | null>(null);
   const [gateLoading, setGateLoading] = useState(false);
   const [gateError, setGateError] = useState<string | null>(null);
+
+  const [phase, setPhase] = useState<CallPhase>("idle");
+  const [activeCallId, setActiveCallId] = useState<string | null>(null);
+  const [callError, setCallError] = useState<string | null>(null);
+  const [recentRuns, setRecentRuns] = useState<RecentRunSummary[]>([]);
+  const [recentRunsLoading, setRecentRunsLoading] = useState(false);
+
+  // Mirror live refs so the audio-callback closure (set once) can reach
+  // the latest voice/audio handles without re-wiring on every render.
+  const voiceRef = useRef(voice);
+  voiceRef.current = voice;
+  const audioRef = useRef(audio);
+  audioRef.current = audio;
 
   // Load catalog on mount.
   useEffect(() => {
@@ -207,6 +231,154 @@ function V2TestPageInner() {
     () => form.dobOnOrder.trim() !== "" && form.dobOnOrder === form.patientDob,
     [form.dobOnOrder, form.patientDob]
   );
+
+  // -- Recent runs ---------------------------------------------------------
+
+  const refreshRecentRuns = useCallback(async () => {
+    setRecentRunsLoading(true);
+    try {
+      const runs = await listRecentRuns(20);
+      setRecentRuns(runs);
+    } catch (e) {
+      console.warn("recent-runs fetch failed", e);
+    } finally {
+      setRecentRunsLoading(false);
+    }
+  }, [listRecentRuns]);
+
+  useEffect(() => {
+    refreshRecentRuns();
+  }, [refreshRecentRuns]);
+
+  // -- Voice + audio plumbing ---------------------------------------------
+
+  // Wire WS audio out → speakers and mic in → WS — once. Subsequent renders
+  // hit the refs, so we don't reattach on every state change (which would
+  // also reset the once-only callback chain in the hooks).
+  const audioWiredRef = useRef(false);
+  useEffect(() => {
+    if (audioWiredRef.current) return;
+    audioWiredRef.current = true;
+    voice.onAudioReceived((data) => {
+      audioRef.current.playAudio(data);
+    });
+    audio.onAudioData((data) => {
+      voiceRef.current.sendAudio(data);
+    });
+  }, [voice, audio]);
+
+  // React to call lifecycle events from the WS so the UI matches reality
+  // even when the backend ends the call autonomously (timeout, error, etc.).
+  useEffect(() => {
+    if (voice.isCallActive && phase === "starting") {
+      setPhase("active");
+    }
+    if (!voice.isCallActive && (phase === "active" || phase === "ending")) {
+      setPhase("ended");
+      audioRef.current.stopRecording();
+      // Refresh the runs list once the call_log row is finalized.
+      void refreshRecentRuns();
+    }
+  }, [voice.isCallActive, phase, refreshRecentRuns]);
+
+  // Tear down WS + mic on unmount so a navigation-away during an active
+  // call doesn't strand the orchestrator (callbacks would still be
+  // attached to a dead WS and the call would have no audio sink).
+  useEffect(() => {
+    return () => {
+      try {
+        audioRef.current.stopRecording();
+      } catch {
+        // noop
+      }
+      voiceRef.current.disconnect();
+    };
+  }, []);
+
+  // -- Start / end handlers -----------------------------------------------
+
+  const formToScenario = useCallback((): Scenario => {
+    const baseId = form.scenarioId || `adhoc-${Date.now()}`;
+    return {
+      id: baseId,
+      name: form.patientName || baseId,
+      description: "",
+      patient: {
+        name: form.patientName || "Synthetic Test",
+        tenant_id: form.tenantId || "TEST",
+        order_id: form.orderId,
+        dob_on_order: form.dobOnOrder,
+      },
+      expected_patient_dob: form.patientDob,
+      modality: form.modality,
+      outstanding_tasks: form.outstandingTasks,
+      flag_overrides: form.flags,
+    };
+  }, [form]);
+
+  const handleStartCall = useCallback(async () => {
+    if (phase === "starting" || phase === "active" || phase === "ending") return;
+    setCallError(null);
+    setPhase("starting");
+
+    try {
+      // 1. Open WS so callbacks are attached BEFORE the orchestrator starts.
+      //    The page is the only WS client; we never send a `start_call`
+      //    message — the POST below drives the orchestrator directly.
+      if (!voice.connected) {
+        voice.connect();
+        for (let i = 0; i < 30; i++) {
+          await new Promise((r) => setTimeout(r, 100));
+          if (voiceRef.current.connected) break;
+        }
+      }
+      if (!voiceRef.current.connected) {
+        throw new Error("Voice WebSocket did not connect within 3s");
+      }
+
+      // 2. Start mic recording (web mode only — there's no Twilio path here).
+      await audio.startRecording();
+      // Small settle so the AudioContext is fully running before we hand
+      // it to the orchestrator's first audio frame.
+      await new Promise((r) => setTimeout(r, 150));
+
+      // 3. Drive the orchestrator from the server side. The WS callbacks
+      //    we already attached will fire on call_started / transcript /
+      //    audio normally.
+      const resp = await startCall(formToScenario());
+      setActiveCallId(resp.call_id);
+      // Phase will transition to "active" via the voice.isCallActive
+      // effect once the orchestrator fires on_call_started.
+    } catch (e) {
+      setCallError(e instanceof Error ? e.message : "Failed to start mock call");
+      setPhase("idle");
+      try {
+        audioRef.current.stopRecording();
+      } catch {
+        // noop
+      }
+    }
+  }, [phase, voice, audio, startCall, formToScenario]);
+
+  const handleEndCall = useCallback(async () => {
+    if (!activeCallId || phase === "idle" || phase === "ended") return;
+    setPhase("ending");
+    try {
+      await endCall(activeCallId);
+      // Phase transitions to "ended" via the voice.isCallActive effect.
+    } catch (e) {
+      setCallError(e instanceof Error ? e.message : "Failed to end mock call");
+      setPhase("active"); // back to active — let user try again
+    }
+  }, [activeCallId, phase, endCall]);
+
+  const handleResetCallUi = useCallback(() => {
+    setPhase("idle");
+    setActiveCallId(null);
+    setCallError(null);
+  }, []);
+
+  const callBusy = phase === "starting" || phase === "active" || phase === "ending";
 
   return (
     <div className="min-h-screen bg-background">
@@ -420,35 +592,72 @@ function V2TestPageInner() {
             </CardContent>
           </Card>
 
-          {/* Center: call controls (placeholder until Phase B) */}
+          {/* Center: call controls */}
           <Card className="lg:col-span-1">
             <CardHeader>
               <CardTitle className="text-base">Mock call</CardTitle>
               <CardDescription>
-                Runs the scenario through the v2 voice flow with a synthetic
-                patient. Browser audio only — no Twilio originate.
+                Runs the scenario with a synthetic patient. Browser audio only —
+                no Twilio originate, no production data touched.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="rounded-md border border-dashed p-6 flex flex-col items-center justify-center text-center gap-2 min-h-[200px]">
-                <CircleSlash className="h-8 w-8 text-muted-foreground" />
-                <p className="text-sm font-medium">Mock calling not yet wired</p>
-                <p className="text-xs text-muted-foreground max-w-xs">
-                  The <code className="font-mono">POST /api/v2-test/start-call</code>{" "}
-                  endpoint lands in Phase B. The gate-decision panel on the right
-                  is live now — that&apos;s the part you can validate today.
+              <CallStatusPanel
+                phase={phase}
+                callError={callError}
+                voiceStatus={voice.callStatus}
+                voiceError={voice.error}
+                audioLevel={audio.audioLevel}
+                isRecording={audio.isRecording}
+                activeCallId={activeCallId}
+              />
+
+              {phase === "idle" || phase === "ended" ? (
+                <Button
+                  className="w-full"
+                  onClick={handleStartCall}
+                  disabled={
+                    !form.orderId || !form.dobOnOrder || !form.patientDob ||
+                    gate?.eligible === false
+                  }
+                >
+                  <Phone className="h-4 w-4 mr-2" />
+                  Start mock call
+                </Button>
+              ) : (
+                <Button
+                  className="w-full"
+                  variant="destructive"
+                  onClick={handleEndCall}
+                  disabled={phase === "ending" || phase === "starting"}
+                >
+                  {phase === "ending" ? (
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <PhoneOff className="h-4 w-4 mr-2" />
+                  )}
+                  End call
+                </Button>
+              )}
+
+              {phase === "ended" && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full"
+                  onClick={handleResetCallUi}
+                >
+                  Clear and re-arm
+                </Button>
+              )}
+
+              {gate && gate.eligible === false && (phase === "idle" || phase === "ended") && (
+                <p className="text-xs text-muted-foreground">
+                  Gate would skip this scenario (
+                  <code className="font-mono">{gate.reason}</code>) — fix it
+                  before starting a call.
                 </p>
-              </div>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="block w-full">
-                    <Button className="w-full" disabled>
-                      Start mock call
-                    </Button>
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent>Phase B — coming next.</TooltipContent>
-              </Tooltip>
+              )}
 
               {!dobMatches && form.dobOnOrder && form.patientDob && (
                 <div className="text-xs rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-amber-700 dark:text-amber-300">
@@ -461,23 +670,67 @@ function V2TestPageInner() {
             </CardContent>
           </Card>
 
-          {/* Right: gate decision */}
+          {/* Right: gate decision when idle, live transcript during call */}
           <Card className="lg:col-span-1">
             <CardHeader>
-              <CardTitle className="text-base">Gate decision</CardTitle>
+              <CardTitle className="text-base">
+                {callBusy || phase === "ended" ? "Live transcript" : "Gate decision"}
+              </CardTitle>
               <CardDescription>
-                Live evaluation against the same{" "}
-                <code className="font-mono">IntakeV2Gate</code> used by{" "}
-                <code className="font-mono">CallOrchestrator</code>.
-                Overlay forces master on, allowlist=[&quot;TEST&quot;], canary=100.
+                {callBusy || phase === "ended" ? (
+                  <>Streaming from <code className="font-mono">/ws/voice</code>. Only complete utterances are shown.</>
+                ) : (
+                  <>
+                    Live evaluation against the same{" "}
+                    <code className="font-mono">IntakeV2Gate</code> used by{" "}
+                    <code className="font-mono">CallOrchestrator</code>.
+                    Overlay forces master on, allowlist=[&quot;TEST&quot;], canary=100.
+                  </>
+                )}
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <GatePanel
-                loading={gateLoading}
-                error={gateError}
-                decision={gate}
-              />
+              {callBusy || phase === "ended" ? (
+                <TranscriptPanel transcript={voice.transcript} />
+              ) : (
+                <GatePanel
+                  loading={gateLoading}
+                  error={gateError}
+                  decision={gate}
+                />
+              )}
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Recent test runs */}
+        <div className="mt-6">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0">
+              <div>
+                <CardTitle className="text-base">Recent test runs</CardTitle>
+                <CardDescription>
+                  Last 20 /v2-test calls. Filtered to{" "}
+                  <code className="font-mono">mock_mode=true</code> AND{" "}
+                  <code className="font-mono">TEST-PAT-*</code> so production
+                  history stays clean.
+                </CardDescription>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={refreshRecentRuns}
+                disabled={recentRunsLoading}
+              >
+                {recentRunsLoading ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-3.5 w-3.5" />
+                )}
+              </Button>
+            </CardHeader>
+            <CardContent>
+              <RecentRunsPanel runs={recentRuns} loading={recentRunsLoading} />
             </CardContent>
           </Card>
         </div>
@@ -576,6 +829,178 @@ function GatePanel({
           </p>
         </div>
       </div>
+    </div>
+  );
+}
+
+
+function CallStatusPanel({
+  phase,
+  callError,
+  voiceStatus,
+  voiceError,
+  audioLevel,
+  isRecording,
+  activeCallId,
+}: {
+  phase: CallPhase;
+  callError: string | null;
+  voiceStatus: string | null;
+  voiceError: string | null;
+  audioLevel: number;
+  isRecording: boolean;
+  activeCallId: string | null;
+}) {
+  const label = (
+    phase === "idle" ? "Ready" :
+    phase === "starting" ? "Connecting…" :
+    phase === "active" ? "Live" :
+    phase === "ending" ? "Hanging up…" :
+    "Ended"
+  );
+
+  const dotColor =
+    phase === "active" ? "bg-emerald-500" :
+    phase === "starting" || phase === "ending" ? "bg-amber-500" :
+    phase === "ended" ? "bg-muted-foreground" :
+    "bg-muted";
+
+  // Audio level is 0..1 from the mic analyser; clamp for the meter width.
+  const levelPct = Math.min(100, Math.round(audioLevel * 100));
+
+  return (
+    <div className="rounded-md border p-4 space-y-3 min-h-[200px]">
+      <div className="flex items-center gap-2">
+        <span className={`inline-block h-2.5 w-2.5 rounded-full ${dotColor} ${phase === "active" ? "animate-pulse" : ""}`} />
+        <span className="font-medium text-sm">{label}</span>
+        {activeCallId && (
+          <Badge variant="outline" className="font-mono text-[10px] ml-auto">
+            {activeCallId.slice(0, 8)}…
+          </Badge>
+        )}
+      </div>
+
+      {(phase === "active" || phase === "starting") && (
+        <div>
+          <p className="text-xs text-muted-foreground mb-1">
+            Mic {isRecording ? "(recording)" : "(idle)"}
+          </p>
+          <div className="h-2 rounded-full bg-muted overflow-hidden">
+            <div
+              className="h-full bg-emerald-500 transition-[width] duration-100"
+              style={{ width: `${levelPct}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+      {voiceStatus && (
+        <p className="text-xs text-muted-foreground">
+          <span className="font-mono">status:</span> {voiceStatus}
+        </p>
+      )}
+
+      {(callError || voiceError) && (
+        <div className="text-xs rounded-md border border-destructive/40 bg-destructive/5 px-2.5 py-2 text-destructive">
+          {callError || voiceError}
+        </div>
+      )}
+
+      {phase === "idle" && (
+        <p className="text-xs text-muted-foreground">
+          Click <strong>Start mock call</strong> to dial the synthetic patient.
+          Browser will request mic access.
+        </p>
+      )}
+    </div>
+  );
+}
+
+
+function TranscriptPanel({
+  transcript,
+}: {
+  transcript: Array<{ speaker: string; text: string }>;
+}) {
+  if (transcript.length === 0) {
+    return (
+      <div className="text-sm text-muted-foreground py-8 text-center">
+        Waiting for the first utterance…
+      </div>
+    );
+  }
+  return (
+    <ScrollArea className="h-[320px] pr-3">
+      <ul className="space-y-2.5">
+        {transcript.map((entry, i) => (
+          <li
+            key={i}
+            className={`rounded-md px-3 py-2 text-sm ${
+              entry.speaker === "ai"
+                ? "bg-muted/50"
+                : "bg-emerald-500/5 border border-emerald-500/20"
+            }`}
+          >
+            <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-0.5">
+              {entry.speaker === "ai" ? "Agent" : entry.speaker === "patient" ? "Tester" : entry.speaker}
+            </div>
+            <div className="whitespace-pre-wrap">{entry.text}</div>
+          </li>
+        ))}
+      </ul>
+    </ScrollArea>
+  );
+}
+
+
+function RecentRunsPanel({
+  runs,
+  loading,
+}: {
+  runs: RecentRunSummary[];
+  loading: boolean;
+}) {
+  if (loading && runs.length === 0) {
+    return (
+      <div className="text-sm text-muted-foreground py-4 flex items-center gap-2">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        Loading…
+      </div>
+    );
+  }
+  if (runs.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground py-2">
+        No test runs yet. Start one above.
+      </p>
+    );
+  }
+  return (
+    <div className="rounded-md border divide-y">
+      {runs.map((r) => (
+        <div
+          key={r.call_id}
+          className="px-3 py-2.5 flex items-center justify-between gap-3 text-sm"
+        >
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <span className="font-medium truncate">{r.patient_name}</span>
+              <Badge variant="outline" className="font-mono text-[10px]">
+                {r.order_id || "—"}
+              </Badge>
+            </div>
+            <div className="text-xs text-muted-foreground">
+              {r.started_at ? new Date(r.started_at).toLocaleString() : "—"}
+              {r.duration_seconds > 0 && (
+                <> · {r.duration_seconds}s</>
+              )}
+            </div>
+          </div>
+          <Badge variant="secondary" className="font-mono text-[10px]">
+            {r.outcome || "in_progress"}
+          </Badge>
+        </div>
+      ))}
     </div>
   );
 }

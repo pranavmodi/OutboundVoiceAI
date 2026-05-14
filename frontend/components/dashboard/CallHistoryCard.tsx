@@ -5,8 +5,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
 import {
   Collapsible,
   CollapsibleContent,
@@ -54,6 +56,11 @@ interface CallHistoryCardProps {
   hasMore: boolean;
   onSearchChange?: (search: string) => void;
   loading?: boolean;
+  // Whether /v2-test mock calls are surfaced in the list. Backend default
+  // is to hide them so the production history stays clean; this toggle
+  // lets QA flip the filter from the UI.
+  showTestCalls?: boolean;
+  onToggleShowTestCalls?: (next: boolean) => void;
 }
 
 const outcomeConfig: Record<
@@ -166,7 +173,7 @@ function getDateLabel(dateKey: string): string {
   return formatDate(new Date(`${dateKey}T12:00:00`));
 }
 
-export function CallHistoryCard({ calls, callsTotal, onRefresh, onLoadMore, hasMore, onSearchChange, loading }: CallHistoryCardProps) {
+export function CallHistoryCard({ calls, callsTotal, onRefresh, onLoadMore, hasMore, onSearchChange, loading, showTestCalls, onToggleShowTestCalls }: CallHistoryCardProps) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [transcriptCall, setTranscriptCall] = useState<CallLog | null>(null);
   const [eventsCall, setEventsCall] = useState<CallLog | null>(null);
@@ -335,25 +342,42 @@ export function CallHistoryCard({ calls, callsTotal, onRefresh, onLoadMore, hasM
             </div>
           </div>
 
-          {/* Search bar */}
+          {/* Search bar + test-call toggle */}
           {calls.length > 0 && (
-            <div className="relative pt-2">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 mt-1 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
-              <Input
-                type="text"
-                placeholder="Search by name, patient ID, phone, order ID, or outcome..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="h-8 pl-8 pr-8 text-xs"
-              />
-              {searchQuery && (
-                <button
-                  onClick={() => setSearchQuery("")}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 mt-1 text-muted-foreground hover:text-foreground"
-                  aria-label="Clear search"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
+            <div className="pt-2 space-y-2">
+              <div className="relative">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 mt-1 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+                <Input
+                  type="text"
+                  placeholder="Search by name, patient ID, phone, order ID, or outcome..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="h-8 pl-8 pr-8 text-xs"
+                />
+                {searchQuery && (
+                  <button
+                    onClick={() => setSearchQuery("")}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 mt-1 text-muted-foreground hover:text-foreground"
+                    aria-label="Clear search"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+              {onToggleShowTestCalls && (
+                <div className="flex items-center justify-end gap-2">
+                  <Label
+                    htmlFor="show-test-calls"
+                    className="text-xs text-muted-foreground cursor-pointer"
+                  >
+                    Show /v2-test calls
+                  </Label>
+                  <Switch
+                    id="show-test-calls"
+                    checked={!!showTestCalls}
+                    onCheckedChange={onToggleShowTestCalls}
+                  />
+                </div>
               )}
             </div>
           )}

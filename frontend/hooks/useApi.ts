@@ -67,10 +67,16 @@ export function useApi() {
     }
   }, []);
 
-  const getCalls = useCallback(async (limit: number = 25, offset: number = 0, search?: string): Promise<{ calls: CallLog[]; total: number }> => {
+  const getCalls = useCallback(async (
+    limit: number = 25,
+    offset: number = 0,
+    search?: string,
+    includeTest: boolean = false,
+  ): Promise<{ calls: CallLog[]; total: number }> => {
     try {
       const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
       if (search && search.trim()) params.set("search", search.trim());
+      if (includeTest) params.set("include_test", "true");
       const data = await fetchApi<{ calls: CallLog[]; total: number }>(`/api/calls?${params.toString()}`);
       return { calls: data.calls, total: data.total };
     } catch (e) {

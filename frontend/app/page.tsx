@@ -489,25 +489,43 @@ export default function Dashboard() {
   }, [api]);
 
   const [callsSearch, setCallsSearch] = useState<string>("");
+  // Hide /v2-test mock calls by default — the backend filter is now the
+  // source of truth. Persisted to localStorage so each operator keeps
+  // their preference without sharing it across machines.
+  const [showTestCalls, setShowTestCalls] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem("v1.callHistory.showTestCalls") === "true";
+  });
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem("v1.callHistory.showTestCalls", showTestCalls ? "true" : "false");
+  }, [showTestCalls]);
 
   const handleRefreshCalls = useCallback(async () => {
-    const { calls: c, total: t } = await api.getCalls(CALLS_PAGE_SIZE, 0, callsSearch);
+    const { calls: c, total: t } = await api.getCalls(CALLS_PAGE_SIZE, 0, callsSearch, showTestCalls);
     setCalls(c);
     setCallsTotal(t);
-  }, [api, callsSearch]);
+  }, [api, callsSearch, showTestCalls]);
 
   const handleLoadMoreCalls = useCallback(async () => {
-    const { calls: more, total: t } = await api.getCalls(CALLS_PAGE_SIZE, calls.length, callsSearch);
+    const { calls: more, total: t } = await api.getCalls(CALLS_PAGE_SIZE, calls.length, callsSearch, showTestCalls);
     setCalls((prev) => [...prev, ...more]);
     setCallsTotal(t);
-  }, [api, calls.length, callsSearch]);
+  }, [api, calls.length, callsSearch, showTestCalls]);
 
   const handleSearchChange = useCallback(async (search: string) => {
     setCallsSearch(search);
-    const { calls: c, total: t } = await api.getCalls(CALLS_PAGE_SIZE, 0, search);
+    const { calls: c, total: t } = await api.getCalls(CALLS_PAGE_SIZE, 0, search, showTestCalls);
     setCalls(c);
     setCallsTotal(t);
-  }, [api]);
+  }, [api, showTestCalls]);
+
+  // Refetch when the toggle flips so the visible list matches the new filter.
+  useEffect(() => {
+    handleRefreshCalls();
+    // Only react to the toggle; handleRefreshCalls closes over showTestCalls.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showTestCalls]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -776,7 +794,7 @@ export default function Dashboard() {
 
           {/* History Tab */}
           <TabsContent value="history" className="space-y-6 animate-in">
-            <CallHistoryCard calls={calls} callsTotal={callsTotal} onRefresh={handleRefreshCalls} onLoadMore={handleLoadMoreCalls} hasMore={calls.length < callsTotal} onSearchChange={handleSearchChange} loading={!isLoaded} />
+            <CallHistoryCard calls={calls} callsTotal={callsTotal} onRefresh={handleRefreshCalls} onLoadMore={handleLoadMoreCalls} hasMore={calls.length < callsTotal} onSearchChange={handleSearchChange} loading={!isLoaded} showTestCalls={showTestCalls} onToggleShowTestCalls={setShowTestCalls} />
           </TabsContent>
 
           {/* Audit Log Tab */}
