@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 
-from .api import dashboard_router, websocket_router, settings_router, dispatcher_router, scenarios_router
+from .api import dashboard_router, websocket_router, settings_router, dispatcher_router, scenarios_router, intake_router, v2_test_router
 from .api.auth import router as auth_router
 from .api.audit import router as audit_router
 from .services.dispatcher import get_dispatcher
@@ -99,6 +99,8 @@ app.include_router(websocket_router)
 app.include_router(settings_router)
 app.include_router(dispatcher_router)
 app.include_router(scenarios_router)
+app.include_router(intake_router)
+app.include_router(v2_test_router)
 
 # Legacy static (kept for compatibility)
 STATIC_DIR = Path("static")

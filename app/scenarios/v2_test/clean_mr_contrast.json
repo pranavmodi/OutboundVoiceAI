@@ -1,0 +1,25 @@
+{
+  "id": "clean_mr_contrast",
+  "name": "Clean intake — MR contrast",
+  "description": "Cooperative patient, DOB matches, completes all prescreen questions.",
+  "patient": {
+    "name": "Jane Doe",
+    "tenant_id": "TEST",
+    "order_id": "TEST-ORD-001",
+    "dob_on_order": "1985-03-12"
+  },
+  "expected_patient_dob": "1985-03-12",
+  "modality": "MR_CONTRAST",
+  "outstanding_tasks": [
+    { "category": "PRESCREEN", "field_id": "has_pacemaker" },
+    { "category": "PRESCREEN", "field_id": "kidney_function" },
+    { "category": "DEMOGRAPHICS", "field_id": "emergency_contact" }
+  ],
+  "flag_overrides": {
+    "mode_voice_capture": true,
+    "mode_portal_copilot": false,
+    "multi_call_resume": false
+  },
+  "expected_handoff_reason": "INTAKE_COMPLETE",
+  "expected_behavior": "Agent reads consent, verifies identity, captures 3 fields, transfers with INTAKE_COMPLETE handoff."
+}

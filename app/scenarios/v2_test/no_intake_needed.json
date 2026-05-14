@@ -1,0 +1,21 @@
+{
+  "id": "no_intake_needed",
+  "name": "No intake needed",
+  "description": "Order has zero outstanding tasks — agent should hand off immediately after identity verification.",
+  "patient": {
+    "name": "John Smith",
+    "tenant_id": "TEST",
+    "order_id": "TEST-ORD-002",
+    "dob_on_order": "1972-11-04"
+  },
+  "expected_patient_dob": "1972-11-04",
+  "modality": "RADIATION",
+  "outstanding_tasks": [],
+  "flag_overrides": {
+    "mode_voice_capture": true,
+    "mode_portal_copilot": false,
+    "multi_call_resume": false
+  },
+  "expected_handoff_reason": "NO_INTAKE_NEEDED",
+  "expected_behavior": "Agent verifies identity, sees empty task list, transfers to scheduler with NO_INTAKE_NEEDED."
+}

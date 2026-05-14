@@ -1,0 +1,23 @@
+{
+  "id": "recording_refusal",
+  "name": "Patient refuses recording",
+  "description": "Patient declines the recording disclosure at call start. Expect PATIENT_REQUESTED_HUMAN handoff before any intake begins.",
+  "patient": {
+    "name": "Robert Chen",
+    "tenant_id": "TEST",
+    "order_id": "TEST-ORD-004",
+    "dob_on_order": "1968-01-30"
+  },
+  "expected_patient_dob": "1968-01-30",
+  "modality": "MR_CONTRAST",
+  "outstanding_tasks": [
+    { "category": "PRESCREEN", "field_id": "has_pacemaker" }
+  ],
+  "flag_overrides": {
+    "mode_voice_capture": true,
+    "mode_portal_copilot": false,
+    "multi_call_resume": false
+  },
+  "expected_handoff_reason": "PATIENT_REQUESTED_HUMAN",
+  "expected_behavior": "Tester (acting as patient) says 'do not record this call'. Agent hands off to human, no intake captured."
+}
