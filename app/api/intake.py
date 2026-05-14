@@ -1,7 +1,7 @@
 """V2 intake API.
 
 Stubs for the endpoints listed in section 6.3 of the v2 spec. Until the
-MediFlow / RadFlow backend question is resolved (see docs/v2_plan.md), these
+MediFlow / RadFlow backend question is resolved (see docs/v2/plan.md), these
 return safe empty responses so callers can wire their code paths without
 waiting on the real backend.
 
