@@ -189,7 +189,6 @@ class RealtimeVoiceService(BaseVoiceService):
         self._call_greeting = call_greeting
         self._ws = None  # WebSocket connection
         self._session: Optional[VoiceSession] = None
-        self._api_key = os.getenv("OPENAI_API_KEY", "")
 
     @staticmethod
     def _normalize_language_code(language: Optional[str]) -> str:
@@ -229,9 +228,12 @@ class RealtimeVoiceService(BaseVoiceService):
 
     async def connect(self, call_id: str, patient_name: str, patient_language: str = "en") -> bool:
         """Connect to OpenAI Realtime API and start a session."""
-        # Validate API key first
+        # Read API key per-connect so UI updates take effect on the next call
+        # without a restart.
+        from app.providers.settings_provider import get_api_key_sync
+        self._api_key = get_api_key_sync("openai")
         if not self._api_key:
-            error_msg = "OPENAI_API_KEY not set in environment"
+            error_msg = "OpenAI API key not configured (set via Settings UI or OPENAI_API_KEY env var)"
             print(f"[RealtimeVoice] Error: {error_msg}")
             if self.on_error:
                 await self.on_error(error_msg)

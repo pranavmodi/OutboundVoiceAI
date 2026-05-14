@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useMemo } from "react";
-import type { SystemStatus, Patient, CallLog, QueueState, SystemSettings, BusinessHours, QueueThresholds, DispatcherSettings, SimulationScenario, ScenarioPatient, TodayKpis, TimePerformance, AuditEvent } from "@/types";
+import type { SystemStatus, Patient, CallLog, QueueState, SystemSettings, BusinessHours, QueueThresholds, DispatcherSettings, SimulationScenario, ScenarioPatient, TodayKpis, TimePerformance, AuditEvent, ApiKeysStatusResponse } from "@/types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -586,6 +586,53 @@ export function useApi() {
     }
   }, []);
 
+  const getApiKeysStatus = useCallback(async (): Promise<ApiKeysStatusResponse | null> => {
+    try {
+      return await fetchApi<ApiKeysStatusResponse>("/api/settings/api-keys");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
+  const updateApiKey = useCallback(async (provider: "openai" | "gemini", apiKey: string): Promise<ApiKeysStatusResponse> => {
+    const resp = await fetch(`${API_BASE}/api/settings/api-keys`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider, api_key: apiKey }),
+    });
+    if (!resp.ok) {
+      let detail = `HTTP ${resp.status}`;
+      try {
+        const body = await resp.json();
+        if (body?.detail) detail = body.detail;
+      } catch {}
+      throw new Error(detail);
+    }
+    return await resp.json();
+  }, []);
+
+  const clearApiKey = useCallback(async (provider: "openai" | "gemini"): Promise<ApiKeysStatusResponse | null> => {
+    try {
+      return await fetchApi<ApiKeysStatusResponse>(`/api/settings/api-keys/${provider}`, { method: "DELETE" });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
+  const revealApiKey = useCallback(async (provider: "openai" | "gemini"): Promise<string | null> => {
+    try {
+      const data = await fetchApi<{ provider: string; source: string; api_key: string }>(
+        `/api/settings/api-keys/${provider}/reveal`
+      );
+      return data.api_key || "";
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
   return useMemo(() => ({
     loading,
     error,
@@ -633,7 +680,11 @@ export function useApi() {
     getAuditLog,
     getTimezones,
     deleteAllCalls,
-  }), [
+    getApiKeysStatus,
+    updateApiKey,
+    clearApiKey,
+    revealApiKey,
+}), [
     loading,
     error,
     getStatus,
@@ -680,5 +731,9 @@ export function useApi() {
     getAuditLog,
     getTimezones,
     deleteAllCalls,
-  ]);
+    getApiKeysStatus,
+    updateApiKey,
+    clearApiKey,
+    revealApiKey,
+]);
 }

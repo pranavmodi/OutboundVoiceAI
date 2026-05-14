@@ -7,7 +7,7 @@ from typing import List
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from app.models import BusinessHours, HolidayEntry, QueueThresholds, DispatcherSettings, SystemSettings
+from app.models import BusinessHours, HolidayEntry, QueueThresholds, DispatcherSettings, IntakeV2Settings, SystemSettings
 from app.providers import get_settings_provider
 from app.providers.settings_provider import COMMON_TIMEZONES
 
@@ -86,6 +86,15 @@ class DailyReportRequest(BaseModel):
     timezone: str = "America/Los_Angeles"
 
 
+class IntakeV2Request(BaseModel):
+    master_enabled: bool = False
+    tenant_allowlist: List[str] = []
+    order_canary_pct: int = 0
+    mode_voice_capture: bool = False
+    mode_portal_copilot: bool = False
+    multi_call_resume: bool = False
+
+
 class SystemSettingsResponse(BaseModel):
     system_enabled: bool
     business_hours: BusinessHoursRequest
@@ -101,6 +110,7 @@ class SystemSettingsResponse(BaseModel):
     mock_phone: str
     voice_provider: str
     daily_report: DailyReportRequest
+    intake_v2: IntakeV2Request
     can_make_calls: bool
     is_within_business_hours: bool
 
@@ -196,6 +206,14 @@ async def settings_to_response(provider) -> SystemSettingsResponse:
             webhook_url=settings.daily_report.webhook_url,
             hour=settings.daily_report.hour,
             timezone=settings.daily_report.timezone,
+        ),
+        intake_v2=IntakeV2Request(
+            master_enabled=settings.intake_v2.master_enabled,
+            tenant_allowlist=list(settings.intake_v2.tenant_allowlist),
+            order_canary_pct=settings.intake_v2.order_canary_pct,
+            mode_voice_capture=settings.intake_v2.mode_voice_capture,
+            mode_portal_copilot=settings.intake_v2.mode_portal_copilot,
+            multi_call_resume=settings.intake_v2.multi_call_resume,
         ),
         can_make_calls=await provider.can_make_outbound_call(),
         is_within_business_hours=await provider.is_within_business_hours(),
@@ -562,6 +580,29 @@ async def update_daily_report(request: DailyReportRequest):
     return await settings_response_and_broadcast(provider)
 
 
+@router.put("/intake-v2", response_model=SystemSettingsResponse)
+async def update_intake_v2(request: IntakeV2Request):
+    """Update the v2 intake-agent feature flags."""
+    provider = get_settings_provider()
+    config = IntakeV2Settings(
+        master_enabled=request.master_enabled,
+        tenant_allowlist=list(request.tenant_allowlist),
+        order_canary_pct=request.order_canary_pct,
+        mode_voice_capture=request.mode_voice_capture,
+        mode_portal_copilot=request.mode_portal_copilot,
+        multi_call_resume=request.multi_call_resume,
+    )
+    await provider.update_intake_v2(config)
+    print(
+        f"[SETTINGS] intake_v2 → master={request.master_enabled} "
+        f"canary={request.order_canary_pct}% "
+        f"voice={request.mode_voice_capture} "
+        f"portal={request.mode_portal_copilot} "
+        f"resume={request.multi_call_resume}"
+    )
+    return await settings_response_and_broadcast(provider)
+
+
 @router.get("/timezones", response_model=List[str])
 async def get_timezones():
     """Get list of available timezones."""
@@ -666,9 +707,10 @@ async def voice_preview(request: VoicePreviewRequest):
     if request.provider == "openai":
         if request.voice not in OPENAI_VOICES:
             raise HTTPException(400, f"Invalid OpenAI voice: {request.voice}")
-        api_key = os.getenv("OPENAI_API_KEY", "")
+        from app.providers.settings_provider import get_api_key_sync
+        api_key = get_api_key_sync("openai")
         if not api_key:
-            raise HTTPException(500, "OPENAI_API_KEY not configured")
+            raise HTTPException(500, "OpenAI API key not configured")
         try:
             from openai import OpenAI
             client = OpenAI(api_key=api_key)
@@ -688,9 +730,10 @@ async def voice_preview(request: VoicePreviewRequest):
     elif request.provider == "gemini":
         if request.voice not in GEMINI_VOICES:
             raise HTTPException(400, f"Invalid Gemini voice: {request.voice}")
-        api_key = os.getenv("GEMINI_API_KEY", "")
+        from app.providers.settings_provider import get_api_key_sync
+        api_key = get_api_key_sync("gemini")
         if not api_key:
-            raise HTTPException(500, "GEMINI_API_KEY not configured")
+            raise HTTPException(500, "Gemini API key not configured")
 
         gemini_model = os.getenv("GEMINI_REALTIME_MODEL", "gemini-3.1-flash-live-preview")
         ws_url = (
@@ -787,3 +830,193 @@ async def voice_preview(request: VoicePreviewRequest):
 
     else:
         raise HTTPException(400, f"provider must be 'openai' or 'gemini'")
+
+
+# --- API-key configuration ----------------------------------------------------
+# Stored in DB so the UI can update them without a server restart. PUT validates
+# the key against the provider before saving; GET returns masked status only.
+
+class ApiKeyUpdateRequest(BaseModel):
+    provider: str  # "openai" or "gemini"
+    api_key: str
+
+
+class ApiKeyStatus(BaseModel):
+    configured: bool
+    source: str  # "db", "env", or "none"
+    preview: str
+
+
+class ApiKeysStatusResponse(BaseModel):
+    openai: ApiKeyStatus
+    gemini: ApiKeyStatus
+
+
+def _mask_key(key: str) -> str:
+    if not key:
+        return ""
+    if len(key) <= 11:
+        return "***"
+    return f"{key[:7]}...{key[-4:]}"
+
+
+def _status_for(provider_name: str) -> ApiKeyStatus:
+    from app.providers.settings_provider import (
+        _API_KEY_CACHE,
+        _API_KEY_ENV_NAMES,
+        get_api_key_sync,
+    )
+    db_value = (_API_KEY_CACHE.get(provider_name) or "").strip()
+    env_value = (os.getenv(_API_KEY_ENV_NAMES.get(provider_name, ""), "") or "").strip()
+    effective = get_api_key_sync(provider_name)
+    if db_value:
+        source = "db"
+    elif env_value:
+        source = "env"
+    else:
+        source = "none"
+    return ApiKeyStatus(
+        configured=bool(effective),
+        source=source,
+        preview=_mask_key(effective),
+    )
+
+
+async def _validate_openai_key(api_key: str) -> None:
+    """Make a tiny live call to confirm the key works. Raises HTTPException on failure."""
+    from fastapi import HTTPException
+    try:
+        from openai import OpenAI, AuthenticationError
+    except Exception as e:
+        raise HTTPException(500, f"OpenAI SDK unavailable: {e}")
+    try:
+        client = OpenAI(api_key=api_key)
+        # models.list is a cheap auth check
+        await asyncio.to_thread(lambda: client.models.list())
+    except AuthenticationError:
+        raise HTTPException(400, "OpenAI rejected the key (authentication failed)")
+    except Exception as e:
+        raise HTTPException(400, f"OpenAI key validation failed: {e}")
+
+
+async def _validate_gemini_key(api_key: str) -> None:
+    """Hit a public Gemini REST endpoint to confirm the key works."""
+    from fastapi import HTTPException
+    import urllib.error
+    import urllib.request
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+
+    def _do_request() -> int:
+        req = urllib.request.Request(url, method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return resp.status
+        except urllib.error.HTTPError as e:
+            return e.code
+
+    try:
+        status = await asyncio.to_thread(_do_request)
+    except Exception as e:
+        raise HTTPException(400, f"Gemini key validation failed: {e}")
+    if status == 200:
+        return
+    if status in (400, 401, 403):
+        raise HTTPException(400, "Gemini rejected the key (authentication failed)")
+    raise HTTPException(400, f"Gemini key validation failed (HTTP {status})")
+
+
+@router.get("/api-keys", response_model=ApiKeysStatusResponse)
+async def get_api_keys_status():
+    """Return masked status for each provider's API key. Never returns plaintext."""
+    # Force a fresh DB read so the cache is current
+    await get_settings_provider().get_settings()
+    return ApiKeysStatusResponse(
+        openai=_status_for("openai"),
+        gemini=_status_for("gemini"),
+    )
+
+
+class ApiKeyRevealResponse(BaseModel):
+    provider: str
+    source: str  # "db", "env", or "none"
+    api_key: str
+
+
+@router.get("/api-keys/{provider}/reveal", response_model=ApiKeyRevealResponse)
+async def reveal_api_key(provider: str):
+    """Return the plaintext API key for a provider. Keys are stored plaintext;
+    this endpoint is the explicit "view" action behind the UI eye-toggle."""
+    from fastapi import HTTPException
+    provider_name = (provider or "").strip().lower()
+    if provider_name not in ("openai", "gemini"):
+        raise HTTPException(400, "provider must be 'openai' or 'gemini'")
+    # Refresh the cache from DB before reading
+    await get_settings_provider().get_settings()
+    status = _status_for(provider_name)
+    from app.providers.settings_provider import get_api_key_sync
+    return ApiKeyRevealResponse(
+        provider=provider_name,
+        source=status.source,
+        api_key=get_api_key_sync(provider_name),
+    )
+
+
+@router.put("/api-keys", response_model=ApiKeysStatusResponse)
+async def update_api_key(request: ApiKeyUpdateRequest):
+    """Validate the key against the provider, then store it."""
+    from fastapi import HTTPException
+
+    provider_name = (request.provider or "").strip().lower()
+    if provider_name not in ("openai", "gemini"):
+        raise HTTPException(400, "provider must be 'openai' or 'gemini'")
+    api_key = (request.api_key or "").strip()
+    if not api_key:
+        raise HTTPException(400, "api_key cannot be empty (use DELETE to clear)")
+
+    if provider_name == "openai":
+        await _validate_openai_key(api_key)
+    else:
+        await _validate_gemini_key(api_key)
+
+    provider = get_settings_provider()
+    await provider.set_api_key(provider_name, api_key)
+    logger.info("[SETTINGS] api_key updated for provider=%s", provider_name)
+
+    # Refresh cache + broadcast that settings changed so other browser windows refetch
+    await get_api_keys_status()
+    try:
+        from app.api.websocket import broadcast_to_dashboards
+        await broadcast_to_dashboards({"type": "api_keys_updated", "provider": provider_name})
+    except Exception:
+        pass
+
+    return ApiKeysStatusResponse(
+        openai=_status_for("openai"),
+        gemini=_status_for("gemini"),
+    )
+
+
+@router.delete("/api-keys/{provider}", response_model=ApiKeysStatusResponse)
+async def clear_api_key(provider: str):
+    """Remove a provider's key from the DB. Env fallback (if set) becomes active again."""
+    from fastapi import HTTPException
+
+    provider_name = (provider or "").strip().lower()
+    if provider_name not in ("openai", "gemini"):
+        raise HTTPException(400, "provider must be 'openai' or 'gemini'")
+
+    settings_provider = get_settings_provider()
+    await settings_provider.clear_api_key(provider_name)
+    logger.info("[SETTINGS] api_key cleared for provider=%s", provider_name)
+
+    try:
+        from app.api.websocket import broadcast_to_dashboards
+        await broadcast_to_dashboards({"type": "api_keys_updated", "provider": provider_name})
+    except Exception:
+        pass
+
+    return ApiKeysStatusResponse(
+        openai=_status_for("openai"),
+        gemini=_status_for("gemini"),
+    )

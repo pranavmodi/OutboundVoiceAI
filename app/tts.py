@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 
 from openai import OpenAI
-from .config import get_settings
+from .providers.settings_provider import get_api_key_sync
 
 
 def ensure_parent_dir(path: str) -> None:
@@ -21,8 +21,7 @@ def generate_tts_mp3(
     Generate an MP3 file with AI speech and save to output_path.
     Returns the absolute file path written.
     """
-    settings = get_settings()
-    client = OpenAI(api_key=settings.openai_api_key)
+    client = OpenAI(api_key=get_api_key_sync("openai"))
 
     abs_output_path = str(Path(output_path).resolve())
     if not overwrite and os.path.exists(abs_output_path):

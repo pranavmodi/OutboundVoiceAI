@@ -26,7 +26,6 @@ class Settings:
     twilio_account_sid: str
     twilio_auth_token: str
     twilio_from_number: str
-    openai_api_key: str
     public_base_url: str = ""
 
 
@@ -42,7 +41,6 @@ def get_settings() -> Settings:
         twilio_account_sid=_get_env("TWILIO_ACCOUNT_SID"),
         twilio_auth_token=_get_env("TWILIO_AUTH_TOKEN"),
         twilio_from_number=_get_env("TWILIO_FROM_NUMBER"),
-        openai_api_key=_get_env("OPENAI_API_KEY"),
         public_base_url=os.getenv("PUBLIC_BASE_URL", "") or "",
     )
 

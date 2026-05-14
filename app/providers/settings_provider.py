@@ -1,4 +1,5 @@
 """Settings provider for system configuration — DB-backed."""
+import os
 from datetime import datetime, date
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -8,15 +9,39 @@ from sqlalchemy import select
 from app.db import AsyncSessionLocal
 from app.db.models import SystemSettingsRow
 from app.models import (
+    ApiKeys,
     BusinessHours,
     HolidayEntry,
     QueueThresholds,
     DispatcherSettings,
     DailyReportConfig,
+    IntakeV2Settings,
     SystemSettings,
 )
 from app.models.system_settings import DEFAULT_CALL_GREETING
 from typing import List
+
+
+# In-process cache so sync call sites (stt.py, tts.py, llm.py) can read keys
+# without going async. Mirrors the DB row; populated on every settings read and
+# explicitly invalidated on every set/clear. Empty string = "not set in DB"
+# and the env var of the same NAME is used as a fallback.
+_API_KEY_CACHE: dict[str, str] = {"openai": "", "gemini": ""}
+_API_KEY_ENV_NAMES: dict[str, str] = {
+    "openai": "OPENAI_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+}
+
+
+def get_api_key_sync(provider_name: str) -> str:
+    """Sync key lookup with env fallback. Safe to call from any context."""
+    key = (_API_KEY_CACHE.get(provider_name) or "").strip()
+    if key:
+        return key
+    env_name = _API_KEY_ENV_NAMES.get(provider_name)
+    if not env_name:
+        return ""
+    return (os.getenv(env_name, "") or "").strip()
 
 
 # Common timezones for selection
@@ -141,6 +166,28 @@ def _row_to_settings(row: SystemSettingsRow) -> SystemSettings:
         hour=int(dr.get("hour", 7)),
         timezone=str(dr.get("timezone", "America/Los_Angeles")),
     )
+    iv = getattr(row, "intake_v2", None) or {}
+    raw_pct = iv.get("order_canary_pct", 0)
+    try:
+        canary_pct = max(0, min(100, int(raw_pct)))
+    except (TypeError, ValueError):
+        canary_pct = 0
+    raw_allowlist = iv.get("tenant_allowlist", [])
+    allowlist = [str(t) for t in raw_allowlist if isinstance(raw_allowlist, list) and str(t).strip()]
+    settings.intake_v2 = IntakeV2Settings(
+        master_enabled=bool(iv.get("master_enabled", False)),
+        tenant_allowlist=allowlist,
+        order_canary_pct=canary_pct,
+        mode_voice_capture=bool(iv.get("mode_voice_capture", False)),
+        mode_portal_copilot=bool(iv.get("mode_portal_copilot", False)),
+        multi_call_resume=bool(iv.get("multi_call_resume", False)),
+    )
+    ak = getattr(row, "api_keys", None) or {}
+    openai_key = str(ak.get("openai", "") or "")
+    gemini_key = str(ak.get("gemini", "") or "")
+    settings.api_keys = ApiKeys(openai=openai_key, gemini=gemini_key)
+    _API_KEY_CACHE["openai"] = openai_key
+    _API_KEY_CACHE["gemini"] = gemini_key
     return settings
 
 
@@ -464,9 +511,84 @@ class SettingsProvider:
             await session.commit()
             return _row_to_settings(row)
 
+    async def update_intake_v2(self, config: IntakeV2Settings) -> SystemSettings:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(SystemSettingsRow).where(SystemSettingsRow.id == 1))
+            row = result.scalar_one_or_none()
+            if row is None:
+                row = SystemSettingsRow(id=1, business_hours={}, queue_thresholds={})
+                session.add(row)
+            row.intake_v2 = {
+                "master_enabled": bool(config.master_enabled),
+                "tenant_allowlist": [str(t) for t in config.tenant_allowlist],
+                "order_canary_pct": max(0, min(100, int(config.order_canary_pct))),
+                "mode_voice_capture": bool(config.mode_voice_capture),
+                "mode_portal_copilot": bool(config.mode_portal_copilot),
+                "multi_call_resume": bool(config.multi_call_resume),
+            }
+            await session.commit()
+            return _row_to_settings(row)
+
     async def get_thresholds(self) -> QueueThresholds:
         settings = await self.get_settings()
         return settings.queue_thresholds
+
+    async def get_api_key(self, provider_name: str) -> str:
+        """Return the API key for a provider, falling back to env if not in DB."""
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(SystemSettingsRow).where(SystemSettingsRow.id == 1))
+            row = result.scalar_one_or_none()
+            if row is not None:
+                _row_to_settings(row)  # refreshes _API_KEY_CACHE
+        return get_api_key_sync(provider_name)
+
+    async def set_api_key(self, provider_name: str, api_key: str) -> SystemSettings:
+        """Write a provider key to the DB and update the in-process cache."""
+        if provider_name not in _API_KEY_ENV_NAMES:
+            raise ValueError(f"Unknown provider: {provider_name}")
+        clean = (api_key or "").strip()
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(SystemSettingsRow).where(SystemSettingsRow.id == 1))
+            row = result.scalar_one_or_none()
+            if row is None:
+                row = SystemSettingsRow(id=1, business_hours={}, queue_thresholds={})
+                session.add(row)
+            existing = dict(row.api_keys or {})
+            existing[provider_name] = clean
+            row.api_keys = existing
+            await session.commit()
+            _API_KEY_CACHE[provider_name] = clean
+            return _row_to_settings(row)
+
+    async def clear_api_key(self, provider_name: str) -> SystemSettings:
+        """Remove a provider key from the DB. Env fallback (if set) becomes active again."""
+        return await self.set_api_key(provider_name, "")
+
+    async def bootstrap_api_keys_from_env(self) -> None:
+        """One-shot: copy env-var keys into the DB on startup if DB has none.
+
+        Lets existing deployments transition to DB-backed keys without
+        manual reconfiguration. Only fills empty slots — never overwrites a
+        value the operator has already saved.
+        """
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(SystemSettingsRow).where(SystemSettingsRow.id == 1))
+            row = result.scalar_one_or_none()
+            if row is None:
+                return
+            current = dict(row.api_keys or {})
+            changed = False
+            for provider_name, env_name in _API_KEY_ENV_NAMES.items():
+                if (current.get(provider_name) or "").strip():
+                    continue
+                env_value = (os.getenv(env_name, "") or "").strip()
+                if env_value:
+                    current[provider_name] = env_value
+                    changed = True
+            if changed:
+                row.api_keys = current
+                await session.commit()
+            _row_to_settings(row)  # populate cache regardless
 
 
 # Global instance

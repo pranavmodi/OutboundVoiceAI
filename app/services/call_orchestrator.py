@@ -73,6 +73,46 @@ class CallSession:
         self._carrier_failure.on_status_update = self.on_status_update
         self._carrier_failure.verbose = self._verbose
 
+    async def _evaluate_intake_v2_gate(self, call, patient, intake_v2_settings) -> None:
+        """Shadow-mode evaluation of the v2 intake gate.
+
+        Logs the decision to dispatcher_events but never changes call flow.
+        When the gate admits the call, additionally calls the stubbed intake
+        status endpoint so the read path is exercised — useful for catching
+        wiring issues before the real backend is wired up.
+
+        Tenant scoping is deferred: there is no tenant_id on patients today,
+        so we always pass None. The gate treats an empty allowlist as "no
+        scoping" so this is a no-op until tenant data is plumbed through.
+        """
+        from app.services.intake_v2_gate import IntakeV2Gate
+        from app.services.dispatcher import get_dispatcher
+
+        gate = IntakeV2Gate(intake_v2_settings)
+        decision = gate.evaluate(patient.order_id, tenant_id=None)
+
+        if decision.eligible:
+            from app.api.intake import get_intake_status
+            try:
+                status = await get_intake_status(patient.order_id)
+                outstanding = len(status.outstanding_tasks)
+            except Exception as e:
+                outstanding = -1  # sentinel: stub call failed
+                logger.warning("intake_v2 stub call failed for call %s: %s", call.call_id, e)
+            detail = (
+                f"call_id={call.call_id} order_id={patient.order_id} "
+                f"outstanding={outstanding}"
+            )
+            decision_label = "intake_v2_eligible"
+        else:
+            detail = f"call_id={call.call_id} reason={decision.reason}"
+            decision_label = "intake_v2_skipped"
+
+        try:
+            get_dispatcher()._log_decision(decision_label, detail)
+        except Exception as e:
+            logger.warning("intake_v2 decision log failed for call %s: %s", call.call_id, e)
+
     async def handle_twilio_amd_status(self, call_sid: str, answered_by: str):
         """Handle Twilio AMD callback values.
 
@@ -307,6 +347,13 @@ class CallSession:
         self._web_voicemail_simulated = False
         self._machine_detected = False
         self._verbose = settings.dispatcher_settings.verbose_logging
+
+        # v2 intake gate (shadow mode in M1 Slice 2): evaluate eligibility
+        # and log the decision, but never branch behavior. With master_enabled
+        # OFF this is always 'skipped' and adds nothing but a log line. With
+        # the flag ON it additionally hits the stubbed status endpoint to
+        # exercise the read path. Either way the call continues to v1.
+        await self._evaluate_intake_v2_gate(call, patient, settings.intake_v2)
 
         # Register with the orchestrator registry so Twilio webhooks can
         # route to this session by call_id (and later by SID).

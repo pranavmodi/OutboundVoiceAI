@@ -38,8 +38,13 @@ import {
   Loader2,
   FileText,
   RotateCcw,
+  KeyRound,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import { InfoTooltip } from "@/components/ui/info-tooltip";
+import { useApi } from "@/hooks/useApi";
+import type { ApiKeysStatusResponse } from "@/types";
 import type {
   SystemSettings,
   BusinessHours,
@@ -150,6 +155,224 @@ function VoiceSelector({
         onVoiceChange={(v) => onSave(openaiVoice, v)}
         onPreview={onPreview}
       />
+    </div>
+  );
+}
+
+function ApiKeyRow({
+  label,
+  provider,
+  status,
+  onSaved,
+}: {
+  label: string;
+  provider: "openai" | "gemini";
+  status: { configured: boolean; source: "db" | "env" | "none"; preview: string } | undefined;
+  onSaved: () => Promise<void>;
+}) {
+  const { updateApiKey, clearApiKey, revealApiKey } = useApi();
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState("");
+  const [showValue, setShowValue] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [revealedKey, setRevealedKey] = useState<string | null>(null);
+  const [revealing, setRevealing] = useState(false);
+
+  // Hide a revealed key whenever the underlying status changes (saved/cleared).
+  useEffect(() => {
+    setRevealedKey(null);
+  }, [status?.preview, status?.configured, status?.source]);
+
+  const startEdit = async () => {
+    setErrorMessage(null);
+    setRevealedKey(null);
+    setShowValue(false);
+    setEditing(true);
+    if (status?.configured) {
+      const existing = await revealApiKey(provider);
+      setValue(existing ?? "");
+    } else {
+      setValue("");
+    }
+  };
+
+  const handleReveal = async () => {
+    if (revealedKey !== null) {
+      setRevealedKey(null);
+      return;
+    }
+    setRevealing(true);
+    try {
+      const plaintext = await revealApiKey(provider);
+      if (plaintext !== null) {
+        setRevealedKey(plaintext);
+      }
+    } finally {
+      setRevealing(false);
+    }
+  };
+
+  const cancelEdit = () => {
+    setEditing(false);
+    setValue("");
+    setErrorMessage(null);
+  };
+
+  const save = async () => {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      setErrorMessage("Key cannot be empty");
+      return;
+    }
+    setSaving(true);
+    setErrorMessage(null);
+    try {
+      await updateApiKey(provider, trimmed);
+      await onSaved();
+      setEditing(false);
+      setValue("");
+    } catch (e) {
+      setErrorMessage(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleClear = async () => {
+    if (!confirm(`Clear the ${label} key from the database? The OS environment variable (if set) will be used as fallback.`)) {
+      return;
+    }
+    setSaving(true);
+    try {
+      await clearApiKey(provider);
+      await onSaved();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const badgeForSource = () => {
+    if (!status?.configured) {
+      return <Badge variant="outline" className="text-red-600 border-red-600">Not configured</Badge>;
+    }
+    if (status.source === "env") {
+      return <Badge variant="outline" className="text-amber-600 border-amber-600">From env var</Badge>;
+    }
+    return <Badge variant="outline" className="text-emerald-600 border-emerald-600">Saved</Badge>;
+  };
+
+  return (
+    <div className="space-y-2 rounded-md border p-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Label className="text-sm font-medium">{label}</Label>
+          {badgeForSource()}
+        </div>
+        {status?.configured && !editing && (
+          <span className="text-xs font-mono text-muted-foreground break-all max-w-[60%] text-right">
+            {revealedKey ?? status.preview}
+          </span>
+        )}
+      </div>
+
+      {!editing ? (
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" onClick={startEdit}>
+            {status?.configured ? "Replace" : "Add key"}
+          </Button>
+          {status?.configured && (
+            <Button size="sm" variant="ghost" onClick={handleReveal} disabled={revealing}>
+              {revealing ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />
+              ) : revealedKey !== null ? (
+                <EyeOff className="h-3.5 w-3.5 mr-1" />
+              ) : (
+                <Eye className="h-3.5 w-3.5 mr-1" />
+              )}
+              {revealedKey !== null ? "Hide" : "View"}
+            </Button>
+          )}
+          {status?.configured && status.source === "db" && (
+            <Button size="sm" variant="ghost" onClick={handleClear} disabled={saving}>
+              <Trash2 className="h-3.5 w-3.5 mr-1" />
+              Clear
+            </Button>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <Input
+              type={showValue ? "text" : "password"}
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              placeholder={provider === "openai" ? "sk-..." : "AIza..."}
+              className="font-mono text-xs"
+              autoFocus
+            />
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setShowValue((v) => !v)}
+              type="button"
+              className="h-9 px-2"
+            >
+              {showValue ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+            </Button>
+          </div>
+          {errorMessage && (
+            <p className="text-xs text-red-600">{errorMessage}</p>
+          )}
+          <div className="flex items-center gap-2">
+            <Button size="sm" onClick={save} disabled={saving}>
+              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <Save className="h-3.5 w-3.5 mr-1" />}
+              Validate &amp; save
+            </Button>
+            <Button size="sm" variant="ghost" onClick={cancelEdit} disabled={saving}>
+              Cancel
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Saving makes a test call to {provider === "openai" ? "OpenAI" : "Gemini"} to confirm the key works. New calls use the updated key without a restart.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ApiKeysCard() {
+  const { getApiKeysStatus } = useApi();
+  const [status, setStatus] = useState<ApiKeysStatusResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const refresh = async () => {
+    const s = await getApiKeysStatus();
+    setStatus(s);
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <KeyRound className="h-4 w-4 text-muted-foreground" />
+        <h4 className="text-sm font-medium">Provider API Keys</h4>
+        <InfoTooltip content="Configure the API keys used to reach OpenAI and Gemini. Updates apply on the next call without restarting the server. Keys are stored in the database; clearing one falls back to the OS environment variable if set." />
+      </div>
+      {loading ? (
+        <p className="text-xs text-muted-foreground">Loading…</p>
+      ) : (
+        <div className="space-y-3">
+          <ApiKeyRow label="OpenAI" provider="openai" status={status?.openai} onSaved={refresh} />
+          <ApiKeyRow label="Google Gemini" provider="gemini" status={status?.gemini} onSaved={refresh} />
+        </div>
+      )}
     </div>
   );
 }
@@ -415,6 +638,10 @@ export function OperatorConsole({
             : "Twilio dials the patient's phone number. Audio streams between the phone line and the voice AI. The browser still shows transcripts and controls."}
         </p>
       </div>
+
+      <Separator />
+
+      <ApiKeysCard />
 
       <Separator />
 

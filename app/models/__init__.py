@@ -15,6 +15,8 @@ from .system_settings import (
     QueueThresholds,
     DispatcherSettings,
     DailyReportConfig,
+    IntakeV2Settings,
+    ApiKeys,
     SystemSettings,
 )
 
@@ -38,5 +40,7 @@ __all__ = [
     "QueueThresholds",
     "DispatcherSettings",
     "DailyReportConfig",
+    "IntakeV2Settings",
+    "ApiKeys",
     "SystemSettings",
 ]

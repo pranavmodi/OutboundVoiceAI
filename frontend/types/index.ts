@@ -234,6 +234,17 @@ export interface SystemSettings {
   is_within_business_hours: boolean;
 }
 
+export interface ApiKeyStatus {
+  configured: boolean;
+  source: "db" | "env" | "none";
+  preview: string;
+}
+
+export interface ApiKeysStatusResponse {
+  openai: ApiKeyStatus;
+  gemini: ApiKeyStatus;
+}
+
 export interface TimeSlotStats {
   total: number;
   transferred: number;

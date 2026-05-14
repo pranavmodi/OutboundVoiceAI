@@ -81,6 +81,36 @@ class DailyReportConfig:
 
 
 @dataclass
+class ApiKeys:
+    """Per-provider API keys stored in DB so they can be updated without restart.
+
+    Empty string means "not set in DB" — consumers should fall back to the env
+    var of the same name (OPENAI_API_KEY, GEMINI_API_KEY).
+    """
+    openai: str = ""
+    gemini: str = ""
+
+
+@dataclass
+class IntakeV2Settings:
+    """Feature flags for the v2 patient-intake agent.
+
+    All flags default OFF. master_enabled is the kill switch — when False,
+    no other flag has any effect and every call follows the v1 code path.
+    """
+    master_enabled: bool = False
+    # Empty list = no tenant scoping (allow any tenant when master is on).
+    # Populated list = only the listed tenant IDs are eligible.
+    tenant_allowlist: List[str] = field(default_factory=list)
+    # 0-100. Canary share of eligible orders that actually take the v2 path.
+    order_canary_pct: int = 0
+    # Sub-mode flags wired up in later milestones.
+    mode_voice_capture: bool = False
+    mode_portal_copilot: bool = False
+    multi_call_resume: bool = False
+
+
+@dataclass
 class SystemSettings:
     """Main system settings."""
     system_enabled: bool = True
@@ -97,3 +127,5 @@ class SystemSettings:
     mock_phone: str = ""  # redirect Twilio calls/SMS here when mock_mode=True
     voice_provider: str = "openai"  # "openai" or "gemini"
     daily_report: DailyReportConfig = field(default_factory=DailyReportConfig)
+    intake_v2: IntakeV2Settings = field(default_factory=IntakeV2Settings)
+    api_keys: ApiKeys = field(default_factory=ApiKeys)

@@ -1,7 +1,7 @@
 from typing import Optional
 from pathlib import Path
 from openai import OpenAI
-from .config import get_settings
+from .providers.settings_provider import get_api_key_sync
 
 
 def transcribe_audio(audio_url: str) -> str:
@@ -17,8 +17,7 @@ def transcribe_audio_file(file_path: str) -> str:
     """
     Transcribe a local audio file using OpenAI Speech-to-Text.
     """
-    settings = get_settings()
-    client = OpenAI(api_key=settings.openai_api_key)
+    client = OpenAI(api_key=get_api_key_sync("openai"))
     p = Path(file_path)
     if not p.exists():
         raise FileNotFoundError(file_path)

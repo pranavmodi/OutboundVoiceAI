@@ -654,7 +654,8 @@ async def delete_all_calls():
 @router.get("/config/check")
 async def check_configuration():
     """Check system configuration status (for diagnostics)."""
-    api_key = os.getenv("OPENAI_API_KEY", "")
+    from app.providers.settings_provider import get_api_key_sync
+    api_key = get_api_key_sync("openai")
 
     return {
         "openai_api_key_configured": bool(api_key),

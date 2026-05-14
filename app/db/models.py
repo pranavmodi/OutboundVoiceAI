@@ -120,6 +120,8 @@ class SystemSettingsRow(Base):
     mock_phone: Mapped[str] = mapped_column(String(32), default="")
     voice_provider: Mapped[str] = mapped_column(String(20), default="openai")
     daily_report: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    intake_v2: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    api_keys: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=_utcnow, onupdate=_utcnow)
 
     __table_args__ = (

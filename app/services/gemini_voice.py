@@ -58,7 +58,6 @@ class GeminiVoiceService(BaseVoiceService):
         self._call_greeting = call_greeting
         self._ws = None
         self._session: Optional[GeminiSession] = None
-        self._api_key = os.getenv("GEMINI_API_KEY", "")
         # Audio transcoding state for mulaw ↔ PCM conversion (Twilio mode)
         self._inbound_state = None   # mulaw 8kHz → PCM 16kHz
         self._outbound_state = None  # PCM 24kHz → mulaw 8kHz
@@ -71,8 +70,10 @@ class GeminiVoiceService(BaseVoiceService):
 
     async def connect(self, call_id: str, patient_name: str, patient_language: str = "en") -> bool:
         """Connect to Gemini Live API and start a session."""
+        from app.providers.settings_provider import get_api_key_sync
+        self._api_key = get_api_key_sync("gemini")
         if not self._api_key:
-            error_msg = "GEMINI_API_KEY not set in environment"
+            error_msg = "Gemini API key not configured (set via Settings UI or GEMINI_API_KEY env var)"
             print(f"[GeminiVoice] Error: {error_msg}")
             if self.on_error:
                 await self.on_error(error_msg)

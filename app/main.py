@@ -26,6 +26,9 @@ async def lifespan(app: FastAPI):
         await seed_builtin_scenarios(session)
         await seed_sample_patients(session)
         await session.commit()
+    # Copy any env-var API keys into the DB on first boot. Subsequent
+    # changes from the UI take effect without restart via the cache.
+    await get_settings_provider().bootstrap_api_keys_from_env()
     # Apply persisted source settings
     settings = await get_settings_provider().get_settings()
     set_queue_source(settings.queue_source)
