@@ -371,23 +371,45 @@ async def reset_patients():
 
 
 @router.get("/calls")
-async def get_calls(limit: int = 25, offset: int = 0, search: Optional[str] = None):
-    """Get call history with pagination and optional server-side search."""
+async def get_calls(
+    limit: int = 25,
+    offset: int = 0,
+    search: Optional[str] = None,
+    include_test: bool = False,
+):
+    """Get call history with pagination and optional server-side search.
+
+    ``include_test`` defaults to False, so /v2-test mock calls are hidden
+    from the main history view. The dashboard's "Show test calls" toggle
+    passes ``include_test=true`` to surface them.
+    """
     call_log_provider = get_call_log_provider()
-    calls = await call_log_provider.get_all_calls(limit=limit, offset=offset, search=search)
+    calls = await call_log_provider.get_all_calls(
+        limit=limit, offset=offset, search=search, include_test=include_test,
+    )
     if search and search.strip():
-        total = await call_log_provider.count_all_calls(search=search)
+        total = await call_log_provider.count_all_calls(
+            search=search, include_test=include_test,
+        )
     else:
-        total = await call_log_provider.get_total_call_count()
+        total = await call_log_provider.get_total_call_count(include_test=include_test)
     return {"calls": [c.to_dict() for c in calls], "total": total}
 
 
 @router.get("/calls/active")
-async def get_active_call():
-    """Get the currently active call."""
+async def get_active_call(include_test: bool = False):
+    """Get the currently active call.
+
+    /v2-test mock calls share the singleton CallSession but should not
+    surface in the production operator console. The default filter hides
+    them; the /v2-test page passes ``include_test=true`` if it ever
+    needs to query the same endpoint.
+    """
     call_log_provider = get_call_log_provider()
     active = await call_log_provider.get_active_call()
     if not active:
+        return {"active": False, "call": None}
+    if not include_test and getattr(active, "mock_mode", False):
         return {"active": False, "call": None}
     return {"active": True, "call": active.to_dict()}
 

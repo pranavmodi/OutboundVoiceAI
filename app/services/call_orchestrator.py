@@ -4,7 +4,7 @@ import logging
 import os
 from typing import Optional, Callable, Any
 
-from app.models import CallLog, CallOutcome, Patient
+from app.models import CallLog, CallOutcome, Patient, SystemSettings
 from app.providers import get_queue_provider, get_patient_provider, get_call_log_provider, get_settings_provider
 from app.services.voice_service_base import BaseVoiceService
 from app.services.notification_service import CallNotificationService
@@ -306,8 +306,24 @@ class CallSession:
             call_sid, call_status, error_code_raw, sip_response_code_raw,
         )
 
-    async def start_call(self, patient_id: str, call_mode: str = "web") -> Optional[CallLog]:
-        """Start an outbound call to a patient."""
+    async def start_call(
+        self,
+        patient_id: str,
+        call_mode: str = "web",
+        *,
+        patient_override: Optional[Patient] = None,
+        settings_override: Optional[SystemSettings] = None,
+    ) -> Optional[CallLog]:
+        """Start an outbound call to a patient.
+
+        Production callers pass just ``patient_id`` and ``call_mode``; the
+        patient and settings come from the live providers. The /v2-test
+        lane passes ``patient_override`` (a synthetic Patient never written
+        to the DB) and ``settings_override`` (an in-memory SystemSettings
+        clone with v2 flags forced on). When both overrides are None this
+        method is byte-identical to its v1 form — pinned by a regression
+        test.
+        """
         self._last_start_error = None
         # Per-session refusal: a single CallSession can only hold one live
         # call at a time. Parallelism comes from creating multiple sessions,
@@ -318,8 +334,11 @@ class CallSession:
                 await self.on_error(self._last_start_error)
             return None
 
-        patient_provider = get_patient_provider()
-        patient = await patient_provider.get_patient(patient_id)
+        if patient_override is not None:
+            patient = patient_override
+        else:
+            patient_provider = get_patient_provider()
+            patient = await patient_provider.get_patient(patient_id)
 
         if not patient:
             if self.on_error:
@@ -335,8 +354,11 @@ class CallSession:
         queue_provider = get_queue_provider()
         queue_state = queue_provider.get_state()
 
-        settings_provider = get_settings_provider()
-        settings = await settings_provider.get_settings()
+        if settings_override is not None:
+            settings = settings_override
+        else:
+            settings_provider = get_settings_provider()
+            settings = await settings_provider.get_settings()
 
         voice_provider = settings.voice_provider or "openai"
 

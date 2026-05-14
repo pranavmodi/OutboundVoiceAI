@@ -179,9 +179,16 @@ class CallLogProvider:
         limit: int = 50,
         offset: int = 0,
         search: Optional[str] = None,
+        include_test: bool = False,
     ) -> list[CallLog]:
+        """Paginated history. By default mock-mode rows are hidden so
+        /v2-test QA calls don't pollute the production history view.
+        Pass ``include_test=True`` to surface them (e.g., for the "Show
+        test calls" toggle on the dashboard)."""
         async with AsyncSessionLocal() as session:
             stmt = select(CallLogRow)
+            if not include_test:
+                stmt = stmt.where(CallLogRow.mock_mode != True)  # noqa: E712
             if search and search.strip():
                 q = f"%{search.strip().lower()}%"
                 from sqlalchemy import or_, func as _func
@@ -203,9 +210,15 @@ class CallLogProvider:
             )
             return [_row_to_call_log(r) for r in result.scalars().all()]
 
-    async def count_all_calls(self, search: Optional[str] = None) -> int:
+    async def count_all_calls(
+        self,
+        search: Optional[str] = None,
+        include_test: bool = False,
+    ) -> int:
         async with AsyncSessionLocal() as session:
             stmt = select(func.count(CallLogRow.call_id))
+            if not include_test:
+                stmt = stmt.where(CallLogRow.mock_mode != True)  # noqa: E712
             if search and search.strip():
                 q = f"%{search.strip().lower()}%"
                 from sqlalchemy import or_, func as _func
@@ -223,9 +236,12 @@ class CallLogProvider:
             result = await session.execute(stmt)
             return result.scalar() or 0
 
-    async def get_total_call_count(self) -> int:
+    async def get_total_call_count(self, include_test: bool = False) -> int:
         async with AsyncSessionLocal() as session:
-            result = await session.execute(select(func.count(CallLogRow.call_id)))
+            stmt = select(func.count(CallLogRow.call_id))
+            if not include_test:
+                stmt = stmt.where(CallLogRow.mock_mode != True)  # noqa: E712
+            result = await session.execute(stmt)
             return result.scalar() or 0
 
     async def get_calls_by_patient(self, patient_id: str) -> list[CallLog]:

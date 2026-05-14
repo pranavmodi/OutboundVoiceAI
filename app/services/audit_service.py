@@ -30,8 +30,16 @@ async def log_audit_event(
     request_payload: Optional[dict] = None,
     response_status: Optional[int] = None,
     error_message: Optional[str] = None,
+    mock_mode: bool = False,
 ) -> None:
-    """Insert an audit event row. Best-effort — never raises."""
+    """Insert an audit event row. Best-effort — never raises.
+
+    ``mock_mode=True`` is a no-op: skips the write so /v2-test (and any
+    other mock-mode call) doesn't pollute the audit log. Callers with a
+    call in scope pass ``call.mock_mode`` directly.
+    """
+    if mock_mode:
+        return
     try:
         async with AsyncSessionLocal() as session:
             row = AuditEventRow(

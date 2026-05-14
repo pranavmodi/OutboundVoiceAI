@@ -55,6 +55,12 @@ async def dashboard_websocket(websocket: WebSocket):
         active_call = await call_log_provider.get_active_call()
         statistics = await call_log_provider.get_statistics()
 
+        # Hide /v2-test mock calls from the production dashboard. The
+        # operator console shares this WebSocket; a mock call here would
+        # show up as "live" in the main UI.
+        if active_call and getattr(active_call, "mock_mode", False):
+            active_call = None
+
         await websocket.send_json({
             "type": "initial_state",
             "queue_state": queue_provider.get_state().to_dict(),

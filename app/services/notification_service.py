@@ -121,6 +121,7 @@ class CallNotificationService:
                     patient_name=patient.name, order_id=call.order_id,
                     request_summary=f"SMS to {sms_to} — {body}",
                     request_payload={"to": sms_to, "body": body, "sid": sid},
+                    mock_mode=call.mock_mode,
                 )
                 return True
             except Exception as e:
@@ -139,6 +140,7 @@ class CallNotificationService:
                         patient_name=patient.name, order_id=call.order_id,
                         request_summary=f"SMS blocked (opt-out) to {patient.phone}",
                         error_message="Recipient opted out",
+                        mock_mode=call.mock_mode,
                     )
                     return False
                 await self._log_call_event(call.call_id, f"SMS failed ({reason}): {str(e)}")
@@ -150,6 +152,7 @@ class CallNotificationService:
                     patient_name=patient.name, order_id=call.order_id,
                     request_summary=f"SMS failed to {patient.phone}",
                     error_message=str(e),
+                    mock_mode=call.mock_mode,
                 )
                 return False
 
@@ -183,6 +186,7 @@ class CallNotificationService:
                     call_id=call.call_id, patient_id=call.patient_id,
                     patient_name=call.patient_name, order_id=call.order_id,
                     request_summary=f"Wrong number alert — patient {call.patient_id} phone {call.phone}",
+                    mock_mode=call.mock_mode,
                 )
                 return
 
@@ -207,6 +211,7 @@ class CallNotificationService:
                     call_id=call.call_id, patient_id=call.patient_id,
                     patient_name=call.patient_name, order_id=call.order_id,
                     request_summary=f"Disconnected/invalid number — {status_text}",
+                    mock_mode=call.mock_mode,
                 )
         except Exception as e:
             print(f"[Notifications] Email failed for call {call.call_id}: {e}")
@@ -219,6 +224,7 @@ class CallNotificationService:
                 patient_name=call.patient_name, order_id=call.order_id,
                 request_summary="Email notification failed",
                 error_message=str(e),
+                mock_mode=call.mock_mode,
             )
 
     def cleanup_call(self, call_id: str):

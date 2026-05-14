@@ -141,3 +141,87 @@ async def gate_evaluate(req: GateEvaluateRequest) -> GateEvaluateResponse:
         reason=decision.reason,
         canary_bucket=bucket,
     )
+
+
+# ---- Mock-call lifecycle ------------------------------------------------
+
+class StartCallResponse(BaseModel):
+    call_id: str
+
+
+class EndCallResponse(BaseModel):
+    ended: bool
+
+
+class RecentRunSummary(BaseModel):
+    call_id: str
+    patient_name: str
+    order_id: str | None
+    started_at: str | None
+    ended_at: str | None
+    outcome: str
+    duration_seconds: int
+
+
+class RecentRunsResponse(BaseModel):
+    runs: list[RecentRunSummary]
+
+
+@router.post("/start-call", response_model=StartCallResponse)
+async def start_call(scenario: Scenario) -> StartCallResponse:
+    """Start a synthetic /v2-test call.
+
+    Bypasses the dispatcher entirely. Constructs an in-memory Patient +
+    SystemSettings overlay, seeds the intake fixture, and hands the
+    singleton CallSession both overrides. Web mode only — no Twilio
+    originate, no real phone dialed.
+    """
+    from app.services.v2_test_session import build_test_session
+    call_id = await build_test_session(scenario)
+    return StartCallResponse(call_id=call_id)
+
+
+@router.post("/end-call/{call_id}", response_model=EndCallResponse)
+async def end_call(call_id: str) -> EndCallResponse:
+    """End a /v2-test call and clear its intake fixture."""
+    from app.services.v2_test_session import teardown_test_session
+    ended = await teardown_test_session(call_id)
+    return EndCallResponse(ended=ended)
+
+
+@router.get("/recent-runs", response_model=RecentRunsResponse)
+async def recent_runs(limit: int = 20) -> RecentRunsResponse:
+    """Recent /v2-test calls — filtered to mock_mode=true AND TEST-PAT-*.
+
+    The TEST-PAT- prefix is stamped on every synthetic patient_id by
+    ``v2_test_session._build_synthetic_patient``, so this filter is
+    exact even though tenant_id isn't stored on call_logs.
+    """
+    from app.providers import get_call_log_provider
+    provider = get_call_log_provider()
+    # We don't have a dedicated "filter by patient_id prefix + mock_mode"
+    # query yet, so reuse get_all_calls and filter in Python. The limit is
+    # small (20) so the over-fetch is negligible.
+    # include_test=True so we see the mock_mode rows we're filtering for —
+    # otherwise the default filter would hide every /v2-test call from us.
+    all_calls = await provider.get_all_calls(
+        limit=max(limit * 5, 100), offset=0, include_test=True,
+    )
+    runs: list[RecentRunSummary] = []
+    for c in all_calls:
+        if not c.mock_mode:
+            continue
+        if not (c.patient_id or "").startswith("TEST-PAT-"):
+            continue
+        runs.append(RecentRunSummary(
+            call_id=c.call_id,
+            patient_name=c.patient_name,
+            order_id=c.order_id,
+            started_at=c.started_at.isoformat() if c.started_at else None,
+            ended_at=c.ended_at.isoformat() if c.ended_at else None,
+            outcome=str(getattr(c.outcome, "value", c.outcome) or ""),
+            duration_seconds=c.duration_seconds or 0,
+        ))
+        if len(runs) >= limit:
+            break
+    return RecentRunsResponse(runs=runs)
