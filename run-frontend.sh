@@ -14,4 +14,5 @@ echo "Starting frontend on http://localhost:$FRONTEND_PORT"
 echo "Backend API URL: $NEXT_PUBLIC_API_URL"
 
 cd frontend
+npm run build
 PORT=$FRONTEND_PORT npm run dev
