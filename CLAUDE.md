@@ -57,6 +57,10 @@ Required env (see [`.env.example`](./.env.example) and [`backfill-backend/.env.e
 - `BACKFILL_DATABASE_URL` — separate DB for the backfill service
 - `BACKFILL_BACKEND_PORT` — defaults to 8001
 
+## Developing one agent without the other
+
+The backfill agent area (`/backfill` + `backfill-backend/`) can be developed without running, installing, or configuring any part of the outbound caller. The full runbook — setup, port-collision handling, CORS, verification curls, common failure modes — lives at [`docs/cancellation-backfill/developing-independently.md`](./docs/cancellation-backfill/developing-independently.md). Read it before trying to start a partial stack.
+
 ## When in doubt
 
 - If a change touches **both** systems, stop and ask. Cross-cutting changes likely violate a boundary above.

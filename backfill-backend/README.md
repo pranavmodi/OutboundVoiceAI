@@ -2,7 +2,7 @@
 
 Independent backend service for the Cancellation Backfill Agent.
 
-Architecture decision: [`../docs/cancellation-backfill/architecture.md`](../docs/cancellation-backfill/architecture.md). Spec: [`../docs/cancellation-backfill/cancellation-backfill-spec.md`](../docs/cancellation-backfill/cancellation-backfill-spec.md).
+Architecture decision: [`../docs/cancellation-backfill/architecture.md`](../docs/cancellation-backfill/architecture.md). Spec: [`../docs/cancellation-backfill/cancellation-backfill-spec.md`](../docs/cancellation-backfill/cancellation-backfill-spec.md). Dev runbook (run `/backfill` without the outbound caller): [`../docs/cancellation-backfill/developing-independently.md`](../docs/cancellation-backfill/developing-independently.md).
 
 ## Boundaries
 
