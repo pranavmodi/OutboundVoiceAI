@@ -684,3 +684,38 @@ async def check_configuration():
         "openai_api_key_format_valid": api_key.startswith("sk-") if api_key else False,
         "openai_api_key_preview": f"{api_key[:7]}...{api_key[-4:]}" if len(api_key) > 15 else "(too short or not set)",
     }
+
+
+@router.get("/claude-html/latest")
+async def get_claude_latest_html(request: Request):
+    """Serve the most recent Claude response rendered as HTML.
+
+    Gated by the existing session cookie — log in via the dashboard first.
+    Returns whatever the operator's local Claude Code has written most
+    recently to ~/.claude/responses/latest.html.
+    """
+    from pathlib import Path
+    from app.api.auth import verify_token
+
+    token = request.cookies.get("session", "")
+    if not verify_token(token):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    target = Path.home() / ".claude" / "responses" / "latest.html"
+    if not target.is_file():
+        placeholder = (
+            "<!doctype html><meta charset='utf-8'>"
+            "<meta http-equiv='refresh' content='3'>"
+            "<title>Claude — no response yet</title>"
+            "<body style='background:#0d1117;color:#8b949e;"
+            "font:16px/1.6 system-ui;padding:48px;text-align:center'>"
+            "<p>No response rendered yet. This page auto-refreshes.</p>"
+            "</body>"
+        )
+        return Response(content=placeholder, media_type="text/html")
+
+    try:
+        body = target.read_bytes()
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read response file: {e}")
+    return Response(content=body, media_type="text/html")
