@@ -91,6 +91,12 @@ class ApiKeys:
     gemini: str = ""
 
 
+DEFAULT_V2_CONSENT_DISCLOSURE = (
+    "This call is being recorded for quality and scheduling purposes. "
+    "By continuing, you consent to the recording."
+)
+
+
 @dataclass
 class IntakeV2Settings:
     """Feature flags for the v2 patient-intake agent.
@@ -108,6 +114,26 @@ class IntakeV2Settings:
     mode_voice_capture: bool = False
     mode_portal_copilot: bool = False
     multi_call_resume: bool = False
+    # Spoken before the normal greeting when the call is on the v2 path.
+    # Empty string disables prepending (greeting plays as in v1).
+    consent_disclosure: str = DEFAULT_V2_CONSENT_DISCLOSURE
+
+
+def compose_call_greeting(base_greeting: str, intake_v2: IntakeV2Settings, gate_eligible: bool) -> str:
+    """Return the greeting to speak at call start.
+
+    When the v2 gate rules the order eligible, the configured consent /
+    recording disclosure is prepended to the standard greeting. Outside the
+    v2 path (shadow mode, master OFF, outside canary, etc.) returns the
+    base greeting unchanged so v1 behavior is byte-identical.
+    """
+    base = base_greeting or DEFAULT_CALL_GREETING
+    if not gate_eligible:
+        return base
+    disclosure = (intake_v2.consent_disclosure or "").strip()
+    if not disclosure:
+        return base
+    return f"{disclosure} {base}"
 
 
 @dataclass

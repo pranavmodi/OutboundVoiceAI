@@ -93,6 +93,7 @@ class IntakeV2Request(BaseModel):
     mode_voice_capture: bool = False
     mode_portal_copilot: bool = False
     multi_call_resume: bool = False
+    consent_disclosure: str = ""
 
 
 class SystemSettingsResponse(BaseModel):
@@ -214,6 +215,7 @@ async def settings_to_response(provider) -> SystemSettingsResponse:
             mode_voice_capture=settings.intake_v2.mode_voice_capture,
             mode_portal_copilot=settings.intake_v2.mode_portal_copilot,
             multi_call_resume=settings.intake_v2.multi_call_resume,
+            consent_disclosure=settings.intake_v2.consent_disclosure,
         ),
         can_make_calls=await provider.can_make_outbound_call(),
         is_within_business_hours=await provider.is_within_business_hours(),
@@ -584,6 +586,8 @@ async def update_daily_report(request: DailyReportRequest):
 async def update_intake_v2(request: IntakeV2Request):
     """Update the v2 intake-agent feature flags."""
     provider = get_settings_provider()
+    from app.models.system_settings import DEFAULT_V2_CONSENT_DISCLOSURE
+    disclosure = (request.consent_disclosure or "").strip() or DEFAULT_V2_CONSENT_DISCLOSURE
     config = IntakeV2Settings(
         master_enabled=request.master_enabled,
         tenant_allowlist=list(request.tenant_allowlist),
@@ -591,6 +595,7 @@ async def update_intake_v2(request: IntakeV2Request):
         mode_voice_capture=request.mode_voice_capture,
         mode_portal_copilot=request.mode_portal_copilot,
         multi_call_resume=request.multi_call_resume,
+        consent_disclosure=disclosure,
     )
     await provider.update_intake_v2(config)
     print(

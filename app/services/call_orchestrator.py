@@ -73,21 +73,19 @@ class CallSession:
         self._carrier_failure.on_status_update = self.on_status_update
         self._carrier_failure.verbose = self._verbose
 
-    async def _evaluate_intake_v2_gate(self, call, patient, intake_v2_settings) -> None:
-        """Shadow-mode evaluation of the v2 intake gate.
+    async def _evaluate_intake_v2_gate(self, call, patient, intake_v2_settings):
+        """Evaluate the v2 intake gate, log the decision, return it.
 
-        Logs the decision to dispatcher_events but never changes call flow.
-        When the gate admits the call, additionally calls the stubbed intake
-        status endpoint so the read path is exercised — useful for catching
-        wiring issues before the real backend is wired up.
+        Returns the ``GateDecision`` when evaluation succeeds (or ``None``
+        on any failure, so v1 fall-through is preserved). Callers use the
+        return value to decide whether the consent / recording disclosure
+        should be prepended to the call greeting; with master_enabled OFF
+        the decision is always "not eligible" and the call behaves exactly
+        like v1.
 
         Tenant scoping is deferred: there is no tenant_id on patients today,
         so we always pass None. The gate treats an empty allowlist as "no
         scoping" so this is a no-op until tenant data is plumbed through.
-
-        The entire body is wrapped: shadow-mode must NEVER break v1
-        fall-through, so any failure here (bad settings shape, gate bug,
-        import error) is swallowed with a loud log.
         """
         try:
             from app.services.intake_v2_gate import IntakeV2Gate
@@ -117,11 +115,13 @@ class CallSession:
                 get_dispatcher()._log_decision(decision_label, detail)
             except Exception as e:
                 logger.warning("intake_v2 decision log failed for call %s: %s", call.call_id, e)
+            return decision
         except Exception as e:
             logger.exception(
                 "intake_v2 gate eval crashed for call %s — v1 fall-through preserved: %s",
                 getattr(call, "call_id", "?"), e,
             )
+            return None
 
     async def handle_twilio_amd_status(self, call_sid: str, answered_by: str):
         """Handle Twilio AMD callback values.
@@ -380,12 +380,13 @@ class CallSession:
         self._machine_detected = False
         self._verbose = settings.dispatcher_settings.verbose_logging
 
-        # v2 intake gate (shadow mode in M1 Slice 2): evaluate eligibility
-        # and log the decision, but never branch behavior. With master_enabled
-        # OFF this is always 'skipped' and adds nothing but a log line. With
-        # the flag ON it additionally hits the stubbed status endpoint to
-        # exercise the read path. Either way the call continues to v1.
-        await self._evaluate_intake_v2_gate(call, patient, settings.intake_v2)
+        # v2 intake gate: evaluate eligibility and log the decision. The
+        # returned decision drives whether the consent / recording
+        # disclosure is prepended to the greeting below. With master_enabled
+        # OFF the decision is always "not eligible" and the call greeting is
+        # byte-identical to v1.
+        v2_decision = await self._evaluate_intake_v2_gate(call, patient, settings.intake_v2)
+        v2_eligible = bool(v2_decision and v2_decision.eligible)
 
         # Register with the orchestrator registry so Twilio webhooks can
         # route to this session by call_id (and later by SID).
@@ -402,12 +403,14 @@ class CallSession:
         voice_provider = settings.voice_provider or "openai"
 
         ds = settings.dispatcher_settings
+        from app.models.system_settings import compose_call_greeting
+        effective_greeting = compose_call_greeting(ds.call_greeting, settings.intake_v2, v2_eligible)
         if voice_provider == "gemini":
             from app.services.gemini_voice import GeminiVoiceService
-            self._voice_service = GeminiVoiceService(audio_format=audio_format, verbose=self._verbose, voice=ds.gemini_voice, call_greeting=ds.call_greeting)
+            self._voice_service = GeminiVoiceService(audio_format=audio_format, verbose=self._verbose, voice=ds.gemini_voice, call_greeting=effective_greeting)
         else:
             from app.services.realtime_voice import RealtimeVoiceService
-            self._voice_service = RealtimeVoiceService(audio_format=audio_format, verbose=self._verbose, voice=ds.openai_voice, call_greeting=ds.call_greeting)
+            self._voice_service = RealtimeVoiceService(audio_format=audio_format, verbose=self._verbose, voice=ds.openai_voice, call_greeting=effective_greeting)
 
         self._voice_service.on_transcript = self._handle_transcript
         self._voice_service.on_audio = self._handle_audio

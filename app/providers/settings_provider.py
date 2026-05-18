@@ -18,7 +18,7 @@ from app.models import (
     IntakeV2Settings,
     SystemSettings,
 )
-from app.models.system_settings import DEFAULT_CALL_GREETING
+from app.models.system_settings import DEFAULT_CALL_GREETING, DEFAULT_V2_CONSENT_DISCLOSURE
 from typing import List
 
 
@@ -181,6 +181,7 @@ def _row_to_settings(row: SystemSettingsRow) -> SystemSettings:
         mode_voice_capture=bool(iv.get("mode_voice_capture", False)),
         mode_portal_copilot=bool(iv.get("mode_portal_copilot", False)),
         multi_call_resume=bool(iv.get("multi_call_resume", False)),
+        consent_disclosure=str(iv.get("consent_disclosure", DEFAULT_V2_CONSENT_DISCLOSURE)),
     )
     ak = getattr(row, "api_keys", None) or {}
     openai_key = str(ak.get("openai", "") or "")
@@ -525,6 +526,7 @@ class SettingsProvider:
                 "mode_voice_capture": bool(config.mode_voice_capture),
                 "mode_portal_copilot": bool(config.mode_portal_copilot),
                 "multi_call_resume": bool(config.multi_call_resume),
+                "consent_disclosure": str(config.consent_disclosure or "").strip(),
             }
             await session.commit()
             return _row_to_settings(row)
