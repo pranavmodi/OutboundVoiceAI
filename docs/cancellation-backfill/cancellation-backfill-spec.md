@@ -48,18 +48,12 @@ Slot is still available to be reused
 No active or completed backfill campaign already exists for the canceled appointment
 ⚠️ If cancellation occurs inside 24 hours of the exam, the system does nothing. No campaign is created.
 Examples:
-Exam Time
-Canceled At
-Gap
-Result
-May 5 @ 5:00 PM
-May 4 @ 2:00 PM
-27 hours
-✅ Eligible
-May 5 @ 5:00 PM
-May 5 @ 8:00 AM
-9 hours
-❌ Not eligible
+
+| Exam Time | Canceled At | Gap | Result |
+|---|---|---|---|
+| May 5 @ 5:00 PM | May 4 @ 2:00 PM | 27 hours | ✅ Eligible |
+| May 5 @ 5:00 PM | May 5 @ 8:00 AM | 9 hours | ❌ Not eligible |
+
 The 24-hour threshold is configurable per agent settings. Default is 24 hours.
 👥 Candidate Selection
 
@@ -73,22 +67,17 @@ Patient has valid contact info for the configured outreach channel(s)
 Exclusions
 
 Exclude a candidate if any of the following apply:
-Exclusion
-Reason
-Patient has a no-show flag
-Reliability risk
-Appointment is canceled, completed, or closed
-Not reschedulable
-Patient already contacted by this campaign
-Prevents duplicate outreach
-Patient has opted out of SMS
-Legal/consent requirement
-Patient has no callable phone number
-Cannot reach via voice
-Patient's current appointment is the same as the canceled slot
-No action needed
-Patient is suppressed by existing outbound communication rules
-Shared suppression enforcement
+
+| Exclusion | Reason |
+|---|---|
+| Patient has a no-show flag | Reliability risk |
+| Appointment is canceled, completed, or closed | Not reschedulable |
+| Patient already contacted by this campaign | Prevents duplicate outreach |
+| Patient has opted out of SMS | Legal/consent requirement |
+| Patient has no callable phone number | Cannot reach via voice |
+| Patient's current appointment is the same as the canceled slot | No action needed |
+| Patient is suppressed by existing outbound communication rules | Shared suppression enforcement |
+
 Ranking
 
 Sort eligible candidates by:
@@ -122,18 +111,14 @@ Campaign manually stopped
 Slot is no longer valid
 Configurable Defaults
 
-Setting
-Default
-Minimum cancellation notice hours
-24
-SMS batch size per wave
-3
-AI call count per escalation step
-1–2
-Delay between waves
-10 minutes
-Max waves
-3
+| Setting | Default |
+|---|---|
+| Minimum cancellation notice hours | 24 |
+| SMS batch size per wave | 3 |
+| AI call count per escalation step | 1–2 |
+| Delay between waves | 10 minutes |
+| Max waves | 3 |
+
 All defaults are adjustable via agent settings without code deployment.
 💬 Messaging Rules
 
@@ -159,14 +144,12 @@ Capture response
 Tell patient a confirmation will follow if slot is still available
 Additional Messaging Behavior
 
-Scenario
-Behavior
-Patient responds after slot is already filled
-Send graceful closeout message
-Patient declines
-Mark Declined, do not retry in same campaign
-No response
-Allow future wave escalation per configuration
+| Scenario | Behavior |
+|---|---|
+| Patient responds after slot is already filled | Send graceful closeout message |
+| Patient declines | Mark Declined, do not retry in same campaign |
+| No response | Allow future wave escalation per configuration |
+
 🔒 Response Handling and Single-Winner Enforcement
 
 Because multiple patients may respond simultaneously and no hold exists, booking confirmation must be atomic at the DB/service level.
@@ -186,277 +169,109 @@ All tables live in tenant_db.
 BackfillCampaign
 
 One row per canceled slot being worked.
-Field
-Type
-Nullable
-Notes
-BackfillCampaignId
-int
-No
-PK
-AgentType
-varchar
-No
-CancellationBackfill
-CancelledAppointmentId
-int
-No
-FK → Appointments
-CancelledPatientId
-int
-No
-FK → Patients
-FacilityId
-int
-No
-FK → Facilities
-CPTCode
-varchar
-No
-Matched CPT
-OpenSlotStartDateTime
-datetime
-No
-Original exam time
-CancellationDateTime
-datetime
-No
-When cancellation was recorded
-MinNoticeHoursApplied
-int
-No
-Threshold used at creation time
-CampaignStatus
-varchar
-No
-See status model
-StartedAt
-datetime
-No
- 
-EndedAt
-datetime
-Yes
- 
-FilledByPatientId
-int
-Yes
-Set on fill
-FilledByAppointmentId
-int
-Yes
-Set on fill
-ClosedReason
-varchar
-Yes
- 
-CreatedBySystemFlag
-bit
-No
-Always true for auto-created
-LastWaveNumber
-int
-Yes
- 
-LastWaveAt
-datetime
-Yes
- 
+
+| Field | Type | Nullable | Notes |
+|---|---|---|---|
+| BackfillCampaignId | int | No | PK |
+| AgentType | varchar | No | CancellationBackfill |
+| CancelledAppointmentId | int | No | FK → Appointments |
+| CancelledPatientId | int | No | FK → Patients |
+| FacilityId | int | No | FK → Facilities |
+| CPTCode | varchar | No | Matched CPT |
+| OpenSlotStartDateTime | datetime | No | Original exam time |
+| CancellationDateTime | datetime | No | When cancellation was recorded |
+| MinNoticeHoursApplied | int | No | Threshold used at creation time |
+| CampaignStatus | varchar | No | See status model |
+| StartedAt | datetime | No |  |
+| EndedAt | datetime | Yes |  |
+| FilledByPatientId | int | Yes | Set on fill |
+| FilledByAppointmentId | int | Yes | Set on fill |
+| ClosedReason | varchar | Yes |  |
+| CreatedBySystemFlag | bit | No | Always true for auto-created |
+| LastWaveNumber | int | Yes |  |
+| LastWaveAt | datetime | Yes |  |
+
 BackfillCandidate
 
 One row per patient evaluated under a campaign.
-Field
-Type
-Nullable
-Notes
-BackfillCandidateId
-int
-No
-PK
-BackfillCampaignId
-int
-No
-FK → BackfillCampaign
-PatientId
-int
-No
-FK → Patients
-AppointmentId
-int
-No
-FK → Appointments
-FacilityId
-int
-No
- 
-CPTCode
-varchar
-No
- 
-ScheduledAppointmentDateTime
-datetime
-No
-Used for ranking
-RankOrder
-int
-No
-Persisted at selection time
-EligibilityStatus
-varchar
-No
-See candidate status model
-ExclusionReason
-varchar
-Yes
-Populated on exclusion
-WaveNumberFirstContacted
-int
-Yes
- 
-LastContactedAt
-datetime
-Yes
- 
-CurrentContactStatus
-varchar
-Yes
- 
-InterestedFlag
-bit
-Yes
- 
-DeclinedFlag
-bit
-Yes
- 
-NoResponseFlag
-bit
-Yes
- 
-WonSlotFlag
-bit
-Yes
- 
-LostSlotFlag
-bit
-Yes
- 
-ResponseDateTime
-datetime
-Yes
- 
+
+| Field | Type | Nullable | Notes |
+|---|---|---|---|
+| BackfillCandidateId | int | No | PK |
+| BackfillCampaignId | int | No | FK → BackfillCampaign |
+| PatientId | int | No | FK → Patients |
+| AppointmentId | int | No | FK → Appointments |
+| FacilityId | int | No |  |
+| CPTCode | varchar | No |  |
+| ScheduledAppointmentDateTime | datetime | No | Used for ranking |
+| RankOrder | int | No | Persisted at selection time |
+| EligibilityStatus | varchar | No | See candidate status model |
+| ExclusionReason | varchar | Yes | Populated on exclusion |
+| WaveNumberFirstContacted | int | Yes |  |
+| LastContactedAt | datetime | Yes |  |
+| CurrentContactStatus | varchar | Yes |  |
+| InterestedFlag | bit | Yes |  |
+| DeclinedFlag | bit | Yes |  |
+| NoResponseFlag | bit | Yes |  |
+| WonSlotFlag | bit | Yes |  |
+| LostSlotFlag | bit | Yes |  |
+| ResponseDateTime | datetime | Yes |  |
+
 BackfillActionLog
 
 One row per communication action taken.
-Field
-Type
-Nullable
-Notes
-BackfillActionLogId
-int
-No
-PK
-BackfillCampaignId
-int
-No
-FK
-BackfillCandidateId
-int
-No
-FK
-Channel
-varchar
-No
-SMS or Voice
-ActionType
-varchar
-No
- 
-AttemptedAt
-datetime
-No
- 
-Outcome
-varchar
-Yes
- 
-ProviderMessageId
-varchar
-Yes
- 
-TranscriptId
-int
-Yes
-FK if applicable
-TemplateId
-int
-Yes
- 
-AgentRunId
-varchar
-Yes
- 
-RawResponsePayload
-nvarchar(max)
-Yes
-Store for audit
+
+| Field | Type | Nullable | Notes |
+|---|---|---|---|
+| BackfillActionLogId | int | No | PK |
+| BackfillCampaignId | int | No | FK |
+| BackfillCandidateId | int | No | FK |
+| Channel | varchar | No | SMS or Voice |
+| ActionType | varchar | No |  |
+| AttemptedAt | datetime | No |  |
+| Outcome | varchar | Yes |  |
+| ProviderMessageId | varchar | Yes |  |
+| TranscriptId | int | Yes | FK if applicable |
+| TemplateId | int | Yes |  |
+| AgentRunId | varchar | Yes |  |
+| RawResponsePayload | nvarchar(max) | Yes | Store for audit |
+
 ℹ️ If the existing outbound AI platform already has a campaign metrics/summary table, reuse it. Do not create a duplicate aggregation table.
 📊 Status Model
 
 Campaign Statuses
 
-Status
-Meaning
-Pending
-Created, not yet running
-Running
-Active wave execution
-Filled
-Slot assigned to a winner
-ClosedNoCandidates
-No eligible candidates found at creation
-ClosedExhausted
-All candidates contacted, none confirmed
-ClosedMaxWavesReached
-Wave limit hit before fill
-ClosedSlotNoLongerAvailable
-Slot was filled or canceled by another process
-ClosedManually
-Admin stopped campaign
-ClosedSystemError
-Unrecoverable processing failure
+| Status | Meaning |
+|---|---|
+| Pending | Created, not yet running |
+| Running | Active wave execution |
+| Filled | Slot assigned to a winner |
+| ClosedNoCandidates | No eligible candidates found at creation |
+| ClosedExhausted | All candidates contacted, none confirmed |
+| ClosedMaxWavesReached | Wave limit hit before fill |
+| ClosedSlotNoLongerAvailable | Slot was filled or canceled by another process |
+| ClosedManually | Admin stopped campaign |
+| ClosedSystemError | Unrecoverable processing failure |
+
 Candidate Statuses
 
-Status
-Meaning
-Eligible
-Passed all selection criteria
-ExcludedNoShow
-Patient has no-show flag
-ExcludedInvalidContact
-Missing or opted-out contact info
-ExcludedAlreadyContacted
-Already reached in this campaign
-Queued
-Selected for next wave
-TextSent
-SMS dispatched
-CallPlaced
-AI call initiated
-VoicemailLeft
-Call resulted in voicemail
-NoResponse
-No reply within wave window
-Interested
-Responded affirmatively
-Declined
-Responded negatively
-SelectedWinner
-Slot assigned to this patient
-LostSlot
-Responded but slot already taken
-Error
-Processing failure on this candidate
+| Status | Meaning |
+|---|---|
+| Eligible | Passed all selection criteria |
+| ExcludedNoShow | Patient has no-show flag |
+| ExcludedInvalidContact | Missing or opted-out contact info |
+| ExcludedAlreadyContacted | Already reached in this campaign |
+| Queued | Selected for next wave |
+| TextSent | SMS dispatched |
+| CallPlaced | AI call initiated |
+| VoicemailLeft | Call resulted in voicemail |
+| NoResponse | No reply within wave window |
+| Interested | Responded affirmatively |
+| Declined | Responded negatively |
+| SelectedWinner | Slot assigned to this patient |
+| LostSlot | Responded but slot already taken |
+| Error | Processing failure on this candidate |
+
 ℹ️ Align these to existing outbound agent status conventions if they already exist in the platform.
 🔄 Processing Flows
 
@@ -533,28 +348,20 @@ Campaigns Tab
 
 Displays all campaigns for the selected agent.
 List view columns:
-Column
-Notes
-Campaign ID
-Linkable to detail view
-Facility
-Display name
-CPT Code
- 
-Canceled Slot Date/Time
-The original exam datetime
-Status
-Color-coded badge (Running = blue, Filled = green, Closed = gray, Error = red)
-Started At
- 
-Ended At
-Blank if still running
-Filled By
-Patient name or ID if filled, blank otherwise
-Close Reason
-Shown on closed campaigns
-Actions
-Stop (if Running), View Detail
+
+| Column | Notes |
+|---|---|
+| Campaign ID | Linkable to detail view |
+| Facility | Display name |
+| CPT Code |  |
+| Canceled Slot Date/Time | The original exam datetime |
+| Status | Color-coded badge (Running = blue, Filled = green, Closed = gray, Error = red) |
+| Started At |  |
+| Ended At | Blank if still running |
+| Filled By | Patient name or ID if filled, blank otherwise |
+| Close Reason | Shown on closed campaigns |
+| Actions | Stop (if Running), View Detail |
+
 Filters above the list:
 Date range (campaign started at)
 Facility (multi-select)
@@ -575,46 +382,34 @@ Manual Stop button (visible only when status = Running)
 Candidate List
 
 Table of all candidates evaluated for this campaign, including excluded ones.
-Column
-Notes
-Rank
-RankOrder at selection time
-Patient
-Name + ID
-Current Appointment Date
-Their scheduled exam date
-Eligibility Status
-Color-coded (Eligible, Excluded, Winner, Lost, etc.)
-Exclusion Reason
-Populated for excluded candidates
-Wave First Contacted
- 
-Last Contacted At
- 
-Response
-Interested / Declined / No Response / Won / Lost
-Response DateTime
- 
+
+| Column | Notes |
+|---|---|
+| Rank | RankOrder at selection time |
+| Patient | Name + ID |
+| Current Appointment Date | Their scheduled exam date |
+| Eligibility Status | Color-coded (Eligible, Excluded, Winner, Lost, etc.) |
+| Exclusion Reason | Populated for excluded candidates |
+| Wave First Contacted |  |
+| Last Contacted At |  |
+| Response | Interested / Declined / No Response / Won / Lost |
+| Response DateTime |  |
+
 Excluded candidates are shown in the list with muted styling, not hidden.
 Outreach Timeline
 
 Chronological event log for the campaign. Every action is a row.
-Column
-Notes
-Timestamp
-Exact datetime
-Event Type
-CampaignCreated, CandidatesBuilt, SmsSent, CallPlaced, VoicemailLeft, ResponseReceived, WinnerAssigned, CampaignClosed, etc.
-Patient
-Name + ID where applicable
-Channel
-SMS / Voice / System
-Wave
-Wave number
-Outcome
-Sent, Delivered, Failed, Interested, Declined, NoResponse, Won, Lost
-Provider Message ID
-For tracing with SMS/call provider
+
+| Column | Notes |
+|---|---|
+| Timestamp | Exact datetime |
+| Event Type | CampaignCreated, CandidatesBuilt, SmsSent, CallPlaced, VoicemailLeft, ResponseReceived, WinnerAssigned, CampaignClosed, etc. |
+| Patient | Name + ID where applicable |
+| Channel | SMS / Voice / System |
+| Wave | Wave number |
+| Outcome | Sent, Delivered, Failed, Interested, Declined, NoResponse, Won, Lost |
+| Provider Message ID | For tracing with SMS/call provider |
+
 This timeline is the full audit log. Every system action and patient response is a row. Nothing is omitted.
 Transcript Panel
 
@@ -631,129 +426,68 @@ All agent-specific settings are editable here without code deployment. Changes t
 ⚠️ Changing settings does not affect campaigns already in Running status. The settings applied at campaign creation time are stored on the campaign record.
 Agent Toggle
 
-Control
-Type
-Notes
-Agent Enabled
-Toggle (On/Off)
-Disabling stops new campaigns from being created. Running campaigns complete.
+| Control | Type | Notes |
+|---|---|---|
+| Agent Enabled | Toggle (On/Off) | Disabling stops new campaigns from being created. Running campaigns complete. |
+
 Trigger Settings
 
-Setting
-Control
-Default
-Notes
-Minimum Cancellation Notice
-Number input (hours)
-24
-Cancellations with less notice than this are ignored
+| Setting | Control | Default | Notes |
+|---|---|---|---|
+| Minimum Cancellation Notice | Number input (hours) | 24 | Cancellations with less notice than this are ignored |
+
 Wave Settings
 
-Setting
-Control
-Default
-Notes
-SMS Batch Size Per Wave
-Number input
-3
-How many patients receive SMS in each wave
-Delay Between Waves
-Number input (minutes)
-10
-Wait time between wave completion and next wave start
-Maximum Waves
-Number input
-3
-Campaign stops after this many waves regardless of fill status
-AI Call Escalation Enabled
-Toggle
-On
-When off, only SMS is used
-AI Calls Per Wave
-Number input
-1
-How many non-responders receive an AI call per wave
+| Setting | Control | Default | Notes |
+|---|---|---|---|
+| SMS Batch Size Per Wave | Number input | 3 | How many patients receive SMS in each wave |
+| Delay Between Waves | Number input (minutes) | 10 | Wait time between wave completion and next wave start |
+| Maximum Waves | Number input | 3 | Campaign stops after this many waves regardless of fill status |
+| AI Call Escalation Enabled | Toggle | On | When off, only SMS is used |
+| AI Calls Per Wave | Number input | 1 | How many non-responders receive an AI call per wave |
+
 Hours of Operation
 
 Controls when outbound contact is allowed. Applies to both SMS and voice unless separately configured.
-Setting
-Control
-Default
-Notes
-Allowed Contact Days
-Multi-select (Mon–Sun)
-Mon–Fri
-Days outreach is permitted
-Contact Window Start
-Time picker
-8:00 AM
-No outreach before this time
-Contact Window End
-Time picker
-6:00 PM
-No outreach after this time
-Timezone
-Dropdown
-Facility local timezone
-Applied per facility if multi-timezone
+
+| Setting | Control | Default | Notes |
+|---|---|---|---|
+| Allowed Contact Days | Multi-select (Mon–Sun) | Mon–Fri | Days outreach is permitted |
+| Contact Window Start | Time picker | 8:00 AM | No outreach before this time |
+| Contact Window End | Time picker | 6:00 PM | No outreach after this time |
+| Timezone | Dropdown | Facility local timezone | Applied per facility if multi-timezone |
+
 ℹ️ If a wave is ready to execute outside the contact window, it waits until the window opens. It does not skip — it queues.
 Holiday Suppression
 
-Setting
-Control
-Notes
-Use Shared Holiday Calendar
-Toggle
-On by default. Inherits the platform holiday list.
-Agent-Specific Blackout Dates
-Date picker (multi-select)
-Optional additional dates to suppress outreach for this agent only
+| Setting | Control | Notes |
+|---|---|---|
+| Use Shared Holiday Calendar | Toggle | On by default. Inherits the platform holiday list. |
+| Agent-Specific Blackout Dates | Date picker (multi-select) | Optional additional dates to suppress outreach for this agent only |
+
 Candidate Matching Rules
 
-Setting
-Control
-Default
-Notes
-Same Facility Required
-Toggle
-On
-Cannot be disabled in current scope
-Same CPT Required
-Toggle
-On
-Cannot be disabled in current scope
-Exclude No-Show Patients
-Toggle
-On
-Excludes any patient with a no-show flag
+| Setting | Control | Default | Notes |
+|---|---|---|---|
+| Same Facility Required | Toggle | On | Cannot be disabled in current scope |
+| Same CPT Required | Toggle | On | Cannot be disabled in current scope |
+| Exclude No-Show Patients | Toggle | On | Excludes any patient with a no-show flag |
+
 Campaign Behavior
 
-Setting
-Control
-Default
-Notes
-Campaign Timeout
-Number input (minutes)
-TBD Engineering
-Auto-close campaign if slot is unfilled after this duration
-Late-Response Closeout Message Enabled
-Toggle
-On
-Send closeout SMS to patients who respond after slot is filled
+| Setting | Control | Default | Notes |
+|---|---|---|---|
+| Campaign Timeout | Number input (minutes) | TBD Engineering | Auto-close campaign if slot is unfilled after this duration |
+| Late-Response Closeout Message Enabled | Toggle | On | Send closeout SMS to patients who respond after slot is filled |
+
 Messaging Templates
 
-Setting
-Control
-Notes
-SMS Template
-Dropdown (from shared template library)
-Required. Must be set before agent is enabled.
-Voice Script Template
-Dropdown (from shared template library)
-Required if AI Call Escalation is enabled.
-Closeout Message Template
-Dropdown (from shared template library)
-Used when slot is already filled on response
+| Setting | Control | Notes |
+|---|---|---|
+| SMS Template | Dropdown (from shared template library) | Required. Must be set before agent is enabled. |
+| Voice Script Template | Dropdown (from shared template library) | Required if AI Call Escalation is enabled. |
+| Closeout Message Template | Dropdown (from shared template library) | Used when slot is already filled on response |
+
 Save button at bottom of Settings tab. Unsaved changes show a banner: "You have unsaved changes."
 Reports Tab
 
@@ -764,172 +498,96 @@ Facility (multi-select)
 Status (filled / unfilled / all)
 Channel (SMS / Voice / All)
 Metrics displayed:
-Metric
-Description
-Campaigns Created
-Total campaigns triggered
-Campaigns Filled
-Count where status = Filled
-Fill Rate
-Filled / Created %
-Avg Time to Fill
-From StartedAt to EndedAt on filled campaigns
-Total Candidates Contacted
-Unique patients reached across all campaigns
-SMS Sent
-Total SMS dispatched
-Calls Placed
-Total AI calls initiated
-SMS Response Rate
-Interested responses / SMS sent %
-Voice Response Rate
-Interested responses / calls placed %
-Fills by Wave
-Breakdown of which wave produced the winning response
-Campaigns Closed Without Fill
-Count and %
-Top Close Reasons
-Bar breakdown of ClosedReason values
+
+| Metric | Description |
+|---|---|
+| Campaigns Created | Total campaigns triggered |
+| Campaigns Filled | Count where status = Filled |
+| Fill Rate | Filled / Created % |
+| Avg Time to Fill | From StartedAt to EndedAt on filled campaigns |
+| Total Candidates Contacted | Unique patients reached across all campaigns |
+| SMS Sent | Total SMS dispatched |
+| Calls Placed | Total AI calls initiated |
+| SMS Response Rate | Interested responses / SMS sent % |
+| Voice Response Rate | Interested responses / calls placed % |
+| Fills by Wave | Breakdown of which wave produced the winning response |
+| Campaigns Closed Without Fill | Count and % |
+| Top Close Reasons | Bar breakdown of ClosedReason values |
+
 Export to CSV available on all report views.
 ⚙️ Admin Settings — Full Field Reference
 
 Agent-Specific Settings
 
-Setting
-Type
-Default
-Enabled
-bool
-false
-MinimumCancellationNoticeHours
-int
-24
-SmsBatchSizePerWave
-int
-3
-DelayBetweenWavesMinutes
-int
-10
-MaxWaves
-int
-3
-AiCallEscalationEnabled
-bool
-true
-AiCallQuantityPerWave
-int
-1
-AllowedContactDays
-flags/bitmask
-Mon–Fri
-ContactWindowStartTime
-time
-08:00
-ContactWindowEndTime
-time
-18:00
-ContactWindowTimezone
-varchar
-Facility local
-UseSharedHolidayCalendar
-bool
-true
-AgentBlackoutDates
-date[]
-empty
-SameFacilityRequired
-bool
-true
-SameCptRequired
-bool
-true
-ExcludeNoShowEnabled
-bool
-true
-CampaignTimeoutMinutes
-int
-TBD Engineering
-LateResponseCloseoutEnabled
-bool
-true
-AllowedSmsTemplateId
-int
-null
-AllowedVoiceTemplateId
-int
-null
-CloseoutMessageTemplateId
-int
-null
+| Setting | Type | Default |
+|---|---|---|
+| Enabled | bool | false |
+| MinimumCancellationNoticeHours | int | 24 |
+| SmsBatchSizePerWave | int | 3 |
+| DelayBetweenWavesMinutes | int | 10 |
+| MaxWaves | int | 3 |
+| AiCallEscalationEnabled | bool | true |
+| AiCallQuantityPerWave | int | 1 |
+| AllowedContactDays | flags/bitmask | Mon–Fri |
+| ContactWindowStartTime | time | 08:00 |
+| ContactWindowEndTime | time | 18:00 |
+| ContactWindowTimezone | varchar | Facility local |
+| UseSharedHolidayCalendar | bool | true |
+| AgentBlackoutDates | date[] | empty |
+| SameFacilityRequired | bool | true |
+| SameCptRequired | bool | true |
+| ExcludeNoShowEnabled | bool | true |
+| CampaignTimeoutMinutes | int | TBD Engineering |
+| LateResponseCloseoutEnabled | bool | true |
+| AllowedSmsTemplateId | int | null |
+| AllowedVoiceTemplateId | int | null |
+| CloseoutMessageTemplateId | int | null |
+
 Shared Settings Inherited from Platform
 
 Holiday dates, do-not-call windows, opt-out enforcement, logging retention, SMS/voice provider routing.
 📋 Functional Requirements
 
-ID
-Requirement
-FR-1
-System creates a campaign only when cancellation occurs ≥ configured notice hours before exam start
-FR-2
-Candidate matching requires same facility and same CPT code
-FR-3
-System excludes patients with a no-show flag when exclusion is enabled
-FR-4
-Eligible candidates are ranked farthest scheduled appointment first
-FR-5
-System obeys configured contact window, holiday suppression, and shared outbound quiet-hour rules
-FR-6
-System contacts candidates in configurable waves using SMS and optional AI calls
-FR-7
-Outreach messaging must not guarantee slot availability
-FR-8
-Only one patient can be assigned the slot per campaign
-FR-9
-All agents share a single dashboard UI; agent is selected from a list to view campaigns, settings, and reports
-FR-10
-All actions are logged through the existing outbound AI logging infrastructure with full audit trail
-FR-11
-Agent has separate configurable settings adjustable from the UI without code deployment
-FR-12
-Campaign detail view exposes full chronological audit log including every SMS, call, and patient response
-FR-13
-All agent settings (hours of operation, wave gap, batch size, templates, etc.) are editable from the Settings tab
+| ID | Requirement |
+|---|---|
+| FR-1 | System creates a campaign only when cancellation occurs ≥ configured notice hours before exam start |
+| FR-2 | Candidate matching requires same facility and same CPT code |
+| FR-3 | System excludes patients with a no-show flag when exclusion is enabled |
+| FR-4 | Eligible candidates are ranked farthest scheduled appointment first |
+| FR-5 | System obeys configured contact window, holiday suppression, and shared outbound quiet-hour rules |
+| FR-6 | System contacts candidates in configurable waves using SMS and optional AI calls |
+| FR-7 | Outreach messaging must not guarantee slot availability |
+| FR-8 | Only one patient can be assigned the slot per campaign |
+| FR-9 | All agents share a single dashboard UI; agent is selected from a list to view campaigns, settings, and reports |
+| FR-10 | All actions are logged through the existing outbound AI logging infrastructure with full audit trail |
+| FR-11 | Agent has separate configurable settings adjustable from the UI without code deployment |
+| FR-12 | Campaign detail view exposes full chronological audit log including every SMS, call, and patient response |
+| FR-13 | All agent settings (hours of operation, wave gap, batch size, templates, etc.) are editable from the Settings tab |
+
 🏗️ Non-Functional Requirements
 
-Category
-Requirement
-Reliability
-No duplicate campaigns per canceled slot. Retry-safe — repeated trigger events must not produce duplicate outreach.
-Concurrency
-Simultaneous inbound responses handled safely; exactly one winner per campaign.
-Performance
-Candidate build and first wave dispatch begin promptly after qualifying cancellation event. Response processing is near-real-time.
-Auditability
-Full action trace available for admin review from campaign creation through closure. Every event is a row in the timeline.
-Configurability
-All agent settings adjustable from UI without code deployment. Changes do not affect in-flight campaigns.
-Maintainability
-Reuse existing outbound abstractions. No hardcoded business hours, holidays, or message branching outside shared systems.
+| Category | Requirement |
+|---|---|
+| Reliability | No duplicate campaigns per canceled slot. Retry-safe — repeated trigger events must not produce duplicate outreach. |
+| Concurrency | Simultaneous inbound responses handled safely; exactly one winner per campaign. |
+| Performance | Candidate build and first wave dispatch begin promptly after qualifying cancellation event. Response processing is near-real-time. |
+| Auditability | Full action trace available for admin review from campaign creation through closure. Every event is a row in the timeline. |
+| Configurability | All agent settings adjustable from UI without code deployment. Changes do not affect in-flight campaigns. |
+| Maintainability | Reuse existing outbound abstractions. No hardcoded business hours, holidays, or message branching outside shared systems. |
+
 🔗 Integration Points
 
-System
-Usage
-Outbound AI orchestrator
-Agent registration, wave scheduling, queue management
-Holiday/business-hours rules
-Shared enforcement — sourced from API/DB, not hardcoded
-SMS provider integration
-Outbound text dispatch
-Voice/AI call provider
-Outbound call and response capture
-Outbound log store
-Campaign and action logging
-Outbound admin UI
-Single dashboard, agent selection, campaigns, settings, reports
-Appointment update service
-Atomic reschedule on winner assignment
-Transcript/review tooling
-Call transcript storage and inline review
+| System | Usage |
+|---|---|
+| Outbound AI orchestrator | Agent registration, wave scheduling, queue management |
+| Holiday/business-hours rules | Shared enforcement — sourced from API/DB, not hardcoded |
+| SMS provider integration | Outbound text dispatch |
+| Voice/AI call provider | Outbound call and response capture |
+| Outbound log store | Campaign and action logging |
+| Outbound admin UI | Single dashboard, agent selection, campaigns, settings, reports |
+| Appointment update service | Atomic reschedule on winner assignment |
+| Transcript/review tooling | Call transcript storage and inline review |
+
 ✅ Acceptance Criteria
 
 Scenario 1 — Eligible cancellation
@@ -1010,22 +668,17 @@ And campaigns already running are not affected
 ⚠️ Open Implementation Decisions
 
 These are Engineering decisions to resolve during design — not product unknowns.
-#
-Decision
-1
-Exact transactional method for single-winner enforcement (row locking, optimistic concurrency, status CAS, etc.)
-2
-Tie-break behavior when two candidates have the same ScheduledAppointmentDateTime — lowest AppointmentId assumed; confirm
-3
-Whether late-response closeout SMS is always sent or only when LateResponseCloseoutEnabled = true
-4
-Exact reuse path for existing transcript and agent-run tables in the outbound platform
-5
-Whether AI call escalation targets only same-wave non-responders or all prior non-responders across waves
-6
-CampaignTimeoutMinutes default value
-7
-Whether contact window is enforced per-facility timezone or a single global timezone
+
+| # | Decision |
+|---|---|
+| 1 | Exact transactional method for single-winner enforcement (row locking, optimistic concurrency, status CAS, etc.) |
+| 2 | Tie-break behavior when two candidates have the same ScheduledAppointmentDateTime — lowest AppointmentId assumed; confirm |
+| 3 | Whether late-response closeout SMS is always sent or only when LateResponseCloseoutEnabled = true |
+| 4 | Exact reuse path for existing transcript and agent-run tables in the outbound platform |
+| 5 | Whether AI call escalation targets only same-wave non-responders or all prior non-responders across waves |
+| 6 | CampaignTimeoutMinutes default value |
+| 7 | Whether contact window is enforced per-facility timezone or a single global timezone |
+
 📈 Reporting / KPIs
 
 Track at minimum, rolled up into existing outbound AI reporting:
@@ -1046,11 +699,6 @@ Entity & Data Dictionary v1.1 — field definitions, DB scope conventions, namin
 Acceptance Criteria Template — Given/When/Then format reference
 📝 Version History
 
-Version
-Date
-Author
-Changes
-1.0
-Thursday, May 14th, 2026
-Danny Rackow
-Initial publish
+| Version | Date | Author | Changes |
+|---|---|---|---|
+| 1.0 | Thursday, May 14th, 2026 | Danny Rackow | Initial publish |
