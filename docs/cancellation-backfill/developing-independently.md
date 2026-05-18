@@ -18,11 +18,38 @@ Two processes, full stop:
 ## What you do NOT need
 
 - The outbound caller backend (`app/`)
-- The outbound caller database / Alembic state
+- The outbound caller's `outboundvoice` database / its Alembic state
 - Twilio, OpenAI, Gemini, FreePBX, RadFlow, Redis, or any outbound integration
 - Anything else listed under "Integration Points" in [`cancellation-backfill-spec.md`](./cancellation-backfill-spec.md)
 
 The frontend's auth middleware ([`frontend/middleware.ts`](../../frontend/middleware.ts)) treats `/backfill` as public, so navigating to it does not redirect to `/login` (which would require the outbound auth API). The outbound dashboard at `/`, plus `/admin` and `/analytics`, are still gated as before — try to visit them and you'll get redirected, which is the correct behavior when the outbound backend is down.
+
+## Database
+
+The backfill agent has its own postgres database, named `backfill`. The architecture only requires a **separate logical database** — the physical server can be the same one the outbound caller uses. In current dev, both databases live on the team's remote postgres at `10.254.99.34:5432`, owned by the `precise` user:
+
+```
+postgres @ 10.254.99.34:5432
+├── outboundvoice  (outbound caller — DO NOT touch from this service)
+└── backfill       (this service's database)
+```
+
+`backfill-backend/.env` ships with:
+```
+BACKFILL_DATABASE_URL=postgresql+asyncpg://precise:password@10.254.99.34:5432/backfill
+```
+
+If you ever need to recreate the database from scratch (e.g. clean slate, new dev host):
+
+```bash
+# precise must already have CREATEDB privilege on the remote — it does.
+PGPASSWORD='password' psql -h 10.254.99.34 -U precise -d postgres \
+  -c "CREATE DATABASE backfill OWNER precise;"
+```
+
+For a fully local-postgres setup (no VPN needed), see the alternative in `backfill-backend/.env.example` — point `BACKFILL_DATABASE_URL` at `localhost:5432/backfill` once you've provisioned that local DB yourself.
+
+Migrations live at [`backfill-backend/alembic/versions/`](../../backfill-backend/alembic/versions/) — independent of the outbound caller's `alembic/` at the repo root. No tables exist yet; the first Alembic revision will land when the three core tables from the spec (`BackfillCampaign`, `BackfillCandidate`, `BackfillActionLog`) are implemented.
 
 ---
 
@@ -34,7 +61,7 @@ cd backfill-backend
 python3 -m venv .venv
 .venv/bin/pip install --upgrade pip
 .venv/bin/pip install -r requirements.txt
-cp .env.example .env                          # edit if you need a different port
+cp .env.example .env                          # edit DATABASE_URL / port as needed
 cd ..
 
 # 2. Frontend deps (only if not already installed)
@@ -120,6 +147,11 @@ Three checks in escalating order:
 curl -s http://localhost:8011/api/health
 # expect: {"status":"ok","service":"backfill-backend"}
 
+# 1b. Backend ↔ database
+curl -s http://localhost:8011/api/db-health
+# expect: {"status":"ok","database":"backfill","user":"precise"}
+# error payload: {"status":"error","detail":"..."} — see "Common failure modes"
+
 # 2. CORS allows your frontend origin
 curl -sI -X OPTIONS http://localhost:8011/api/health \
   -H "Origin: http://localhost:3000" \
@@ -145,6 +177,9 @@ If all three pass, opening `/backfill` in a browser will show the green-check "B
 | `Address already in use` on uvicorn or Next.js startup | Some other process holds the default port | Pick a different port and update all three places (backend `.env`, frontend `.env.local`, backend CORS list). |
 | `npm run dev` reports build OK but `/backfill` returns 404 | Stale `.next/` cache from a build before the page was added | `rm -rf frontend/.next` and restart `npm run dev`. |
 | Cross-origin GET works in `curl` but fails in the browser | CORS preflight rejected — see the preflight check command above | Add your frontend origin to `BACKFILL_CORS_ORIGINS` and restart the backend. |
+| `/api/db-health` returns `{"status":"error","detail":"..."}` with `connection refused` | Network can't reach 10.254.99.34 (VPN down, or no route from this host) | Bring up your VPN, or switch `BACKFILL_DATABASE_URL` to a local postgres. |
+| `/api/db-health` returns `password authentication failed` | Credentials in `BACKFILL_DATABASE_URL` don't match `precise/password` (or whatever role you set up) | Verify with `psql` directly using the same URL, then correct `.env`. |
+| `/api/db-health` returns `database "backfill" does not exist` | DB hasn't been created yet on this server | Run the `CREATE DATABASE backfill OWNER precise;` snippet in the "Database" section above. |
 
 ---
 
