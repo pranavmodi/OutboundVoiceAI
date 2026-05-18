@@ -1,0 +1,10 @@
+---
+description: Repo-wide rules for the outbound caller + cancellation backfill codebase
+alwaysApply: true
+---
+
+All coding rules for this repository live in [CLAUDE.md](mdc:CLAUDE.md) at the repo root.
+
+Read CLAUDE.md before making any changes. It documents the two-system architecture (outbound caller in `app/`, cancellation backfill in `backfill-backend/`, shared frontend in `frontend/`), the hard boundaries between them (no cross-imports, separate databases, separate Alembic environments), and the dev commands for each system.
+
+Do not duplicate or paraphrase those rules here — defer to CLAUDE.md as the single source of truth.
