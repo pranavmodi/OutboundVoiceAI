@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-const PUBLIC_PATHS = ["/login"];
+// Paths that bypass the outbound caller's session check. The /backfill area
+// is an independent agent (see docs/cancellation-backfill/architecture.md) —
+// it does not share auth with the outbound caller and must be reachable
+// without the outbound backend running.
+const PUBLIC_PATHS = ["/login", "/backfill"];
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
