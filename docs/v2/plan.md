@@ -6,7 +6,7 @@ A 3-milestone breakdown of the v2 intake agent build. M1 and M2 are **engineerin
 
 ## Client spec constraints
 
-The MediFlow v2 spec (`spec.txt` in this folder, Section 1.3 — original `spec.docx`) **explicitly prohibits phased intake rollouts**:
+The MediFlow v2 spec (`intake-agent-spec.txt` in this folder, Section 1.3 — original `spec.docx`) **explicitly prohibits phased intake rollouts**:
 
 > "Ship all capabilities together as a single release to preserve patient experience; **no partial or phased intake flows.**"
 
