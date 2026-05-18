@@ -11,10 +11,7 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-MISSING_PHONE_WEBHOOK = os.getenv(
-    "SLACK_MISSING_PHONE_WEBHOOK",
-    "REDACTED_SLACK_WEBHOOK",
-)
+MISSING_PHONE_WEBHOOK = os.getenv("SLACK_MISSING_PHONE_WEBHOOK", "")
 
 # Track which patients we've already notified about in this process lifetime
 # to avoid spamming Slack on every poll cycle.
