@@ -28,10 +28,12 @@ Candidates are selected in priority order (highest priority first):
 
 | Priority | Description |
 |----------|-------------|
-| 1 | Patient abandoned queue + never received AI call |
-| 2 | Patient abandoned queue + previously received AI call |
-| 3 | Patient never received AI call + has called in before |
-| 4 | Patient never received AI call + never called in |
+| 1 | Never AI-called + abandoned queue (highest intent, fresh outreach) |
+| 2 | Never AI-called + called in before (showed intent, fresh outreach) |
+| 3 | Never AI-called + no prior history (brand new patient) |
+| 4 | Already AI-called + abandoned queue (retry, highest urgency) |
+| 5 | Already AI-called + called in before (retry) |
+| 6 | Already AI-called + no prior history (retry, lowest) |
 
 Within each priority bucket, order by:
 1. Oldest due date first (2 business day SLA)

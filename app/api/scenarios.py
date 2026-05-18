@@ -82,9 +82,6 @@ async def list_scenarios():
             select(SimulationScenarioRow).order_by(SimulationScenarioRow.label)
         )
         rows = result.scalars().all()
-        print(f"[LIST_SCENARIOS] Found {len(rows)} scenarios")
-        for row in rows:
-            print(f"[LIST_SCENARIOS] - {row.id}: '{row.label}' with {len(row.patients or [])} patients")
         return [_row_to_response(row) for row in rows]
 
 

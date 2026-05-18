@@ -37,10 +37,15 @@ export interface Patient {
   has_called_in_before: boolean;
   has_abandoned_before: boolean;
   ai_called_before: boolean;
-  attempt_count: number;
+  ai_attempt_count: number;
+  human_attempt_count: number;
+  total_attempts: number;
+  attempt_count: number; // legacy alias for total_attempts
   last_attempt_at: string | null;
   last_outcome: string | null;
   due_by: string | null;
+  radflow_status: string | null;
+  hl7_sent_at: string | null;
   priority_bucket: number;
 }
 
@@ -61,14 +66,32 @@ export interface CallLog {
   ended_at: string | null;
   duration_seconds: number;
   outcome: string;
+  call_status: string;         // "called" | "failed" | "in_progress"
+  call_disposition: string;    // "transferred" | "hung_up" | "no_answer" | etc.
+  mock_mode: boolean;          // true if this call was redirected to a test number
+  voice_provider: string;      // "openai" or "gemini"
   transfer_attempted: boolean;
   transfer_success: boolean;
   voicemail_left: boolean;
   sms_sent: boolean;
+  preferred_callback_time?: string | null;
   queue_snapshot: QueueState | null;
   transcript: TranscriptEntry[];
   error_code: string | null;
   error_message: string | null;
+  recording_sid?: string | null;
+  recording_path?: string | null;
+  recording_size_bytes?: number | null;
+  recording_duration_seconds?: number | null;
+  recording_format?: string | null;
+  has_recording?: boolean;
+}
+
+export interface TodayKpis {
+  total_calls: number;
+  transferred: number;
+  voicemails: number;
+  sms: number;
 }
 
 export interface Statistics {
@@ -99,6 +122,8 @@ export type WSMessageType =
   | "ping"
   | "pong"
   | "queue_update"
+  | "dispatcher_event"
+  | "settings_updated"
   | "dispatch_call"
   | "dispatch_ack";
 
@@ -146,12 +171,19 @@ export interface WSError extends WSMessage {
 }
 
 // System Settings Types
+export interface HolidayEntry {
+  date: string; // YYYY-MM-DD
+  name: string;
+  recurring: boolean;
+}
+
 export interface BusinessHours {
   start_time: string;
   end_time: string;
   enabled: boolean;
   timezone: string;
   days_of_week: number[];  // 0=Mon, 6=Sun
+  holidays: HolidayEntry[];
 }
 
 export interface QueueThresholds {
@@ -163,8 +195,24 @@ export interface QueueThresholds {
 export interface DispatcherSettings {
   poll_interval: number;
   dispatch_timeout: number;
-  max_attempts: number;
+  max_attempts_ordered: number;
+  max_attempts_other: number;
   min_hours_between: number;
+  verbose_logging?: boolean;
+  openai_voice?: string;
+  gemini_voice?: string;
+  call_greeting?: string;
+  // Phase 7: parallel-call cap (1 = single-call legacy behavior; ceiling 10).
+  max_parallel_calls?: number;
+  // Minimum gap (seconds) between consecutive call starts.
+  dispatch_pacing_seconds?: number;
+}
+
+export interface DailyReportConfig {
+  enabled: boolean;
+  webhook_url: string;
+  hour: number;
+  timezone: string;
 }
 
 export interface SystemSettings {
@@ -178,8 +226,60 @@ export interface SystemSettings {
   patient_source: string;
   active_scenario_id: string | null;
   call_mode: string;
+  mock_mode: boolean;
+  mock_phone: string;
+  voice_provider: string;
+  daily_report: DailyReportConfig;
   can_make_calls: boolean;
   is_within_business_hours: boolean;
+}
+
+export interface ApiKeyStatus {
+  configured: boolean;
+  source: "db" | "env" | "none";
+  preview: string;
+}
+
+export interface ApiKeysStatusResponse {
+  openai: ApiKeyStatus;
+  gemini: ApiKeyStatus;
+}
+
+export interface TimeSlotStats {
+  total: number;
+  transferred: number;
+  no_answer: number;
+  voicemail: number;
+  callback: number;
+  hung_up: number;
+  wrong_number: number;
+  technical_error: number;
+  disconnected_number: number;
+  completed: number;
+  transfer_rate: number;
+  no_answer_rate: number;
+  voicemail_rate: number;
+}
+
+export interface DayStats extends TimeSlotStats {
+  day: number;
+  day_name: string;
+}
+
+export interface HourStats extends TimeSlotStats {
+  hour: number;
+  label: string;
+}
+
+export interface TimePerformance {
+  days: number;
+  timezone: string;
+  total_calls: number;
+  overall_transfer_rate: number;
+  overall_no_answer_rate: number;
+  overall_voicemail_rate: number;
+  by_day: DayStats[];
+  by_hour: HourStats[];
 }
 
 export interface ScenarioPatient {
@@ -202,4 +302,20 @@ export interface SimulationScenario {
   patients: ScenarioPatient[];
   created_at: string;
   updated_at: string;
+}
+
+export interface AuditEvent {
+  id: number;
+  call_id: string | null;
+  patient_id: string | null;
+  patient_name: string;
+  order_id: string | null;
+  event_type: string;  // radflow | hl7 | sms | email | slack
+  action: string;
+  status: string;      // success | failed | skipped
+  request_summary: string;
+  request_payload: Record<string, unknown> | null;
+  response_status: number | null;
+  error_message: string | null;
+  created_at: string | null;
 }

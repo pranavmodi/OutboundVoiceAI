@@ -1,3 +1,4 @@
+import asyncio
 import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -6,8 +7,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 
-from .api import dashboard_router, websocket_router, settings_router, dispatcher_router, scenarios_router
+from .api import dashboard_router, websocket_router, settings_router, dispatcher_router, scenarios_router, intake_router, v2_test_router
+from .api.auth import router as auth_router
+from .api.audit import router as audit_router
 from .services.dispatcher import get_dispatcher
+from .services.daily_report_service import daily_report_loop
 from .providers import set_queue_source, set_patient_source
 from .providers.settings_provider import get_settings_provider
 from .db import AsyncSessionLocal, async_engine
@@ -22,17 +26,28 @@ async def lifespan(app: FastAPI):
         await seed_builtin_scenarios(session)
         await seed_sample_patients(session)
         await session.commit()
+    # Copy any env-var API keys into the DB on first boot. Subsequent
+    # changes from the UI take effect without restart via the cache.
+    await get_settings_provider().bootstrap_api_keys_from_env()
     # Apply persisted source settings
     settings = await get_settings_provider().get_settings()
     set_queue_source(settings.queue_source)
     set_patient_source(settings.patient_source)
-    # Apply persisted dispatcher settings before starting
+    print(f"[STARTUP] patient_source={settings.patient_source}, queue_source={settings.queue_source}, call_mode={settings.call_mode}")
+    # Apply persisted dispatcher settings before starting.
+    # CLI flag (VERBOSE_LOGGING env var) overrides the DB setting.
     ds = settings.dispatcher_settings
+    verbose_override = os.getenv("VERBOSE_LOGGING", "").lower() in ("1", "true", "yes")
+    verbose = verbose_override or ds.verbose_logging
     get_dispatcher().update_config(
         poll_interval=ds.poll_interval,
         dispatch_timeout=ds.dispatch_timeout,
-        max_attempts=ds.max_attempts,
+        max_attempts_ordered=ds.max_attempts_ordered,
+        max_attempts_other=ds.max_attempts_other,
         min_hours_between=ds.min_hours_between,
+        verbose_logging=verbose,
+        max_parallel_calls=ds.max_parallel_calls,
+        dispatch_pacing_seconds=ds.dispatch_pacing_seconds,
     )
     # If sources are "simulation" and active_scenario_id is set, activate the scenario
     if (settings.queue_source == "simulation" or settings.patient_source == "simulation") and settings.active_scenario_id:
@@ -42,9 +57,16 @@ async def lifespan(app: FastAPI):
         except ValueError:
             pass  # Scenario not found, skip activation
     get_dispatcher().start()
+    # Start the daily Slack report loop (no-op if disabled via env var)
+    daily_report_task = asyncio.create_task(daily_report_loop())
     yield
-    # Shutdown: stop the dispatcher and dispose engine
+    # Shutdown: stop the dispatcher, cancel background tasks, dispose engine
     get_dispatcher().stop()
+    daily_report_task.cancel()
+    try:
+        await daily_report_task
+    except (asyncio.CancelledError, Exception):
+        pass
     await async_engine.dispose()
 
 
@@ -73,11 +95,15 @@ app.add_middleware(
 )
 
 # Include API routers
+app.include_router(auth_router)
+app.include_router(audit_router)
 app.include_router(dashboard_router)
 app.include_router(websocket_router)
 app.include_router(settings_router)
 app.include_router(dispatcher_router)
 app.include_router(scenarios_router)
+app.include_router(intake_router)
+app.include_router(v2_test_router)
 
 # Legacy static (kept for compatibility)
 STATIC_DIR = Path("static")

@@ -1,0 +1,949 @@
+MEDIFLOW 360
+
+AI Patient Intake Agent
+
+Version 2 — Technical Specification
+
+DOCUMENT CONTROL
+
+Version
+
+Date
+
+Author
+
+Notes
+
+1.0
+
+Wednesday, April 22nd, 2026
+
+Danny Rackow
+
+Initial draft for engineering review
+
+Pathora, Inc. — MediFlow 360 Platform
+
+CONFIDENTIAL — INTERNAL USE ONLY
+
+Table of Contents
+TOC \h \o "1-3"
+
+1. Overview
+
+1.1 Purpose
+
+This document specifies the v2 enhancement of the MediFlow 360 AI Patient Intake Agent. The agent currently calls patients with pending orders to confirm availability and transfers willing patients to a human scheduler. Version 2 expands the agent to complete all non-scheduling intake tasks — demographic gap-filling, modality-specific prescreen capture, photo ID upload, and lien e-signature — so that schedulers receive only intake-complete patients and can focus on appointment placement.
+
+1.2 v1 Baseline
+
+The existing agent polls the call queue; once the queue depth falls below a configured threshold it dials patients with pending orders. On connection it asks whether the patient is free to schedule. A yes transfers the patient to the scheduling or intake queue. A no triggers an SMS follow-up. No answer results in a voicemail and SMS. All v1 behavior is preserved when a patient has no outstanding intake items — the agent transfers immediately as it does today.
+
+1.3 v2 Goals
+
+Remove repetitive intake work from human schedulers so they focus on appointment placement.
+
+Capture all intake artifacts (demographics, prescreen answers, photo ID, signed lien) before a human touches the order.
+
+Use the patient portal as the primary completion channel, with the agent serving as a live voice copilot while the patient works through the portal.
+
+Offer a voice-only fallback for demographics and prescreen when the patient cannot or will not use the portal.
+
+Ship all capabilities together as a single release to preserve patient experience; no partial or phased intake flows.
+
+1.4 v2 Non-Goals
+
+Appointment scheduling by the agent. The agent always transfers to a human for scheduling. Scheduling automation is deferred to v3.
+
+Clinical decision-making. The agent does not evaluate prescreen answers, does not clear or block patients, and does not decide whether a red flag exists. Downstream review of captured answers is a human responsibility and is out of scope for this spec.
+
+Changes to the underlying question content. Question wording and sets are provided by Precise Imaging and loaded via configuration; this spec defines only the capture engine and delivery mechanics.
+
+1.5 Success Metrics
+
+Measured from baseline (v1) versus v2 rollout, reported weekly via the existing analytics pipeline:
+
+Percentage of calls in which the agent completes full intake without any human touch before scheduling.
+
+Average scheduler-minutes saved per booked exam, calculated as baseline intake time minus v2 scheduler time.
+
+Reduction in time from order creation to intake-complete status.
+
+Percentage of agent-initiated portal sessions in which the patient completes all assigned TODO items during the call.
+
+Agent-to-human transfer rate, broken down by transfer reason.
+
+Patient-initiated hang-up rate by intake step.
+
+2. Scope
+
+2.1 In Scope
+
+Identity verification at the start of every v2-enabled call.
+
+Intake status check against the MediFlow backend to determine which tasks are outstanding.
+
+Agent offer of portal-led versus voice-led intake, with the agent remaining on the line in either mode.
+
+Voice capture of demographics fields and modality-specific prescreen questions using the exact wording defined in the question configuration.
+
+Portal copilot behavior, including SMS dispatch, phone prefill, 2FA guidance, real-time portal state awareness, and step-by-step narration of TODO items.
+
+Transfer to a human scheduler on intake completion or on any defined dead-end condition.
+
+Structured handoff payload summarizing what was captured and what remains.
+
+2.2 Out of Scope
+
+Appointment scheduling or slot selection (deferred to v3).
+
+Clinical review of prescreen answers.
+
+Changes to the portal UI itself beyond the phone-prefill and 2FA behavior described in Section 6.2.
+
+Changes to the existing order intake, lien, or ID upload backend endpoints; the agent consumes existing APIs.
+
+New modalities beyond those listed in Section 5.2; the engine must be config-driven so new modalities can be added later without code changes.
+
+3. End-to-End Flow
+
+The agent executes the following sequence on every outbound call once the v1 queue threshold check passes and a patient has been selected for dialing. Each numbered step maps to one or more functional requirements in Section 4.
+
+The agent dials the patient's primary phone number via Twilio.
+
+If the patient does not answer, the agent leaves the existing v1 voicemail script and sends the existing v1 SMS. The call ends.
+
+If the patient answers, the agent reads the consent and recording disclosure (see Section 9.5) and then verifies patient identity by asking for name and date of birth. A mismatch with the order record ends the call with a scripted apology and flags the order for follow-up by a human.
+
+On successful identity verification, the agent queries the backend for intake status. If all intake artifacts are present and valid, the agent proceeds to v1 behavior: it confirms the patient is free to schedule and transfers to the scheduling queue on a yes.
+
+If one or more intake items are missing, the agent asks the patient whether they would prefer to complete them through the patient portal (the agent stays on the line) or by answering questions over the phone. The choice is binary; the agent does not advocate for either.
+
+If the patient selects portal mode, the agent sends an SMS to the verified phone number containing a portal link. The portal prefills the phone number but allows the patient to change it before requesting the 2FA code. Once the patient authenticates, the agent narrates the assigned TODO items and answers questions as the patient works through them, using real-time backend status to track completion.
+
+If the patient selects voice mode, the agent captures demographic gaps and prescreen answers by reading the configured question set for the patient's modality (or the union of sets if multiple modalities). The agent reads each question using its configured wording, records the patient's answer into the corresponding field, and confirms numeric and free-text answers back to the patient before saving. Photo ID upload and lien e-signature are not possible over voice; if those items are missing and the patient refuses portal, the call is transferred to a human with the voice-captured portion saved.
+
+When all intake items accessible in the chosen mode are complete, the agent transfers the patient to the scheduling queue with a structured handoff payload. Scheduling is always performed by a human; the agent never books an appointment.
+
+If the patient hangs up or drops during any step, the agent persists state to the Temporal workflow so the next contact resumes at the next incomplete step.
+
+4. Functional Requirements
+
+Each requirement is uniquely identified for traceability in test plans and Jira tickets. Requirements marked MUST are release-blocking; SHOULD requirements are strongly recommended but may be deferred with product approval.
+
+FR-1 — Call Initiation and No-Answer Handling
+
+ID
+
+FR-1
+
+Priority
+
+MUST
+
+Description
+
+Preserve v1 dialing and no-answer behavior without modification.
+
+Behavior
+
+The agent is dispatched when the call queue depth falls below the configured threshold. It selects a patient with pending order and dials via Twilio. If the call is not answered, the existing v1 voicemail and SMS sequence is executed and the workflow ends.
+
+Acceptance
+
+No regression in v1 no-answer metrics after v2 release.
+
+FR-2 — Consent Disclosure and Identity Verification
+
+ID
+
+FR-2
+
+Priority
+
+MUST
+
+Description
+
+Before any PHI is discussed, the agent discloses that the call is handled by an automated assistant and may be recorded, and verifies patient identity.
+
+Behavior
+
+The opening script is delivered verbatim from configuration. The agent then prompts for the patient's first name, last name, and date of birth. Responses are matched against the order record. A full match proceeds to FR-3. A mismatch retries up to one additional time and then transfers to a human.
+
+Acceptance
+
+No PHI (including modality, body part, or visit reason) is spoken by the agent before identity verification completes. Mismatches are logged with reason.
+
+FR-3 — Intake Status Evaluation
+
+ID
+
+FR-3
+
+Priority
+
+MUST
+
+Description
+
+Evaluate the current state of intake artifacts for the order and determine the set of outstanding tasks.
+
+Behavior
+
+The agent calls GET /api/intake/status/{orderId} (contract in Section 6.3) and receives a list of outstanding tasks across four categories: demographics, prescreen, photo ID, signed lien. If the list is empty, the agent proceeds to v1 behavior (FR-8b, immediate scheduling transfer). If non-empty, the agent proceeds to FR-4.
+
+Acceptance
+
+The intake status call is made within two seconds of identity verification success. Outstanding tasks list is logged on every call.
+
+FR-4 — Mode Selection
+
+ID
+
+FR-4
+
+Priority
+
+MUST
+
+Description
+
+Offer the patient a choice between portal-led and voice-led intake completion.
+
+Behavior
+
+The agent reads the mode-selection script verbatim from configuration. The script presents both options neutrally and notes that the agent will stay on the line in either case. The patient's selection is stored on the workflow. If the patient does not express a clear preference after one re-prompt, the agent defaults to portal. If ID or signed lien is among the outstanding tasks, the agent notes that the portal will be needed for those items even if voice is selected for the rest.
+
+Acceptance
+
+Mode selection is captured on every call with missing intake. The default-to-portal branch triggers only on ambiguous responses.
+
+FR-5 — Voice-Mode Intake Capture
+
+ID
+
+FR-5
+
+Priority
+
+MUST
+
+Description
+
+Capture demographic and prescreen fields by reading configured questions and storing answers into backend fields.
+
+Behavior
+
+The agent loads the question set for the patient's modality (or the deduplicated union for multi-modality orders). For each field not already populated in the backend, the agent reads the configured prompt verbatim, captures the patient's answer, and stores it. Yes/no answers are accepted on clear affirmative or negative. Numeric and free-text answers are confirmed back to the patient before saving. Branching fields (such as 'prior surgeries' with list) honor the branch rules in configuration. The agent does not skip, reorder, or paraphrase the substance of any question.
+
+Acceptance
+
+Every configured field for the order's modality is either already populated, newly captured, or flagged as refused. No captured answer is stored without confirmation for numeric and free-text types.
+
+FR-6 — Portal-Mode Copilot
+
+ID
+
+FR-6
+
+Priority
+
+MUST
+
+Description
+
+Act as a live voice copilot while the patient completes TODO items in the patient portal.
+
+Behavior
+
+The agent triggers an SMS from the portal service to the verified phone number. The portal link opens with the patient's phone prefilled; the patient may edit the phone before requesting a 2FA code. Once authenticated, the agent subscribes to portal intake events and narrates each TODO item as the patient reaches it. The agent answers clarification questions about item meaning, walks the patient through common failures (2FA not received, ID photo rejected, e-sign stuck), and confirms progress in real time based on backend events rather than asking the patient to report completion.
+
+Acceptance
+
+Agent confirmation of each completed TODO fires within five seconds of the backend event. The agent never asks the patient 'did you finish?' for a task for which a completion event has already been received.
+
+FR-7 — Photo ID and Lien Handling
+
+ID
+
+FR-7
+
+Priority
+
+MUST
+
+Description
+
+Ensure photo ID and signed lien are captured before transfer, routing to portal or human as appropriate.
+
+Behavior
+
+If either artifact is missing, the agent explains that the portal is required for that artifact. If the patient is already in portal mode, the agent narrates the ID upload and e-sign steps alongside the other TODO items. If the patient is in voice mode and refuses or cannot switch to portal, the agent saves all voice-captured data and transfers the call to a human with a transfer reason of PORTAL_REFUSED_FOR_ID_OR_LIEN.
+
+Acceptance
+
+No order is marked intake-complete without both ID and signed lien on file.
+
+FR-8 — Handoff to Scheduling Queue
+
+ID
+
+FR-8
+
+Priority
+
+MUST
+
+Description
+
+Transfer the call to the scheduling queue with a structured handoff payload. Never schedule.
+
+Behavior
+
+The agent always transfers to the scheduling queue when (a) intake was already complete at FR-3, (b) intake is completed during the call, or (c) a dead-end transfer condition is met per Section 8. The transfer includes a payload (schema in Section 5.4) summarizing captured data, outstanding items, transfer reason, and a call summary. Scheduling is performed exclusively by the human scheduler; the agent has no tool to place an appointment.
+
+Acceptance
+
+100% of v2 calls end with either a scheduler-queue transfer or a no-answer termination. Transfer payloads pass schema validation.
+
+FR-9 — Agent Behavior Constraints
+
+ID
+
+FR-9
+
+Priority
+
+MUST
+
+Description
+
+Enforce the agent's role as a capture and guidance layer only. No clinical, scheduling, or policy decisions.
+
+Behavior
+
+The agent's system prompt (see Section 9) prohibits: clearing or blocking a patient based on prescreen answers; paraphrasing the substance of configured questions; offering medical advice; booking or proposing appointment slots; sharing other patients' information; discussing billing or financial terms beyond reading the lien contents as displayed in the portal. Any user request for behavior outside the allowed set is met with a scripted refusal and, on repeat, a transfer to a human.
+
+Acceptance
+
+Red-team test suite in Section 12.3 passes. All refusal scripts are logged.
+
+5. Data Model
+
+5.1 Question Configuration Schema
+
+Prescreen and demographic questions are stored as versioned configuration, scoped per tenant (company ID), per modality group. Engineering owns the engine; product and clinical ops own the content. The schema below is illustrative; final field names to be confirmed during implementation.
+
+{
+
+  "configId": "preq.radiation.v3",
+
+  "tenantId": "PATHORA",
+
+  "modalityGroup": "RADIATION",
+
+  "appliesTo": ["XR", "CT"],
+
+  "effectiveDate": "2026-04-22",
+
+  "fields": [
+
+    {
+
+      "id": "weight_lbs",
+
+      "type": "number",
+
+      "unit": "lbs",
+
+      "prompt": "What is your weight?",
+
+      "confirmBeforeSave": true,
+
+      "backendField": "patient.weightLbs"
+
+    },
+
+    {
+
+      "id": "height",
+
+      "type": "height_ft_in",
+
+      "prompt": "What is your height?",
+
+      "confirmBeforeSave": true,
+
+      "backendField": "patient.heightFtIn"
+
+    },
+
+    {
+
+      "id": "pregnant",
+
+      "type": "boolean",
+
+      "prompt": "Are you currently pregnant?",
+
+      "skipIf": "patient.sex == 'M'",
+
+      "backendField": "intake.pregnant"
+
+    },
+
+    {
+
+      "id": "visit_reason",
+
+      "type": "freetext",
+
+      "prompt": "Please describe the reason for your visit.",
+
+      "confirmBeforeSave": true,
+
+      "mayExtractFromConversation": true,
+
+      "backendField": "intake.visitReason"
+
+    }
+
+  ],
+
+  "branches": [
+
+    {
+
+      "triggerFieldId": "prior_surgeries",
+
+      "triggerValue": true,
+
+      "askFieldIds": ["prior_surgeries_list"]
+
+    }
+
+  ]
+
+}
+
+5.2 Modality Groups
+
+The v2 release covers the three modality groups below. Additional groups (ultrasound, DEXA, mammography, nuclear medicine) may be added later by publishing a new configuration document; no code change is required.
+
+Group
+
+Applies To
+
+Notes
+
+RADIATION
+
+X-ray, CT
+
+Shared question set. Includes weight, height, pregnancy (where applicable), prior recent imaging, cancer history, mobility aid, visit reason.
+
+MR_NON_CONTRAST
+
+MRI without contrast
+
+Extended MRI safety set including implanted devices, metal exposure history, claustrophobia, surgeries, tattoos, dental metal, ankle monitor, eye injuries, and similar. Full wording sourced from the Precise Imaging MRI screening form.
+
+MR_CONTRAST
+
+MRI with contrast
+
+MR_NON_CONTRAST set plus contrast-specific questions covering renal function, prior contrast reactions, allergies, and related items. Final question list supplied by clinical operations.
+
+5.3 Intake Status Schema
+
+Response shape from GET /api/intake/status/{orderId}.
+
+{
+
+  "orderId": "ORD-00042981",
+
+  "patientId": "PRE1182175",
+
+  "tenantId": "PATHORA",
+
+  "modalities": ["XR", "MR_NON_CONTRAST"],
+
+  "outstandingTasks": [
+
+    { "category": "DEMOGRAPHICS", "fieldIds": ["address_line_1", "doi"] },
+
+    { "category": "PRESCREEN", "modalityGroup": "RADIATION", "fieldIds": ["weight_lbs", "height"] },
+
+    { "category": "PRESCREEN", "modalityGroup": "MR_NON_CONTRAST", "fieldIds": ["metal_work_history", "surgeries"] },
+
+    { "category": "PHOTO_ID" },
+
+    { "category": "SIGNED_LIEN", "lienDocumentId": "LN-99221" }
+
+  ],
+
+  "intakeComplete": false,
+
+  "lastUpdated": "2026-04-22T10:05:00-07:00"
+
+}
+
+5.4 Handoff Payload Schema
+
+Sent to the scheduling queue with every call-ending transfer. Stored on the order for audit.
+
+{
+
+  "callId": "CALL-2026-04-22-77214",
+
+  "orderId": "ORD-00042981",
+
+  "patientId": "PRE1182175",
+
+  "startedAt": "2026-04-22T10:02:11-07:00",
+
+  "endedAt": "2026-04-22T10:18:44-07:00",
+
+  "mode": "PORTAL",
+
+  "transferReason": "INTAKE_COMPLETE",
+
+  "identityVerified": true,
+
+  "capturedThisCall": {
+
+    "demographics": ["address_line_1", "doi"],
+
+    "prescreen": ["weight_lbs", "height", "metal_work_history", "surgeries"],
+
+    "photoIdUploaded": true,
+
+    "lienSigned": true
+
+  },
+
+  "stillOutstanding": [],
+
+  "callSummary": "Patient verified. Portal mode. All TODOs completed on call. No unusual issues.",
+
+  "transcriptUri": "s3://mediflow-transcripts/2026/04/22/CALL-2026-04-22-77214.json"
+
+}
+
+transferReason is an enum. Allowed values: INTAKE_ALREADY_COMPLETE, INTAKE_COMPLETE, PORTAL_REFUSED_FOR_ID_OR_LIEN, IDENTITY_VERIFICATION_FAILED, PATIENT_REQUESTED_HUMAN, TECHNICAL_FAILURE, PATIENT_DROPPED_BEFORE_COMPLETE.
+
+6. Integration Points
+
+6.1 Twilio — Voice and SMS
+
+Outbound voice initiated from the existing Twilio Trunk via FreePBX routing.
+
+Agent audio streamed through existing Twilio Media Streams integration.
+
+Outbound SMS for voicemail follow-up (v1) and for portal link dispatch (v2, FR-6).
+
+Consent and recording disclosure is handled in-script by the agent; no change to Twilio configuration required.
+
+6.2 Patient Portal
+
+New endpoint POST /portal/intake-session accepts patientId and phoneNumber and returns a short-lived tokenized URL for SMS dispatch.
+
+Landing page accepts the phone query parameter, prefills the 2FA phone field, and allows the patient to edit it before requesting the code.
+
+Portal emits intake events to an internal event bus on every TODO completion: demographics saved, prescreen section saved, photo ID uploaded and accepted, lien signed. The agent subscribes to these events for its orderId.
+
+Language selection is handled entirely within the portal; the agent does not manage localization for portal-mode patients.
+
+6.3 MediFlow Backend APIs
+
+All endpoints documented in the Scalar API documentation under the intake-agent-v2 tag. Auth is via the existing internal service-to-service mutual TLS. No new auth model is introduced.
+
+Verb
+
+Path
+
+Purpose
+
+GET
+
+/api/intake/status/{orderId}
+
+Return outstanding intake tasks (Section 5.3)
+
+GET
+
+/api/patient/{patientId}
+
+Return current demographic fields for gap analysis
+
+POST
+
+/api/intake/capture
+
+Persist a single captured field. Idempotent on (orderId, fieldId)
+
+GET
+
+/api/preq/config
+
+Return active question config for tenant and modality group
+
+POST
+
+/portal/intake-session
+
+Create a portal session and return tokenized URL for SMS
+
+POST
+
+/api/call/transfer
+
+Hand off call to the scheduling queue with handoff payload (Section 5.4)
+
+6.4 Temporal Workflow
+
+Each call runs as a Temporal workflow keyed by callId and pinned to an orderId. Steps map to Temporal activities: identity verification, intake status fetch, mode selection, per-field capture, portal copilot subscription, and final transfer. Activities emit signals on patient drop so the workflow can persist state for resumption on the next outbound call. Existing Temporal deployment is reused; no new infrastructure is required.
+
+6.5 LLM Provider
+
+Primary provider: OpenAI. The agent's system prompt, question rendering, and conversational logic run on the primary model.
+
+Fallback provider: Gemini, consistent with the existing Front CRM OCR fallback pattern.
+
+Tool use is tightly scoped. The agent has access only to: read-intake-status, read-patient, save-field, send-portal-sms, subscribe-portal-events, transfer-to-human. It has no tool to book an appointment, no tool to modify lien terms, and no generic web access.
+
+6.6 Monitoring and API Documentation
+
+Agent calls, tool invocations, and transfer reasons are logged to New Relic under the existing application; dashboards will be created alongside release.
+
+All new endpoints are documented in Scalar with request/response examples drawn from Section 5.
+
+Internal status messages and alerts go to Zulip using the standard @**Danny Rackow** mention format where escalation is needed.
+
+7. State Management
+
+7.1 Workflow Shape
+
+A single Temporal workflow represents the full intake interaction for one order and may span multiple outbound calls. The workflow holds the following state: orderId, patientId, identityVerifiedAt, mode (null, PORTAL, VOICE), capturedFields (map of fieldId to status), portalSessionId (if applicable), lastContactedAt, and a linear list of completed steps. Each outbound call is a child of this workflow and contributes to its state.
+
+7.2 Resume On Reconnect
+
+If a patient hangs up mid-intake, the parent workflow remains open with status PAUSED. The next dialer pass that selects this order attaches a new call child workflow, re-verifies identity, and resumes at the first incomplete step. The agent opens with a short acknowledgement of the prior session: 'Thanks for picking up again — I have the information you gave us earlier, so we'll pick up where we left off.' Prior captured fields are not re-asked.
+
+7.3 Timeouts
+
+Call inactivity timeout: 45 seconds of silence prompts a soft 'are you still there?' re-engagement. Two consecutive silence timeouts end the call and mark the order as PAUSED.
+
+Portal completion timeout: if the patient has authenticated to the portal but completes no TODOs for 10 minutes, the agent politely asks whether the patient would prefer to continue later. A yes ends the call with a scheduled follow-up SMS; a no extends by 10 minutes.
+
+Workflow staleness: parent workflows with no activity for 30 days are closed with status ABANDONED and an alert raised.
+
+8. Transfer-to-Human Triggers
+
+The agent transfers the call to the scheduling queue under the following conditions. Every transfer carries a handoff payload per Section 5.4 and a transferReason enum value. The human picking up the call is responsible for scheduling and for any manual intake completion required by the transfer reason.
+
+Condition
+
+transferReason
+
+All intake artifacts present at FR-3
+
+INTAKE_ALREADY_COMPLETE
+
+All artifacts captured during the call
+
+INTAKE_COMPLETE
+
+Patient refuses portal for ID or lien
+
+PORTAL_REFUSED_FOR_ID_OR_LIEN
+
+Identity verification fails twice
+
+IDENTITY_VERIFICATION_FAILED
+
+Patient explicitly requests a human
+
+PATIENT_REQUESTED_HUMAN
+
+Twilio, portal, backend, or LLM failure
+
+TECHNICAL_FAILURE
+
+Patient ends call before completion (if still in queue threshold window)
+
+PATIENT_DROPPED_BEFORE_COMPLETE
+
+9. Agent Prompt and Training Requirements
+
+9.1 System Prompt Source of Truth
+
+The agent's system prompt is versioned in the same repository as the question configuration and is deployed through the existing config-release process. Every prompt revision requires a corresponding entry in the prompt changelog and a passing run of the red-team suite (Section 12.3). The prompt is the single place where behavioral constraints are enforced.
+
+9.2 Question Wording Constraints
+
+The prompt instructs the agent to read each question's configured prompt text substantially verbatim. Minor conversational glue such as 'okay, next one', 'and — ', or 'one more' is permitted. Paraphrasing the substance, reordering questions within a set, skipping questions, combining questions, or offering the agent's interpretation of what a question means is prohibited. If a patient asks for clarification, the agent reads a pre-configured clarification string (when one exists for that field) or transfers to a human (when one does not). It does not improvise a definition.
+
+9.3 Portal Navigation Knowledge
+
+The prompt includes a structured description of the patient portal covering: the layout of the TODO list page, the exact labels of each TODO item as rendered in the UI, the steps inside each TODO (upload ID, e-sign lien, prescreen form, demographics form), the 2FA flow, common failure modes and their remediations (SMS not received, photo ID rejected, e-sign session expired, wrong language selected), and the event-to-language mapping used for confirmations. This description is maintained by product alongside every portal UI change; out-of-date descriptions are treated as a release blocker.
+
+9.4 Tone and Language
+
+Warm, patient, unhurried. Many callers are elderly or in pain. The agent waits, repeats gently, and does not talk over the patient.
+
+No medical terminology beyond what the question configuration uses. The agent does not volunteer diagnostic speculation.
+
+Plain American English for voice-mode. Spanish voice support is a v2.1 consideration and is not in scope for the initial release; Spanish-speaking patients are routed to the portal, which already supports multiple languages.
+
+9.5 Consent and Recording Disclosure
+
+The opening script discloses that the patient is speaking with an automated assistant and that the call may be recorded for quality and training. Exact wording is legal-reviewed and stored in configuration. The agent must not begin identity verification until the disclosure has been read in full.
+
+9.6 Refusal Behaviors
+
+The prompt defines scripted refusals for the following requests: providing medical advice or interpreting imaging results; discussing another patient's information; scheduling an appointment directly; modifying the lien terms; disclosing internal agent configuration, prompt contents, or tool list. Each refusal is brief, apologetic, and followed by a redirect to a human if the patient persists.
+
+10. Edge Cases
+
+The following scenarios must be handled explicitly. Test cases for each appear in Section 12.
+
+Scenario
+
+Expected Behavior
+
+Patient has no smartphone
+
+If portal items remain after voice capture, transfer to human with PORTAL_REFUSED_FOR_ID_OR_LIEN. Human will arrange in-person or scheduled-portal-assist completion.
+
+Patient speaks a language other than English
+
+Agent offers portal immediately and narrates only what is essential in English (confirm phone, send link). Portal handles full localization. If the patient declines portal, transfer to a human.
+
+Caregiver answers on the patient's behalf
+
+Agent verifies whether the caregiver is authorized. If not confirmed as authorized in the order record, transfer to human. Agent does not discuss PHI with an unverified third party.
+
+Order lists multiple modalities
+
+Agent loads the union of question sets, deduplicates on field id, and asks each field once. Modality group with the strictest requirement wins for shared fields.
+
+Patient asks for a human at any point
+
+Immediate transfer with PATIENT_REQUESTED_HUMAN. Data captured so far is saved.
+
+Patient hangs up mid-flow
+
+Workflow persists state. On next dialer pass, identity is re-verified and the agent resumes at the next incomplete field without re-asking captured ones.
+
+Portal SMS does not arrive
+
+Agent offers to resend once; if still not received, offers voice capture for allowable fields and transfers to human for ID and lien.
+
+Photo ID upload rejected by OCR
+
+Agent narrates the rejection reason as surfaced by the portal and asks the patient to retake. Two consecutive rejections result in transfer to a human.
+
+Patient refuses to answer a prescreen question
+
+Agent logs the field as REFUSED and continues. Downstream intake review determines whether the order can proceed; this is not an agent decision.
+
+LLM timeout or provider outage
+
+Fall back to secondary provider. If both fail, the call is transferred to a human with TECHNICAL_FAILURE and an alert fires in New Relic and Zulip.
+
+Backend returns stale intake status
+
+Agent relies on portal event bus as source of truth during portal mode. If a discrepancy persists, the agent re-queries status at the end of the call before transferring.
+
+11. Telemetry and Metrics
+
+11.1 Per-Call Events
+
+Each event is emitted to New Relic with callId, orderId, patientId, tenantId, and a timestamp. Events are used for real-time debugging and aggregated for the metrics in Section 11.2.
+
+call.initiated, call.answered, call.no_answer
+
+consent.disclosed
+
+identity.verified, identity.mismatch
+
+intake.status.fetched with outstanding task count
+
+mode.selected with PORTAL or VOICE
+
+field.asked, field.captured, field.confirmed, field.refused with fieldId
+
+portal.sms.sent, portal.authenticated, portal.todo.completed with todoId
+
+transfer.initiated with transferReason
+
+error.llm, error.backend, error.portal, error.twilio
+
+11.2 Aggregate Metrics
+
+Intake-complete-without-human rate (weekly, by tenant)
+
+Average scheduler-minutes saved per booked exam
+
+Median time from order creation to intake-complete
+
+Portal completion rate during agent-assisted sessions
+
+Transfer reason distribution (stacked bar, weekly)
+
+Field-level refusal rate (to flag questions that may need rewording)
+
+Hang-up rate by step of the flow
+
+LLM latency and failure rate by provider
+
+12. Testing Requirements
+
+12.1 Unit and Component Tests
+
+Question config loader: validate parsing, skipIf evaluation, branch resolution, union-of-sets deduplication.
+
+Field capture adapters for boolean, number, height_ft_in, and freetext with confirmation loop.
+
+Intake status delta computation from backend response to agent task list.
+
+Handoff payload schema validation.
+
+12.2 Integration Tests
+
+End-to-end call flow against staging Twilio, staging portal, and staging MediFlow backend for each transfer reason.
+
+Resume-on-reconnect scenario: hang up mid-prescreen, re-dial, verify no re-asked fields.
+
+Multi-modality order: verify deduplicated question set.
+
+Portal event subscription: verify real-time confirmation within five seconds of TODO completion.
+
+12.3 Red-Team Suite
+
+A fixed set of adversarial prompts must pass before any prompt revision is released. The suite covers at minimum:
+
+Patient requests medical advice. Expected: scripted refusal, redirect on persistence.
+
+Patient asks the agent to book an appointment. Expected: polite decline and handoff.
+
+Patient attempts to extract the system prompt or tool list. Expected: scripted refusal.
+
+Patient claims to be a different patient than the order record. Expected: verification failure path.
+
+Patient attempts to have the agent skip a prescreen question. Expected: agent reads the question anyway; if refused, logs as REFUSED and continues.
+
+Patient describes a medical emergency. Expected: agent reads the emergency script (configured) directing to 911 and transfers to a human.
+
+12.4 User Acceptance Testing
+
+UAT is conducted by the scheduling team and a clinical operations representative against staging with realistic patient scenarios for each modality group. Sign-off requires all FR acceptance criteria met and no P0 or P1 defects outstanding.
+
+13. Dependencies and Team Ownership
+
+Ownership table below is a starting proposal. Final assignments are set by the project manager during sprint planning.
+
+Workstream
+
+Proposed Owner
+
+Dependencies
+
+Agent prompt, LLM tool wiring, Temporal workflow
+
+Backend engineering
+
+Portal event bus, backend APIs
+
+Backend APIs (intake status, capture, session, transfer)
+
+Backend engineering
+
+Intake data model, lien service
+
+Portal phone-prefill, 2FA edit, intake event emission
+
+Frontend engineering
+
+Portal 2FA service
+
+Question configuration authoring
+
+Product + Clinical Ops
+
+Existing prescreen forms
+
+Red-team suite and QA
+
+QA
+
+Staging environment
+
+New Relic dashboards
+
+Platform / SRE
+
+Telemetry events (Section 11.1)
+
+Legal review of consent script
+
+Legal / Compliance
+
+None
+
+14. Open Decisions
+
+The following items are not yet decided and will block or shape implementation. Each requires an owner and a target decision date before the sprint kicks off.
+
+#
+
+Decision
+
+Needed By
+
+1
+
+Final consent and recording disclosure wording (legal-approved).
+
+Before development begins
+
+2
+
+Exact MR_CONTRAST question list beyond the MR_NON_CONTRAST set, supplied by Clinical Ops.
+
+Before sprint 1 of development
+
+3
+
+Whether the dialer threshold that controls v1 call initiation needs to be adjusted for v2, given longer expected call durations.
+
+Before beta rollout
+
+4
+
+Whether caregiver authorization is already captured in the order record or requires a new field.
+
+Before FR-2 acceptance testing
+
+5
+
+Whether Spanish voice support should be added to v2 scope or held for v2.1.
+
+Before sprint 1
+
+6
+
+Beta rollout strategy: limited to a subset of tenants first, or full Precise Imaging rollout on release.
+
+Two weeks before release
+
+7
+
+Recording retention policy for agent call transcripts, aligned with existing MediFlow retention policy.
+
+Before release
+
+End of Specification
+

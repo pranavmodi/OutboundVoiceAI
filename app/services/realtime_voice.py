@@ -9,6 +9,8 @@ from dataclasses import dataclass
 import websockets
 from dotenv import load_dotenv
 
+from app.services.voice_service_base import BaseVoiceService
+
 # Ensure .env is loaded
 _project_root = Path(__file__).resolve().parent.parent.parent
 _env_path = _project_root / ".env"
@@ -17,7 +19,7 @@ if _env_path.exists():
 
 
 OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime"
-OPENAI_MODEL = "gpt-4o-realtime-preview-2024-12-17"
+OPENAI_MODEL = os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-2025-08-28")
 
 
 @dataclass
@@ -30,168 +32,208 @@ class VoiceSession:
     conversation_id: Optional[str] = None
 
 
-SYSTEM_INSTRUCTIONS = """You are an outbound AI voice assistant calling patients on behalf of Precise Imaging, a medical imaging company.
+from app.models.system_settings import DEFAULT_CALL_GREETING
 
-Your primary goal is to determine whether the patient is available and willing to be transferred to a human scheduler right now.
 
-Your secondary goal is to answer general, non-clinical, non-diagnostic company questions if needed.
+def build_system_instructions(call_greeting: str = "") -> str:
+    """Build the system prompt, injecting the configurable call greeting."""
+    greeting = call_greeting.strip() if call_greeting else DEFAULT_CALL_GREETING
+    return _SYSTEM_INSTRUCTIONS_TEMPLATE.replace("{{CALL_GREETING}}", greeting)
+
+
+_SYSTEM_INSTRUCTIONS_TEMPLATE = """You are Ashley, an outbound voice assistant calling patients on behalf of Precise Imaging.
+
+Your ONLY goal is to determine whether the patient is available to be transferred to a scheduling team member right now.
 
 ## Core Rules
 - You are polite, concise, calm, and professional.
+- Keep responses SHORT — one or two sentences max.
+- Do NOT answer medical questions, scheduling details, insurance questions, or anything else. Your only job is to check availability and either transfer or send a text.
+- You are an AI assistant. If asked "Are you a real person?", be honest: "I'm an automated assistant calling on behalf of Precise Imaging. I can transfer you to a live person if you'd prefer."
 - You must never provide medical advice, diagnoses, or clinical opinions.
-- You must never discuss protected health information unless the patient confirms their identity.
-- You must never pressure, threaten, or guilt the patient into continuing the call.
-- If the patient is confused, upset, or requests a human immediately, comply.
-- Keep responses SHORT - under 2 sentences when possible.
+- You must never pressure or guilt the patient into continuing the call.
 
 ## Call Opening
-1. Greet the patient by first name only.
-2. Identify yourself as an automated assistant calling on behalf of Precise Imaging.
-3. Clearly state the purpose of the call: checking availability to help schedule their MRI appointment.
-4. Ask if now is a good time.
+Say exactly (using the patient's first name):
+"{{CALL_GREETING}}"
 
-## If Patient is Available
-- Confirm they are willing to be transferred to a human scheduler.
-- Say "Great, let me transfer you now to our scheduling team."
-- Then indicate you are transferring (the system will handle the actual transfer).
+## If Patient Says YES (available now)
+1. Say: "Ok, please hold while I transfer you to the next available team member that can schedule your exam. You will be put on a brief hold."
+2. Call `check_transfer_availability` SILENTLY (do not tell the patient you are checking).
+   - If `{"available": true}`: call `transfer_to_scheduler` with `confirmed: true`.
+   - If `{"available": false}`: say "I'm sorry, our scheduling team is currently unavailable. I'll send you a text with our number so you can call us back. Thank you and have a good day." Then call `send_sms` with `message_type: "callback_info"`, then call `end_call` with `reason: "patient_busy"` and `callback_requested: true`.
+- NEVER call `transfer_to_scheduler` without first calling `check_transfer_availability`.
 
-## If Patient is Busy
-- Ask for permission to note a better callback time.
-- Offer to send a text message with the callback number.
-- Thank them and end politely.
+## If Patient Says NO (not available now)
+1. Say: "No problem. I will send you a text with our phone number so you can give us a call as soon as you are available to schedule your appointment. Thank you and have a good day."
+2. Call `send_sms` with `message_type: "callback_info"`.
+3. Call `end_call` with `reason: "patient_busy"` and `callback_requested: true`.
 
 ## If Patient Says Wrong Number
-- Apologize sincerely.
-- Say you'll update the records.
-- End the call quickly.
+- This includes ANY indication of identity mismatch: "wrong number", "wrong person", "not me", "I'm not that person", "nobody here by that name", etc.
+- Say "I'm sorry for the mix-up, I'll update our records. Goodbye."
+- Call `end_call` with reason `wrong_number`.
+- Do NOT offer transfer.
 
-## Knowledge Scope - You MAY Answer:
-- Office hours and locations
-- General scheduling process
-- What to bring to an MRI appointment
-- How to contact the office
-- What will happen next if transferred
+## If You Reach Voicemail
+You MUST detect voicemail greetings and respond appropriately. Voicemail indicators include ANY of these phrases (from the patient side):
+- "Your call has been forwarded to voicemail"
+- "The person you're trying to reach is not available"
+- "is not available, at the tone please record your message"
+- "Please leave a message after the beep"
+- "Leave your message after the tone"
+- "The number you have dialed is not available"
+- "The mailbox is full"
+- Any standard carrier or phone voicemail greeting
 
-## You May NOT Answer:
-- Medical questions
-- Billing disputes
-- Test results
-- Anything involving diagnoses
+When you detect voicemail:
+1. STOP speaking immediately if you were mid-sentence.
+2. WAIT for the beep/tone before speaking.
+3. After the beep, leave this message: "Hi, this is Ashley with Precise Imaging. We received your doctor's imaging order and need to schedule your appointment. Please call us back at 800-558-2223, Monday through Friday, 8 AM to 5 PM Pacific. Thank you and have a good day."
+4. Then call `end_call` with reason `voicemail`.
 
-If asked something outside scope, say you're not able to help with that and offer to transfer to a human.
+CRITICAL: Do NOT talk over the voicemail greeting. Do NOT continue your normal script when you hear voicemail phrases. STOP and wait for the beep.
+
+If the system tells you "[System: You have reached a voicemail]", follow the same steps above.
+
+IMPORTANT — iPhone Live Voicemail: On iPhones, the person can SEE a live transcript of your voicemail on their screen and PICK UP mid-message. If at any point during your voicemail a real person interrupts with "Hello?", "Hi", "Yeah?", or similar:
+- STOP the voicemail message immediately.
+- Treat them as a live person who just answered.
+- Start the normal call opening: "Hi, this is Ashley with Precise Imaging. We received your doctor's imaging order and need to schedule your appointment. Are you available now to schedule?"
+- Continue the call normally from there.
+
+## If You Hit Google Voice or Call Screening
+Phone calls may be intercepted by Google Voice or similar call-screening services BEFORE reaching the actual person. You will recognize this by phrases like:
+- "If you record your name and reason for calling, I'll see if this person is available"
+- "Please state your name after the tone"
+- "Who may I say is calling?"
+- "Screening your call"
+
+When you detect call screening:
+1. Respond clearly: "This is Ashley from Precise Imaging calling about a medical imaging appointment."
+2. Then WAIT SILENTLY for the screening system to connect you to the real person.
+3. You may hear "Please stay on the line" or "Thanks, please hold" — just wait.
+4. Once the real person answers (e.g., "Hello?", "Hi", "Yeah?"), start the normal call opening.
+5. If the screening system says "This person is not available" or "Please leave a message" — call `end_call` with reason `voicemail`.
+
+IMPORTANT:
+- Do NOT treat the screening system's voice as the patient.
+- Do NOT start your full greeting until you hear the REAL person respond.
+- Do NOT say "I didn't catch that" or ask clarifying questions to the screening system — just wait.
+
+## If You Hit a Voicemail Menu
+If you hear automated menu options like "Press 1 to leave a message, press 2 to..." — this is a voicemail system, not a person. Call `end_call` with reason `voicemail`.
+
+## If Patient Asks to Stop Being Called
+- Say: "I understand, I'm sorry for the inconvenience. I'll make a note to update our records. Goodbye."
+- Call `end_call` with reason `"completed"`.
+
+## If Patient Asks Any Other Questions
+- Do NOT try to answer. Say: "That's a great question. Let me transfer you to a team member who can help with that."
+- Then follow the YES flow above (check transfer availability and transfer).
+- If transfer unavailable, offer to send the text instead.
+
+## CRITICAL: Always Speak Before Any Tool Call
+- Both `end_call` and `transfer_to_scheduler` disconnect immediately — the patient will NOT hear anything after the tool is called.
+- ALWAYS say your message FIRST, then call the tool.
+- NEVER call any tool mid-sentence.
 
 ## Tone
-- Conversational, not robotic
+- Conversational and natural, not robotic
+- Speak at a normal, brisk pace — do not be slow or overly deliberate
 - Short sentences
-- One question at a time
-- Allow pauses for natural speech
-- Do not interrupt
+- Do not interrupt the patient
 
----
-
-## PRECISE IMAGING COMPANY INFORMATION
-
-### Locations
-We have 3 convenient locations:
-
-1. **Downtown Los Angeles**
-   - 350 South Grand Avenue, Suite 100, Los Angeles, CA 90071
-   - Near the Pershing Square Metro station
-   - Parking available in the building garage
-
-2. **Burbank**
-   - 2500 West Olive Avenue, Suite 200, Burbank, CA 91505
-   - Free parking lot on site
-   - Near the Burbank Town Center
-
-3. **Long Beach**
-   - 100 Oceangate, Suite 400, Long Beach, CA 90802
-   - Validated parking in the building
-   - Near the Long Beach Convention Center
-
-### Office Hours
-- **Monday to Friday**: 7:00 AM to 7:00 PM
-- **Saturday**: 8:00 AM to 4:00 PM
-- **Sunday**: Closed
-- We offer early morning and evening appointments for your convenience.
-
-### Contact Information
-- **Main Phone**: 1-800-555-SCAN (1-800-555-7226)
-- **Website**: www.preciseimaging.com
-- **Patient Portal**: portal.preciseimaging.com
-- **Email**: scheduling@preciseimaging.com
-
-### What to Bring to Your MRI Appointment
-1. **Photo ID** - Driver's license or government-issued ID
-2. **Insurance card** - Both front and back
-3. **Referral or prescription** - From your doctor (if not already sent to us)
-4. **List of medications** - Including dosages
-5. **Prior imaging** - CDs or reports from previous scans if you have them
-
-### MRI Preparation Instructions
-- **Clothing**: Wear comfortable, loose-fitting clothes without metal (zippers, buttons, underwire). We provide gowns if needed.
-- **Metal**: Remove all jewelry, watches, hair clips, belts, and piercings before the scan.
-- **Eating**: You can eat normally unless your doctor gave specific instructions. For abdominal MRIs, you may need to fast for 4 hours.
-- **Arrive early**: Please arrive 15 minutes before your appointment to complete paperwork.
-- **Claustrophobia**: Let us know if you're anxious about enclosed spaces - we can discuss options.
-- **Implants**: Tell us about any metal implants, pacemakers, or medical devices.
-
-### How Long Does an MRI Take?
-- Most MRI scans take **30 to 60 minutes** depending on the body part being scanned.
-- Some specialized scans may take up to 90 minutes.
-- You'll need to lie still during the scan.
-- You can listen to music during the procedure.
-
-### Scheduling Process
-1. When transferred to scheduling, a team member will verify your insurance.
-2. They'll find an appointment time that works for you.
-3. You'll receive a confirmation text and email with appointment details.
-4. A reminder will be sent 24 hours before your appointment.
-5. You can reschedule or cancel through our patient portal or by calling us.
-
-### Insurance and Payment
-- We accept most major insurance plans including Medicare.
-- Our team will verify your coverage before your appointment.
-- For questions about coverage or costs, our scheduling team can help.
-- Payment plans are available if needed.
-
-### After the Scan
-- Results are typically sent to your doctor within 24-48 hours.
-- Your doctor will review the results and contact you.
-- You can also view results in the patient portal once released.
-- We do not provide results directly to patients - please contact your referring physician.
+## Noise and Hallucination Handling
+- If you receive very short, nonsensical, or unexpected-language input, it is likely background noise.
+- Ask "I'm sorry, I didn't catch that. Could you repeat that?" instead of assuming.
+- NEVER call `transfer_to_scheduler` or `end_call` based on ambiguous input.
 """
 
+# --- DISABLED FEATURES (may be re-enabled later) ---
+#
+# 1. KNOWLEDGE BASE / FAQ ANSWERING
+#    The AI previously could answer general questions (office hours, locations,
+#    MRI prep, what to bring, insurance, scheduling process, etc.) from a built-in
+#    knowledge base. Currently replaced with "let me transfer you to someone who
+#    can help." To re-enable, add a "Knowledge Scope" section to SYSTEM_INSTRUCTIONS
+#    with allowed topics and the company info block (locations, hours, contact info,
+#    MRI prep, scheduling process, insurance, etc.).
+#
+# 2. PREFERRED CALLBACK TIME COLLECTION
+#    When patient said NO, the AI would ask: "No problem at all. Before I let you go,
+#    is there anything quick I can help with?" and then collect a preferred callback
+#    time (e.g. "tomorrow 3 PM"). The time was passed to end_call.preferred_callback_time
+#    and stored on the call log for the scheduling team.
+#
+# 3. EXTRA TRANSFER CONFIRMATION STEP
+#    Before transferring, the AI would first ask: "Would you like me to transfer you
+#    to our scheduling team right now?" and wait for explicit yes before proceeding.
+#    Current flow goes straight to "hold while I transfer you" after patient says yes.
+#
+# 4. "BEFORE I LET YOU GO" FOLLOW-UP
+#    When patient said NO, the AI would offer: "Before I let you go, is there anything
+#    quick I can help with — like what to bring to your appointment or our office hours?"
+#    and answer from the knowledge base before ending the call.
 
-class RealtimeVoiceService:
+
+SYSTEM_INSTRUCTIONS = build_system_instructions()
+
+
+class RealtimeVoiceService(BaseVoiceService):
     """Manages OpenAI Realtime API connections for voice calls."""
 
-    def __init__(self, audio_format: str = "pcm16"):
-        """Initialize voice service.
-
-        Args:
-            audio_format: Audio format for OpenAI Realtime API.
-                          "pcm16" for browser WebSocket (24kHz 16-bit PCM).
-                          "g711_ulaw" for Twilio media streams (8kHz mulaw).
-        """
+    def __init__(self, audio_format: str = "pcm16", verbose: bool = False, voice: str = "", call_greeting: str = ""):
+        super().__init__(audio_format=audio_format, verbose=verbose)
+        self._voice = voice or os.getenv("OPENAI_VOICE", "alloy")
+        self._call_greeting = call_greeting
         self._ws = None  # WebSocket connection
         self._session: Optional[VoiceSession] = None
-        self._api_key = os.getenv("OPENAI_API_KEY", "")
-        self._audio_format = audio_format
 
-        # Callbacks
-        self.on_transcript: Optional[Callable[[str, str], Any]] = None  # (speaker, text)
-        self.on_audio: Optional[Callable[[bytes], Any]] = None  # audio data
-        self.on_session_created: Optional[Callable[[str], Any]] = None
-        self.on_session_ended: Optional[Callable[[], Any]] = None
-        self.on_error: Optional[Callable[[str], Any]] = None
-        self.on_function_call: Optional[Callable[[str, dict], Any]] = None
+    @staticmethod
+    def _normalize_language_code(language: Optional[str]) -> str:
+        value = (language or "en").strip().lower()
+        return value if value else "en"
 
-    async def connect(self, call_id: str, patient_name: str) -> bool:
+    @classmethod
+    def _language_instruction(cls, language: Optional[str]) -> str:
+        code = cls._normalize_language_code(language)
+
+        # Common adaptive rule appended to every language variant.
+        adaptive = (
+            "However, if the patient responds in a DIFFERENT language than expected, "
+            "switch to their language immediately and continue the call in that language. "
+            "The patient's comfort is more important than the on-file preference. "
+            "Supported languages: English, Spanish, Mandarin Chinese."
+        )
+
+        if code == "es":
+            return (
+                "IMPORTANT LANGUAGE RULE: The patient preference is Spanish ('es'). "
+                "Start in natural Spanish for the greeting, questions, and transfer/callback phrasing. "
+                f"{adaptive}"
+            )
+        if code == "zh":
+            return (
+                "IMPORTANT LANGUAGE RULE: The patient preference is Chinese ('zh'). "
+                "Start in simple, clear Mandarin Chinese for the greeting and conversation. "
+                "If Mandarin is not possible for a specific phrase, use very simple English and offer transfer. "
+                f"{adaptive}"
+            )
+        return (
+            "IMPORTANT LANGUAGE RULE: The patient preference is English ('en'). "
+            "Start the call in English. "
+            f"{adaptive}"
+        )
+
+    async def connect(self, call_id: str, patient_name: str, patient_language: str = "en") -> bool:
         """Connect to OpenAI Realtime API and start a session."""
-        # Validate API key first
+        # Read API key per-connect so UI updates take effect on the next call
+        # without a restart.
+        from app.providers.settings_provider import get_api_key_sync
+        self._api_key = get_api_key_sync("openai")
         if not self._api_key:
-            error_msg = "OPENAI_API_KEY not set in environment"
+            error_msg = "OpenAI API key not configured (set via Settings UI or OPENAI_API_KEY env var)"
             print(f"[RealtimeVoice] Error: {error_msg}")
             if self.on_error:
                 await self.on_error(error_msg)
@@ -222,7 +264,7 @@ class RealtimeVoiceService:
             )
 
             # Configure the session
-            await self._configure_session(patient_name)
+            await self._configure_session(patient_name, patient_language)
 
             # Start listening for messages
             asyncio.create_task(self._listen())
@@ -246,31 +288,44 @@ class RealtimeVoiceService:
                 await self.on_error(error_msg)
             return False
 
-    async def _configure_session(self, patient_name: str):
+    async def _configure_session(self, patient_name: str, patient_language: str = "en"):
         """Configure the realtime session."""
-        # Update session with instructions
+        language_instruction = self._language_instruction(patient_language)
+        instructions = build_system_instructions(self._call_greeting)
         config = {
             "type": "session.update",
             "session": {
                 "modalities": ["text", "audio"],
-                "instructions": SYSTEM_INSTRUCTIONS.replace("{patient_name}", patient_name),
-                "voice": "alloy",
+                "instructions": (
+                    f"{instructions}\n\n"
+                    f"{language_instruction}"
+                ),
+                "voice": self._voice,
                 "input_audio_format": self._audio_format,
                 "output_audio_format": self._audio_format,
                 "input_audio_transcription": {
-                    "model": "whisper-1",
+                    "model": "gpt-4o-transcribe",
                 },
                 "turn_detection": {
                     "type": "server_vad",
-                    "threshold": 0.5,
-                    "prefix_padding_ms": 300,
-                    "silence_duration_ms": 500,
+                    "threshold": float(os.getenv("OPENAI_VAD_THRESHOLD", "0.85")),
+                    "prefix_padding_ms": int(os.getenv("OPENAI_VAD_PREFIX_MS", "300")),
+                    "silence_duration_ms": int(os.getenv("OPENAI_VAD_SILENCE_MS", "700")),
                 },
                 "tools": [
                     {
                         "type": "function",
+                        "name": "check_transfer_availability",
+                        "description": "Check whether a scheduler is available to take a transfer right now. Call this BEFORE offering or promising a transfer to the patient. Returns {\"available\": true/false}.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {},
+                        },
+                    },
+                    {
+                        "type": "function",
                         "name": "transfer_to_scheduler",
-                        "description": "Transfer the patient to a human scheduler. Call this when the patient confirms they want to be transferred.",
+                        "description": "Transfer the patient to a human scheduler only after explicit consent to transfer. Never use this tool when patient indicates wrong number or identity mismatch.",
                         "parameters": {
                             "type": "object",
                             "properties": {
@@ -285,18 +340,22 @@ class RealtimeVoiceService:
                     {
                         "type": "function",
                         "name": "end_call",
-                        "description": "End the call. Call this when the conversation is complete.",
+                        "description": "End the call. Use reason='wrong_number' immediately when patient says this is the wrong number/person.",
                         "parameters": {
                             "type": "object",
                             "properties": {
                                 "reason": {
                                     "type": "string",
-                                    "enum": ["patient_busy", "wrong_number", "completed", "patient_request"],
+                                    "enum": ["patient_busy", "wrong_number", "voicemail", "completed", "patient_request"],
                                     "description": "The reason for ending the call",
                                 },
                                 "callback_requested": {
                                     "type": "boolean",
                                     "description": "Whether the patient requested a callback",
+                                },
+                                "preferred_callback_time": {
+                                    "type": "string",
+                                    "description": "Optional preferred callback preference, e.g. 'tomorrow 3 PM' or 'after 1 hour'.",
                                 },
                             },
                             "required": ["reason"],
@@ -331,10 +390,14 @@ class RealtimeVoiceService:
         try:
             async for message in self._ws:
                 await self._handle_message(message)
-        except websockets.exceptions.ConnectionClosed:
+            # Normal exit — WebSocket closed cleanly after iteration
+            print(f"[RealtimeVoice] OpenAI WebSocket closed normally")
+        except websockets.exceptions.ConnectionClosed as e:
+            print(f"[RealtimeVoice] OpenAI WebSocket closed: code={e.code}, reason={e.reason}")
             if self.on_session_ended:
                 await self.on_session_ended()
         except Exception as e:
+            print(f"[RealtimeVoice] OpenAI listen error: {type(e).__name__}: {e}")
             if self.on_error:
                 await self.on_error(f"Listen error: {str(e)}")
 
@@ -344,8 +407,8 @@ class RealtimeVoiceService:
             data = json.loads(message)
             msg_type = data.get("type", "")
 
-            # Log important message types
-            if msg_type not in ("response.audio.delta", "response.audio_transcript.delta"):
+            # Log message types only in verbose mode (skip high-frequency audio deltas always)
+            if self._verbose and msg_type not in ("response.audio.delta", "response.audio_transcript.delta"):
                 print(f"[RealtimeVoice] Received: {msg_type}")
 
             if msg_type == "session.created":
@@ -378,19 +441,30 @@ class RealtimeVoiceService:
             elif msg_type == "conversation.item.input_audio_transcription.completed":
                 # Patient speech transcript
                 text = data.get("transcript", "")
-                if text and self.on_transcript:
-                    await self.on_transcript("patient", text)
+                if text and text.strip() and self.on_transcript:
+                    await self.on_transcript("patient", text.strip())
+                elif not text or not text.strip():
+                    print("[RealtimeVoice] Patient transcription completed but text was empty")
+
+            elif msg_type == "conversation.item.input_audio_transcription.failed":
+                # Whisper failed to transcribe patient speech
+                error = data.get("error", {})
+                error_msg = error.get("message", "unknown")
+                print(f"[RealtimeVoice] Patient transcription FAILED: {error_msg}")
+                if self.on_transcript:
+                    await self.on_transcript("patient", "[inaudible]")
 
             elif msg_type == "response.function_call_arguments.done":
                 # Function call completed
                 name = data.get("name", "")
+                fn_call_id = data.get("call_id", "")
                 args_str = data.get("arguments", "{}")
                 try:
                     args = json.loads(args_str)
                 except json.JSONDecodeError:
                     args = {}
                 if self.on_function_call:
-                    await self.on_function_call(name, args)
+                    await self.on_function_call(name, args, fn_call_id)
 
             elif msg_type == "error":
                 error = data.get("error", {})
@@ -470,6 +544,25 @@ class RealtimeVoiceService:
                     {
                         "type": "input_text",
                         "text": f"[System: The call has just connected. The patient's name is {first_name}. Please greet them and begin the call.]",
+                    }
+                ],
+            },
+        })
+        await self._send({"type": "response.create"})
+
+    async def inject_system_message(self, text: str) -> None:
+        """Inject a system-level text message into the active conversation."""
+        if not self._ws:
+            return
+        await self._send({
+            "type": "conversation.item.create",
+            "item": {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": text,
                     }
                 ],
             },

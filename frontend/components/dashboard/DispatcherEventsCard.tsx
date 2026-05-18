@@ -36,15 +36,21 @@ const decisionConfig: Record<
   // Dispatcher decisions
   blocked: { label: "BLOCKED", icon: Ban, variant: "warning" },
   dispatched: { label: "DISPATCH", icon: Phone, variant: "success" },
+  starting_call: { label: "STARTING", icon: Phone, variant: "default" },
   call_started: { label: "CALL START", icon: Zap, variant: "success" },
   call_ended: { label: "CALL END", icon: PhoneOff, variant: "secondary" },
   call_active: { label: "IN CALL", icon: Phone, variant: "default" },
+  start_failed: { label: "START FAILED", icon: AlertTriangle, variant: "destructive" },
   no_candidate: { label: "NO PATIENTS", icon: UserX, variant: "secondary" },
   no_frontend_connected: { label: "NO FRONTEND", icon: MonitorOff, variant: "destructive" },
   dispatch_timeout: { label: "TIMEOUT", icon: Clock, variant: "destructive" },
   waiting: { label: "WAITING", icon: Pause, variant: "outline" },
+  waiting_for_voice_client: { label: "WAITING", icon: Pause, variant: "outline" },
+  self_healed: { label: "SELF HEALED", icon: CheckCircle, variant: "secondary" },
   started: { label: "STARTED", icon: CheckCircle, variant: "success" },
   stopped: { label: "STOPPED", icon: XCircle, variant: "destructive" },
+  system_enabled: { label: "ENABLED", icon: CheckCircle, variant: "success" },
+  system_disabled: { label: "DISABLED", icon: XCircle, variant: "destructive" },
   config_updated: { label: "CONFIG", icon: Activity, variant: "secondary" },
   // Voice/Realtime events
   voice_connecting: { label: "CONNECTING", icon: Wifi, variant: "secondary" },
@@ -55,6 +61,8 @@ const decisionConfig: Record<
   twilio_blocked: { label: "TWILIO BLOCKED", icon: Ban, variant: "warning" },
   twilio_calling: { label: "TWILIO", icon: Radio, variant: "default" },
   openai_session: { label: "OPENAI", icon: Zap, variant: "success" },
+  sms_sent: { label: "SMS SENT", icon: MessageSquare, variant: "success" },
+  sms_failed: { label: "SMS FAILED", icon: AlertTriangle, variant: "destructive" },
 };
 
 export function DispatcherEventsCard({ events }: DispatcherEventsCardProps) {
@@ -108,6 +116,11 @@ export function DispatcherEventsCard({ events }: DispatcherEventsCardProps) {
                         <span className="text-[10px] text-muted-foreground tabular-nums">
                           {formatTime(event.timestamp)}
                         </span>
+                        {(event.repeatCount ?? 0) > 1 && (
+                          <span className="text-[10px] text-muted-foreground tabular-nums">
+                            ×{event.repeatCount}
+                          </span>
+                        )}
                       </div>
                       <p className="text-xs text-foreground/80 leading-relaxed">
                         {event.detail}

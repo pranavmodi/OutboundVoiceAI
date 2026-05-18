@@ -22,6 +22,14 @@ export interface DispatcherDecision {
   decision: string;
   detail: string;
   state: string;
+  repeatCount?: number;
+}
+
+export interface DispatcherActiveCall {
+  patient_id: string;
+  patient_name: string;
+  phase: "dispatched" | "active" | "voicemail";
+  call_id: string | null;
 }
 
 interface UseDashboardWSReturn {
@@ -34,18 +42,43 @@ interface UseDashboardWSReturn {
   clearDispatch: () => void;
   dispatcherEvents: DispatcherDecision[];
   pushEvent: (decision: string, detail: string) => void;
+  onCallEnded: React.MutableRefObject<(() => void) | null>;
+  onSettingsUpdated: React.MutableRefObject<((settings: any) => void) | null>;
+  // Phase 7: snapshots from each queue_update tick so the UI can render
+  // an N-tile view of in-flight calls.
+  activeCalls: DispatcherActiveCall[];
+  maxParallelCalls: number;
 }
 
 export function useDashboardWS(): UseDashboardWSReturn {
+  const isDev = process.env.NODE_ENV !== "production";
   const [connected, setConnected] = useState(false);
   const [queueState, setQueueState] = useState<QueueState | null>(null);
   const [activeCall, setActiveCall] = useState<CallLog | null>(null);
   const [statistics, setStatistics] = useState<Statistics | null>(null);
   const [lastStatus, setLastStatus] = useState<string | null>(null);
   const [dispatchedPatient, setDispatchedPatient] = useState<DispatchedPatient | null>(null);
+  const [activeCalls, setActiveCalls] = useState<DispatcherActiveCall[]>([]);
+  const [maxParallelCalls, setMaxParallelCalls] = useState<number>(1);
+  const onCallEndedRef = useRef<(() => void) | null>(null);
+  const onSettingsUpdatedRef = useRef<((settings: any) => void) | null>(null);
   const [dispatcherEvents, setDispatcherEvents] = useState<DispatcherDecision[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isMountedRef = useRef(false);
+  const allowReconnectRef = useRef(true);
+
+  const appendEvent = useCallback((event: DispatcherDecision) => {
+    setDispatcherEvents((prev) => {
+      const latest = prev[0];
+      if (latest && latest.decision === event.decision && latest.detail === event.detail) {
+        // Same event repeated — bump count and update timestamp
+        const updated = { ...latest, timestamp: event.timestamp, repeatCount: (latest.repeatCount || 1) + 1 };
+        return [updated, ...prev.slice(1)];
+      }
+      return [{ ...event, repeatCount: 1 }, ...prev].slice(0, 50);
+    });
+  }, []);
 
   const clearDispatch = useCallback(() => {
     setDispatchedPatient(null);
@@ -58,20 +91,10 @@ export function useDashboardWS(): UseDashboardWSReturn {
       detail,
       state: "frontend",
     };
-    setDispatcherEvents((prev) => [event, ...prev].slice(0, 50));
-  }, []);
+    appendEvent(event);
+  }, [appendEvent]);
 
-  const connect = useCallback(() => {
-    // Reuse a singleton socket across dev hot-reloads to avoid rapid flap
-    if (typeof window !== "undefined" && window.__DASHBOARD_WS__ && window.__DASHBOARD_WS__.readyState === WebSocket.OPEN) {
-      wsRef.current = window.__DASHBOARD_WS__;
-      setConnected(true);
-      return;
-    }
-    if (wsRef.current?.readyState === WebSocket.OPEN) return;
-
-    const ws = new WebSocket(`${WS_BASE}/ws/dashboard`);
-
+  const attachHandlers = useCallback((ws: WebSocket) => {
     ws.onopen = () => {
       setConnected(true);
       console.log("Dashboard WS connected");
@@ -79,6 +102,7 @@ export function useDashboardWS(): UseDashboardWSReturn {
 
     ws.onclose = () => {
       setConnected(false);
+      if (!allowReconnectRef.current || !isMountedRef.current) return;
       console.log("Dashboard WS disconnected, reconnecting...");
       reconnectTimeoutRef.current = setTimeout(connect, 3000);
     };
@@ -104,40 +128,82 @@ export function useDashboardWS(): UseDashboardWSReturn {
 
           case "call_ended":
             setActiveCall(null);
-            // Refresh statistics
+            onCallEndedRef.current?.();
             break;
 
           case "status_update":
-            setLastStatus(message.status as string);
+            {
+              const status = message.status as string;
+              setLastStatus(status);
+              const normalized = status.toLowerCase();
+              if (normalized.includes("sms sent")) {
+                appendEvent({
+                  timestamp: new Date().toISOString(),
+                  decision: "sms_sent",
+                  detail: status,
+                  state: "backend",
+                });
+              } else if (normalized.includes("sms failed")) {
+                appendEvent({
+                  timestamp: new Date().toISOString(),
+                  decision: "sms_failed",
+                  detail: status,
+                  state: "backend",
+                });
+              }
+            }
             break;
 
           case "transcript":
-            // Update active call transcript (use prev to avoid stale closure)
-            setActiveCall((prev) =>
-              prev
-                ? {
-                    ...prev,
-                    transcript: [
-                      ...prev.transcript,
-                      {
-                        speaker: message.speaker as string,
-                        text: message.text as string,
-                        timestamp: new Date().toISOString(),
-                      },
-                    ],
-                  }
-                : prev
-            );
+            // Update active call transcript (deduplicate consecutive identical entries)
+            setActiveCall((prev) => {
+              if (!prev) return prev;
+              const speaker = message.speaker as string;
+              const text = message.text as string;
+              const last = prev.transcript[prev.transcript.length - 1];
+              if (last && last.speaker === speaker && last.text === text) {
+                return prev; // skip duplicate
+              }
+              return {
+                ...prev,
+                transcript: [
+                  ...prev.transcript,
+                  { speaker, text, timestamp: new Date().toISOString() },
+                ],
+              };
+            });
             break;
 
           case "queue_update":
             setQueueState(message.queue_state as QueueState);
+            if (Array.isArray((message as any).active_calls)) {
+              setActiveCalls((message as any).active_calls as DispatcherActiveCall[]);
+            }
+            if (typeof (message as any).max_parallel_calls === "number") {
+              setMaxParallelCalls((message as any).max_parallel_calls as number);
+            }
             if (message.decision) {
               const decision = message.decision as DispatcherDecision;
               if (!decision.timestamp) {
                 decision.timestamp = new Date().toISOString();
               }
-              setDispatcherEvents((prev) => [decision, ...prev].slice(0, 50));
+              appendEvent(decision);
+            }
+            break;
+
+          case "dispatcher_event":
+            if (message.decision) {
+              const decision = message.decision as DispatcherDecision;
+              if (!decision.timestamp) {
+                decision.timestamp = new Date().toISOString();
+              }
+              appendEvent(decision);
+            }
+            break;
+
+          case "settings_updated":
+            if (message.settings && onSettingsUpdatedRef.current) {
+              onSettingsUpdatedRef.current(message.settings);
             }
             break;
 
@@ -159,32 +225,57 @@ export function useDashboardWS(): UseDashboardWSReturn {
         console.error("Failed to parse WS message:", e);
       }
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appendEvent]);
+
+  const connect = useCallback(() => {
+    // Reuse a singleton socket across dev hot-reloads / strict-mode double-mounts
+    if (isDev && typeof window !== "undefined" && window.__DASHBOARD_WS__ && window.__DASHBOARD_WS__.readyState <= WebSocket.OPEN) {
+      wsRef.current = window.__DASHBOARD_WS__;
+      if (window.__DASHBOARD_WS__.readyState === WebSocket.OPEN) setConnected(true);
+      // Re-attach handlers so this mount receives events
+      attachHandlers(window.__DASHBOARD_WS__);
+      return;
+    }
+    if (wsRef.current && wsRef.current.readyState <= WebSocket.OPEN) return;
+
+    const ws = new WebSocket(`${WS_BASE}/ws/dashboard`);
+    attachHandlers(ws);
 
     wsRef.current = ws;
-    if (typeof window !== "undefined") {
+    if (isDev && typeof window !== "undefined") {
       window.__DASHBOARD_WS__ = ws;
     }
-  }, []);
+  }, [attachHandlers, isDev]);
 
   useEffect(() => {
+    isMountedRef.current = true;
+    allowReconnectRef.current = true;
     connect();
 
     return () => {
+      isMountedRef.current = false;
+      allowReconnectRef.current = false;
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
       }
-      // Do not forcibly close the singleton on unmount; leave it for reuse
+      // In production always close; in dev close only non-singleton sockets.
+      if (!isDev) {
+        wsRef.current?.close();
+      } else if (typeof window !== "undefined" && wsRef.current && wsRef.current !== window.__DASHBOARD_WS__) {
+        wsRef.current.close();
+      }
     };
-  }, [connect]);
+  }, [connect, isDev]);
 
-  return { connected, queueState, activeCall, statistics, lastStatus, dispatchedPatient, clearDispatch, dispatcherEvents, pushEvent };
+  return { connected, queueState, activeCall, statistics, lastStatus, dispatchedPatient, clearDispatch, dispatcherEvents, pushEvent, onCallEnded: onCallEndedRef, onSettingsUpdated: onSettingsUpdatedRef, activeCalls, maxParallelCalls };
 }
 
 interface UseVoiceWSReturn {
   connected: boolean;
   connect: () => void;
   disconnect: () => void;
-  startCall: (patientId: string, callMode?: string) => void;
+  startCall: (patientId: string) => void;
   endCall: (outcome?: string) => void;
   sendAudio: (audioData: ArrayBuffer) => void;
   callStatus: string | null;
@@ -288,9 +379,9 @@ export function useVoiceWS(): UseVoiceWSReturn {
     setConnected(false);
   }, []);
 
-  const startCall = useCallback((patientId: string, callMode: string = "web") => {
+  const startCall = useCallback((patientId: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: "start_call", patient_id: patientId, call_mode: callMode }));
+      wsRef.current.send(JSON.stringify({ type: "start_call", patient_id: patientId }));
     }
   }, []);
 

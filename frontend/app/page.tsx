@@ -11,7 +11,8 @@ import {
   ActiveCallCard,
   CallHistoryCard,
   DispatcherEventsCard,
-  TranscriptBrowserCard,
+  KpiBar,
+  AuditLogCard,
 } from "@/components/dashboard";
 import { SimulationConsole, OperatorConsole } from "@/components/console";
 import { useApi } from "@/hooks/useApi";
@@ -25,10 +26,15 @@ import {
   ChevronDown,
   Circle,
   History,
+  LogOut,
+  BarChart3,
+  FileText,
+  Loader2,
 } from "lucide-react";
-import type { Patient, CallLog, QueueState, SystemSettings, SimulationScenario } from "@/types";
+import type { Patient, CallLog, QueueState, SystemSettings, SimulationScenario, TodayKpis } from "@/types";
 
 const PATIENT_POLL_INTERVAL_MS = 10000; // Poll patients every 10 seconds
+const CALLS_PAGE_SIZE = 25;
 
 export default function Dashboard() {
   // API hooks
@@ -48,8 +54,11 @@ export default function Dashboard() {
   const [patients, setPatients] = useState<Patient[]>([]);
   const [patientsLastUpdated, setPatientsLastUpdated] = useState<Date | null>(null);
   const [calls, setCalls] = useState<CallLog[]>([]);
+  const [callsTotal, setCallsTotal] = useState(0);
+  const [todayKpis, setTodayKpis] = useState<TodayKpis | null>(null);
   const [activeCall, setActiveCall] = useState<CallLog | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
+  const [loadProgress, setLoadProgress] = useState({ done: 0, total: 7 });
   const [lastCallInfo, setLastCallInfo] = useState<{ patientName: string; duration: number } | null>(null);
   const [callStartTime, setCallStartTime] = useState<number | null>(null);
   const [callingPatientName, setCallingPatientName] = useState<string>("");
@@ -72,29 +81,42 @@ export default function Dashboard() {
     if (isLoaded) return;
 
     const loadData = async () => {
-      const [status, patientList, callList, settingsData, tzList, scenarioList] = await Promise.all([
-        api.getStatus(),
-        api.getOutboundQueue(),
-        api.getCalls(),
-        api.getSettings(),
-        api.getTimezones(),
-        api.getScenarios(),
-      ]);
+      let done = 0;
+      const tick = () => setLoadProgress({ done: ++done, total: 7 });
 
-      if (status) {
-        setQueueState(status.queue_state);
-        setActiveCall(status.active_call);
+      const wrap = <T,>(p: Promise<T>): Promise<T> => p.then((v) => { tick(); return v; }, (e) => { tick(); throw e; });
+
+      try {
+        const [status, patientList, callData, settingsData, tzList, scenarioList, kpis] = await Promise.all([
+          wrap(api.getStatus()),
+          wrap(api.getOutboundQueue()),
+          wrap(api.getCalls(CALLS_PAGE_SIZE)),
+          wrap(api.getSettings()),
+          wrap(api.getTimezones()),
+          wrap(api.getScenarios()),
+          wrap(api.getTodayKpis()),
+        ]);
+
+        if (status) {
+          setQueueState(status.queue_state);
+          setActiveCall(status.active_call);
+        }
+        setPatients(patientList);
+        setPatientsLastUpdated(new Date());
+        setCalls(callData.calls);
+        setCallsTotal(callData.total);
+        setTodayKpis(kpis);
+        setSettings(settingsData);
+        if (settingsData?.call_mode) {
+          setCallMode(settingsData.call_mode);
+        }
+        setTimezones(tzList);
+        setScenarios(scenarioList);
+      } catch (e) {
+        console.error("[Dashboard] Initial load failed:", e);
+      } finally {
+        setIsLoaded(true);
       }
-      setPatients(patientList);
-      setPatientsLastUpdated(new Date());
-      setCalls(callList);
-      setSettings(settingsData);
-      if (settingsData?.call_mode) {
-        setCallMode(settingsData.call_mode);
-      }
-      setTimezones(tzList);
-      setScenarios(scenarioList);
-      setIsLoaded(true);
     };
 
     loadData();
@@ -122,6 +144,33 @@ export default function Dashboard() {
   useEffect(() => {
     if (dashboard.queueState) setQueueState(dashboard.queueState);
   }, [dashboard.queueState]);
+
+  // Refresh call history, patient list, and today's KPIs when a call ends (via dashboard WS)
+  useEffect(() => {
+    dashboard.onCallEnded.current = () => {
+      api.getCalls(CALLS_PAGE_SIZE).then(({ calls: c, total: t }) => {
+        setCalls(c);
+        setCallsTotal(t);
+      });
+      api.getOutboundQueue().then((list) => {
+        setPatients(list);
+        setPatientsLastUpdated(new Date());
+      });
+      api.getTodayKpis().then((kpis) => {
+        if (kpis) setTodayKpis(kpis);
+      });
+    };
+  }, [api, dashboard.onCallEnded]);
+
+  // Sync settings when another window/tab changes them
+  useEffect(() => {
+    dashboard.onSettingsUpdated.current = (newSettings: SystemSettings) => {
+      setSettings(newSettings);
+      if (newSettings.call_mode) {
+        setCallMode(newSettings.call_mode);
+      }
+    };
+  }, [dashboard.onSettingsUpdated]);
 
   // Store refs to always have latest functions
   const voiceRef = useRef(voice);
@@ -171,7 +220,7 @@ export default function Dashboard() {
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
 
-    voice.startCall(patientId, callMode);
+    voice.startCall(patientId);
   }, [voice, audio, patients, callMode, dashboard]);
 
   // Stop recording when call ends
@@ -190,12 +239,17 @@ export default function Dashboard() {
   useEffect(() => {
     if (voice.callStatus && voice.callStatus !== prevVoiceStatusRef.current) {
       prevVoiceStatusRef.current = voice.callStatus;
+      const normalized = voice.callStatus.toLowerCase();
+      // SMS status updates are already captured from dashboard status_update events.
+      if (normalized.includes("sms sent") || normalized.includes("sms failed")) {
+        return;
+      }
       // Map status to event type
-      if (voice.callStatus.toLowerCase().includes("openai") || voice.callStatus.toLowerCase().includes("session")) {
+      if (normalized.includes("openai") || normalized.includes("session")) {
         dashboard.pushEvent("openai_session", voice.callStatus);
-      } else if (voice.callStatus.toLowerCase().includes("blocked") || voice.callStatus.toLowerCase().includes("disabled")) {
+      } else if (normalized.includes("blocked") || normalized.includes("disabled")) {
         dashboard.pushEvent("twilio_blocked", voice.callStatus);
-      } else if (voice.callStatus.toLowerCase().includes("twilio") || voice.callStatus.toLowerCase().includes("calling")) {
+      } else if (normalized.includes("twilio") || normalized.includes("calling")) {
         dashboard.pushEvent("twilio_calling", voice.callStatus);
       } else {
         dashboard.pushEvent("voice_message", voice.callStatus);
@@ -239,7 +293,10 @@ export default function Dashboard() {
     setActiveCall(null);
     setCallStartTime(null);
 
-    api.getCalls().then(setCalls);
+    api.getCalls(CALLS_PAGE_SIZE).then(({ calls: c, total: t }) => {
+      setCalls(c);
+      setCallsTotal(t);
+    });
     api.getOutboundQueue().then((list) => {
       setPatients(list);
       setPatientsLastUpdated(new Date());
@@ -266,14 +323,15 @@ export default function Dashboard() {
     if (newSettings) {
       setSettings(newSettings);
       // Refresh patients and calls since the scenario reset them
-      const [patientList, callList, statusData] = await Promise.all([
+      const [patientList, callData, statusData] = await Promise.all([
         api.getOutboundQueue(),
-        api.getCalls(),
+        api.getCalls(CALLS_PAGE_SIZE),
         api.getQueueState(),
       ]);
       setPatients(patientList);
       setPatientsLastUpdated(new Date());
-      setCalls(callList);
+      setCalls(callData.calls);
+      setCallsTotal(callData.total);
       if (statusData) setQueueState(statusData);
     }
   }, [api]);
@@ -361,14 +419,23 @@ export default function Dashboard() {
     if (newSettings) setSettings(newSettings);
   }, [api]);
 
-  const handleSetAllowLiveCalls = useCallback(async (allowed: boolean) => {
-    const newSettings = await api.setAllowLiveCalls(allowed);
+  const handleSetMockMode = useCallback(async (enabled: boolean, mockPhone: string) => {
+    const newSettings = await api.setMockMode(enabled, mockPhone);
     if (newSettings) setSettings(newSettings);
   }, [api]);
 
-  const handleUpdateAllowedPhones = useCallback(async (phones: string[]) => {
-    const newSettings = await api.updateAllowedPhones(phones);
+  const handleUpdateDailyReport = useCallback(async (config: {
+    enabled: boolean;
+    webhook_url: string;
+    hour: number;
+    timezone: string;
+  }) => {
+    const newSettings = await api.updateDailyReport(config);
     if (newSettings) setSettings(newSettings);
+  }, [api]);
+
+  const handleSendTestDailyReport = useCallback(async () => {
+    return await api.sendTestDailyReport();
   }, [api]);
 
   const handleSetQueueSource = useCallback(async (source: string) => {
@@ -384,6 +451,11 @@ export default function Dashboard() {
   const handleSetCallMode = useCallback(async (mode: string) => {
     setCallMode(mode); // Update local state immediately for UI responsiveness
     const newSettings = await api.setCallMode(mode);
+    if (newSettings) setSettings(newSettings);
+  }, [api]);
+
+  const handleSetVoiceProvider = useCallback(async (provider: string) => {
+    const newSettings = await api.setVoiceProvider(provider);
     if (newSettings) setSettings(newSettings);
   }, [api]);
 
@@ -416,13 +488,68 @@ export default function Dashboard() {
     setPatientsLastUpdated(new Date());
   }, [api]);
 
+  const [callsSearch, setCallsSearch] = useState<string>("");
+  // Hide /v2-test mock calls by default — the backend filter is now the
+  // source of truth. Persisted to localStorage so each operator keeps
+  // their preference without sharing it across machines.
+  const [showTestCalls, setShowTestCalls] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem("v1.callHistory.showTestCalls") === "true";
+  });
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem("v1.callHistory.showTestCalls", showTestCalls ? "true" : "false");
+  }, [showTestCalls]);
+
   const handleRefreshCalls = useCallback(async () => {
-    const callList = await api.getCalls();
-    setCalls(callList);
-  }, [api]);
+    const { calls: c, total: t } = await api.getCalls(CALLS_PAGE_SIZE, 0, callsSearch, showTestCalls);
+    setCalls(c);
+    setCallsTotal(t);
+  }, [api, callsSearch, showTestCalls]);
+
+  const handleLoadMoreCalls = useCallback(async () => {
+    const { calls: more, total: t } = await api.getCalls(CALLS_PAGE_SIZE, calls.length, callsSearch, showTestCalls);
+    setCalls((prev) => [...prev, ...more]);
+    setCallsTotal(t);
+  }, [api, calls.length, callsSearch, showTestCalls]);
+
+  const handleSearchChange = useCallback(async (search: string) => {
+    setCallsSearch(search);
+    const { calls: c, total: t } = await api.getCalls(CALLS_PAGE_SIZE, 0, search, showTestCalls);
+    setCalls(c);
+    setCallsTotal(t);
+  }, [api, showTestCalls]);
+
+  // Refetch when the toggle flips so the visible list matches the new filter.
+  useEffect(() => {
+    handleRefreshCalls();
+    // Only react to the toggle; handleRefreshCalls closes over showTestCalls.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showTestCalls]);
 
   return (
     <div className="min-h-screen bg-background">
+      {!isLoaded && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-background/80 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-4">
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            <div className="text-center">
+              <p className="text-sm font-medium">Loading dashboard</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                {loadProgress.done < loadProgress.total
+                  ? `${loadProgress.done} of ${loadProgress.total} services ready`
+                  : "Finalizing..."}
+              </p>
+            </div>
+            <div className="w-48 h-1.5 bg-muted rounded-full overflow-hidden">
+              <div
+                className="h-full bg-primary rounded-full transition-all duration-300"
+                style={{ width: `${(loadProgress.done / loadProgress.total) * 100}%` }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
       {/* Header */}
       <header className="sticky top-0 z-50 border-b bg-card/80 backdrop-blur-lg">
         <div className="container mx-auto px-6 h-16 flex items-center justify-between">
@@ -469,6 +596,22 @@ export default function Dashboard() {
                 {settings.system_enabled ? "System On" : "System Off"}
               </Badge>
             )}
+
+            {/* Logout */}
+            <button
+              onClick={async () => {
+                await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/auth/logout`, {
+                  method: "POST",
+                  credentials: "include",
+                });
+                window.location.href = "/login";
+              }}
+              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors ml-1"
+              title="Sign out"
+            >
+              <LogOut className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Logout</span>
+            </button>
           </div>
         </div>
       </header>
@@ -488,18 +631,25 @@ export default function Dashboard() {
               <LayoutDashboard className="h-4 w-4" />
               Dashboard
             </TabsTrigger>
-            <TabsTrigger value="history" className="hidden flex items-center gap-2 rounded-md px-4 text-sm">
+            <TabsTrigger value="history" className="flex items-center gap-2 rounded-md px-4 text-sm">
               <History className="h-4 w-4" />
               History
             </TabsTrigger>
-            <TabsTrigger value="simulation" className="flex items-center gap-2 rounded-md px-4 text-sm">
-              <Terminal className="h-4 w-4" />
-              Simulation
+            <TabsTrigger value="audit" className="flex items-center gap-2 rounded-md px-4 text-sm">
+              <FileText className="h-4 w-4" />
+              Audit Log
+            </TabsTrigger>
+            <TabsTrigger value="analytics" className="flex items-center gap-2 rounded-md px-4 text-sm">
+              <BarChart3 className="h-4 w-4" />
+              Analytics
             </TabsTrigger>
           </TabsList>
 
           {/* Dashboard Tab */}
           <TabsContent value="dashboard" className="space-y-6 animate-in">
+            {/* KPI row — today's headline numbers */}
+            <KpiBar kpis={todayKpis} loading={!isLoaded} />
+
             {/* 1. System Settings - at the top, expanded by default */}
             <Collapsible open={operatorOpen} onOpenChange={setOperatorOpen}>
               <Card>
@@ -546,15 +696,26 @@ export default function Dashboard() {
                       callMode={callMode}
                       scenarios={scenarios}
                       onCallModeChange={handleSetCallMode}
+                      onVoiceProviderChange={handleSetVoiceProvider}
                       onSetSystemEnabled={handleSetSystemEnabled}
                       onUpdateBusinessHours={handleUpdateBusinessHours}
                       onUpdateQueueThresholds={handleUpdateQueueThresholds}
                       onUpdateDispatcherSettings={handleUpdateDispatcherSettings}
-                      onSetAllowLiveCalls={handleSetAllowLiveCalls}
-                      onUpdateAllowedPhones={handleUpdateAllowedPhones}
+                      onSetMockMode={handleSetMockMode}
+                      onUpdateDailyReport={handleUpdateDailyReport}
+                      onSendTestDailyReport={handleSendTestDailyReport}
                       onSetQueueSource={handleSetQueueSource}
                       onSetPatientSource={handleSetPatientSource}
                       onSetActiveScenario={handleSetActiveScenario}
+                      onUpdateVoices={async (ov, gv) => {
+                        const newSettings = await api.updateVoices(ov, gv);
+                        if (newSettings) setSettings(newSettings);
+                      }}
+                      onPreviewVoice={api.previewVoice}
+                      onUpdateCallGreeting={async (greeting) => {
+                        const newSettings = await api.updateCallGreeting(greeting);
+                        if (newSettings) setSettings(newSettings);
+                      }}
                     />
                   </CardContent>
                 </CollapsibleContent>
@@ -566,18 +727,28 @@ export default function Dashboard() {
               <QueueStatusCard
                 queueState={queueState}
                 source={settings?.queue_source as "simulation" | "live" | undefined}
+                loading={!isLoaded}
               />
               <PatientQueueCard
                 patients={patients}
+                loading={!isLoaded}
                 onCallPatient={handleCallPatient}
                 onRefresh={handleRefreshPatients}
                 onReloadScenario={settings?.active_scenario_id ? () => handleSetActiveScenario(settings.active_scenario_id!) : undefined}
                 onDeletePatient={handleDeletePatient}
                 onUpdatePatient={handleUpdatePatient}
-                isCallActive={voice.isCallActive}
+                // Disable manual call when at the parallel cap (counts the
+                // dispatcher's in-flight calls, not just the local web call).
+                // Voicemail-phase calls don't count, matching backend logic.
+                isCallActive={
+                  voice.isCallActive ||
+                  dashboard.activeCalls.filter((c) => c.phase !== "voicemail").length >= dashboard.maxParallelCalls
+                }
                 outboundAllowed={queueState?.outbound_allowed ?? false}
                 source={settings?.patient_source as "simulation" | "live" | undefined}
                 lastUpdated={patientsLastUpdated}
+                activeCalls={dashboard.activeCalls}
+                maxParallelCalls={dashboard.maxParallelCalls}
               />
             </div>
 
@@ -597,6 +768,10 @@ export default function Dashboard() {
                 ended_at: null,
                 duration_seconds: 0,
                 outcome: "in_progress",
+                call_status: "in_progress",
+                call_disposition: "in_progress",
+                mock_mode: false,
+                voice_provider: "openai",
                 transfer_attempted: false,
                 transfer_success: false,
                 voicemail_left: false,
@@ -605,33 +780,35 @@ export default function Dashboard() {
                 transcript: [],
                 error_code: null,
                 error_message: null,
-              } as CallLog) : null}
-              status={voice.callStatus}
-              transcript={voice.transcript}
+              } as CallLog) : dashboard.activeCall}
+              status={voice.isCallActive ? voice.callStatus : dashboard.lastStatus}
+              transcript={voice.isCallActive ? voice.transcript : (dashboard.activeCall?.transcript ?? [])}
               isRecording={audio.isRecording}
               audioLevel={audio.audioLevel}
               onEndCall={handleEndCall}
               onToggleMic={handleToggleMic}
               lastCallInfo={lastCallInfo}
+              isTwilioMode={!voice.isCallActive && !!dashboard.activeCall}
             />
           </TabsContent>
 
           {/* History Tab */}
           <TabsContent value="history" className="space-y-6 animate-in">
-            <CallHistoryCard calls={calls} onRefresh={handleRefreshCalls} />
-            <TranscriptBrowserCard calls={calls} onRefresh={handleRefreshCalls} />
+            <CallHistoryCard calls={calls} callsTotal={callsTotal} onRefresh={handleRefreshCalls} onLoadMore={handleLoadMoreCalls} hasMore={calls.length < callsTotal} onSearchChange={handleSearchChange} loading={!isLoaded} showTestCalls={showTestCalls} onToggleShowTestCalls={setShowTestCalls} />
           </TabsContent>
 
-          {/* Simulation Tab */}
-          <TabsContent value="simulation" className="animate-in">
-            <SimulationConsole
-              scenarios={scenarios}
-              activeScenarioId={settings?.active_scenario_id || null}
-              onSaveScenario={handleSaveScenario}
-              onCreateScenario={handleCreateScenario}
-              onDeleteScenario={handleDeleteScenario}
-              onRefreshScenarios={handleRefreshScenarios}
-              onAddPatientToQueue={handleAddPatientToQueue}
+          {/* Audit Log Tab */}
+          <TabsContent value="audit" className="animate-in">
+            <AuditLogCard />
+          </TabsContent>
+
+          {/* Analytics Tab */}
+          <TabsContent value="analytics" className="animate-in">
+            <iframe
+              src="/analytics"
+              className="w-full border-0 rounded-lg"
+              style={{ height: "calc(100vh - 200px)" }}
+              title="Call Time Performance"
             />
           </TabsContent>
         </Tabs>

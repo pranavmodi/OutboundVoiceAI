@@ -1,11 +1,14 @@
 """REST API endpoints for dashboard."""
+import html
 import os
 import logging
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Form, Request
 from fastapi.responses import Response
 from typing import Optional
 
 from app.providers import get_queue_provider, get_mock_queue_provider, get_patient_provider, get_simulation_patient_provider, get_call_log_provider, get_settings_provider
+from app.services.call_orchestrator import get_orchestrator
+from app.services import safe_create_task
 
 logger = logging.getLogger(__name__)
 
@@ -281,13 +284,15 @@ async def update_patient(
         if ai_called_before is not None:
             row.ai_called_before = ai_called_before
         if attempt_count is not None:
-            row.attempt_count = attempt_count
+            # UI still calls this "attempt_count"; treat it as the AI count
+            # since human attempts are RadFlow-sourced in live mode.
+            row.ai_attempt_count = attempt_count
+            row.attempt_count = attempt_count + (row.human_attempt_count or 0)
 
-        # Recompute priority
-        from app.providers.patient_provider import _compute_priority
-        row.priority_bucket = _compute_priority(
-            row.has_abandoned_before, row.ai_called_before, row.has_called_in_before
-        )
+        # Recompute priority bucket from the RadFlow status (legacy alias
+        # for consumers that still read priority_bucket).
+        from app.models import STATUS_RANK
+        row.priority_bucket = STATUS_RANK.get(row.radflow_status or "", 99)
 
         await session.commit()
         await session.refresh(row)
@@ -366,19 +371,45 @@ async def reset_patients():
 
 
 @router.get("/calls")
-async def get_calls(limit: int = 50):
-    """Get call history."""
+async def get_calls(
+    limit: int = 25,
+    offset: int = 0,
+    search: Optional[str] = None,
+    include_test: bool = False,
+):
+    """Get call history with pagination and optional server-side search.
+
+    ``include_test`` defaults to False, so /v2-test mock calls are hidden
+    from the main history view. The dashboard's "Show test calls" toggle
+    passes ``include_test=true`` to surface them.
+    """
     call_log_provider = get_call_log_provider()
-    calls = await call_log_provider.get_all_calls(limit=limit)
-    return {"calls": [c.to_dict() for c in calls]}
+    calls = await call_log_provider.get_all_calls(
+        limit=limit, offset=offset, search=search, include_test=include_test,
+    )
+    if search and search.strip():
+        total = await call_log_provider.count_all_calls(
+            search=search, include_test=include_test,
+        )
+    else:
+        total = await call_log_provider.get_total_call_count(include_test=include_test)
+    return {"calls": [c.to_dict() for c in calls], "total": total}
 
 
 @router.get("/calls/active")
-async def get_active_call():
-    """Get the currently active call."""
+async def get_active_call(include_test: bool = False):
+    """Get the currently active call.
+
+    /v2-test mock calls share the singleton CallSession but should not
+    surface in the production operator console. The default filter hides
+    them; the /v2-test page passes ``include_test=true`` if it ever
+    needs to query the same endpoint.
+    """
     call_log_provider = get_call_log_provider()
     active = await call_log_provider.get_active_call()
     if not active:
+        return {"active": False, "call": None}
+    if not include_test and getattr(active, "mock_mode", False):
         return {"active": False, "call": None}
     return {"active": True, "call": active.to_dict()}
 
@@ -408,10 +439,40 @@ async def get_statistics():
     return await call_log_provider.get_statistics()
 
 
+@router.get("/statistics/today")
+async def get_today_kpis():
+    """Get today's headline KPIs for the dashboard KPI row."""
+    call_log_provider = get_call_log_provider()
+    return await call_log_provider.get_today_kpis()
+
+
+@router.get("/statistics/time-performance")
+async def get_time_performance(days: int = 90):
+    """Get call outcomes broken down by day-of-week and hour-of-day."""
+    if days < 1 or days > 365:
+        raise HTTPException(status_code=400, detail="days must be between 1 and 365")
+    call_log_provider = get_call_log_provider()
+    return await call_log_provider.get_time_performance(days=days)
+
+
+@router.post("/reports/daily/test")
+async def trigger_daily_report_now():
+    """Manually trigger the daily Slack report (for testing).
+
+    Sends yesterday's stats to the configured Slack webhook.  Bypasses the
+    SLACK_DAILY_REPORT_ENABLED toggle, but still requires
+    SLACK_DAILY_REPORT_WEBHOOK_URL to be set.
+    """
+    from app.services.daily_report_service import send_daily_report
+    ok = await send_daily_report()
+    return {"sent": ok}
+
+
 @router.post("/twilio/twiml/{stream_id}")
 @router.get("/twilio/twiml/{stream_id}")
 async def twilio_twiml(stream_id: str):
     """Return TwiML that connects Twilio to our media stream WebSocket."""
+    print(f"[TwiML] Twilio fetched TwiML for stream_id={stream_id}")
     # Build the WebSocket URL for Twilio to connect to
     public_url = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
     if not public_url:
@@ -431,6 +492,179 @@ async def twilio_twiml(stream_id: str):
     return Response(content=twiml, media_type="application/xml")
 
 
+@router.post("/twilio/status")
+async def twilio_status_callback(
+    CallSid: str = Form(""),
+    CallStatus: str = Form(""),
+    AnsweredBy: str = Form(""),
+    ErrorCode: str = Form(""),
+    SipResponseCode: str = Form(""),
+):
+    """Handle Twilio call status callbacks, including AMD AnsweredBy values."""
+    parts = [f"[TwilioStatus] SID={CallSid} status={CallStatus}"]
+    if AnsweredBy:
+        parts.append(f"answered_by={AnsweredBy}")
+    if ErrorCode:
+        parts.append(f"error_code={ErrorCode}")
+    if SipResponseCode:
+        parts.append(f"sip_code={SipResponseCode}")
+    print(" | ".join(parts))
+
+    try:
+        # Route to the session that placed this Twilio call. Falls back to the
+        # singleton orchestrator when the registry has no binding (e.g. during
+        # a race between call placement and the first status callback, or for
+        # legacy calls placed before Phase 2 shipped).
+        from app.services.orchestrator_registry import get_registry
+        registry = get_registry()
+        routed = registry.by_twilio_sid(CallSid)
+        if routed is None:
+            print(f"[TwilioStatus] No registry binding for SID={CallSid}; falling back to singleton orchestrator")
+        orchestrator = routed or get_orchestrator()
+        if AnsweredBy:
+            safe_create_task(
+                orchestrator.handle_twilio_amd_status(CallSid, AnsweredBy),
+                logger,
+                f"twilio_amd_status CallSid={CallSid}",
+            )
+        if CallStatus:
+            safe_create_task(
+                orchestrator.handle_twilio_call_status(
+                    call_sid=CallSid,
+                    call_status=CallStatus,
+                    error_code_raw=ErrorCode,
+                    sip_response_code_raw=SipResponseCode,
+                ),
+                logger,
+                f"twilio_call_status CallSid={CallSid}",
+            )
+    except Exception as e:
+        print(f"[TwilioStatus] Callback handling failed: {e}")
+    return {"status": "ok"}
+
+
+@router.post("/twilio/recording-status/{call_id}")
+async def twilio_recording_status(call_id: str, request: Request):
+    """Twilio recording status callback — download the MP3 to local disk.
+
+    Twilio POSTs this when the recording is complete, with fields like
+    RecordingSid, RecordingUrl, RecordingDuration, RecordingStatus.
+    """
+    form = await request.form()
+    recording_sid = str(form.get("RecordingSid", "") or "")
+    recording_url = str(form.get("RecordingUrl", "") or "")
+    recording_status = str(form.get("RecordingStatus", "") or "").lower()
+    try:
+        duration = int(form.get("RecordingDuration", 0) or 0)
+    except (ValueError, TypeError):
+        duration = 0
+
+    print(f"[RecordingStatus] call_id={call_id} sid={recording_sid} status={recording_status} duration={duration}s")
+
+    if recording_status != "completed" or not recording_url or not recording_sid:
+        return {"status": "skipped", "reason": "not completed or missing fields"}
+
+    from app.services.recording_service import download_twilio_recording
+    meta = await download_twilio_recording(
+        call_id=call_id,
+        recording_sid=recording_sid,
+        recording_url=recording_url,
+        recording_duration=duration,
+    )
+    if not meta:
+        return {"status": "download_failed"}
+
+    call_log_provider = get_call_log_provider()
+    await call_log_provider.set_recording(
+        call_id=call_id,
+        recording_sid=recording_sid,
+        recording_path=meta["path"],
+        recording_size_bytes=meta["size_bytes"],
+        recording_duration_seconds=meta["duration_seconds"],
+        recording_format=meta["format"],
+    )
+    return {"status": "ok", "path": meta["path"], "size": meta["size_bytes"]}
+
+
+@router.get("/calls/{call_id}/audio")
+async def get_call_audio(call_id: str):
+    """Stream the saved MP3 recording for a call."""
+    from fastapi.responses import FileResponse
+    from app.services.recording_service import resolve_recording_path
+
+    call_log_provider = get_call_log_provider()
+    call = await call_log_provider.get_call(call_id)
+    if not call or not call.recording_path:
+        raise HTTPException(status_code=404, detail="No recording available for this call")
+
+    abs_path = resolve_recording_path(call.recording_path)
+    if abs_path is None:
+        raise HTTPException(status_code=404, detail="Recording file missing on disk")
+
+    media_type = "audio/mpeg" if (call.recording_format or "mp3") == "mp3" else "audio/wav"
+    return FileResponse(
+        path=str(abs_path),
+        media_type=media_type,
+        filename=f"call-{call_id}.{call.recording_format or 'mp3'}",
+    )
+
+
+@router.post("/twilio/dial-status")
+async def twilio_dial_status(request: Request):
+    """Callback from <Dial action=...> — tells us what happened with the SIP transfer.
+
+    If the transfer succeeded, return empty TwiML (call is bridged).
+    If it failed, play a spoken apology so the patient isn't left in silence.
+    """
+    form = await request.form()
+    dial_status = form.get("DialCallStatus", "")
+    sip_code = form.get("DialSipResponseCode", "")
+    bridged = form.get("DialBridged", "")
+    call_sid = form.get("CallSid", "")
+
+    parts = []
+    for key in ("DialCallStatus", "DialCallSid", "DialCallDuration",
+                "DialSipResponseCode", "CallSid", "DialBridged"):
+        val = form.get(key, "")
+        if val:
+            parts.append(f"{key}={val}")
+    print(f"[DialStatus] {' | '.join(parts) or 'no fields'}")
+
+    if dial_status in ("completed", "answered") or bridged == "true":
+        # Transfer succeeded — patient is connected to agent, nothing more to do
+        return Response(
+            content='<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
+            media_type="application/xml",
+        )
+
+    # Transfer failed — tell the patient and provide the callback number
+    from app.services.twilio_sms_service import get_callback_number
+    callback = get_callback_number()
+    if callback:
+        message = (
+            "I'm sorry, we're having trouble connecting you to our scheduling team right now. "
+            f"Please call us back at {callback} and we'll get you scheduled. "
+            "We apologize for the inconvenience. Goodbye."
+        )
+    else:
+        message = (
+            "I'm sorry, we're having trouble connecting you to our scheduling team right now. "
+            "Please call our office back and we'll get you scheduled. "
+            "We apologize for the inconvenience. Goodbye."
+        )
+
+    print(f"[DialStatus] Transfer failed (status={dial_status}, sip={sip_code}) — playing fallback message for {call_sid}")
+
+    twiml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Response>'
+        f'<Say voice="alice">{html.escape(message)}</Say>'
+        '<Hangup/>'
+        '</Response>'
+    )
+    return Response(content=twiml, media_type="application/xml")
+
+
 @router.delete("/calls")
 async def delete_all_calls():
     """Delete all call logs and transcripts."""
@@ -442,10 +676,46 @@ async def delete_all_calls():
 @router.get("/config/check")
 async def check_configuration():
     """Check system configuration status (for diagnostics)."""
-    api_key = os.getenv("OPENAI_API_KEY", "")
+    from app.providers.settings_provider import get_api_key_sync
+    api_key = get_api_key_sync("openai")
 
     return {
         "openai_api_key_configured": bool(api_key),
         "openai_api_key_format_valid": api_key.startswith("sk-") if api_key else False,
         "openai_api_key_preview": f"{api_key[:7]}...{api_key[-4:]}" if len(api_key) > 15 else "(too short or not set)",
     }
+
+
+@router.get("/claude-html/latest")
+async def get_claude_latest_html(request: Request):
+    """Serve the most recent Claude response rendered as HTML.
+
+    Gated by the existing session cookie — log in via the dashboard first.
+    Returns whatever the operator's local Claude Code has written most
+    recently to ~/.claude/responses/latest.html.
+    """
+    from pathlib import Path
+    from app.api.auth import verify_token
+
+    token = request.cookies.get("session", "")
+    if not verify_token(token):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    target = Path.home() / ".claude" / "responses" / "latest.html"
+    if not target.is_file():
+        placeholder = (
+            "<!doctype html><meta charset='utf-8'>"
+            "<meta http-equiv='refresh' content='3'>"
+            "<title>Claude — no response yet</title>"
+            "<body style='background:#0d1117;color:#8b949e;"
+            "font:16px/1.6 system-ui;padding:48px;text-align:center'>"
+            "<p>No response rendered yet. This page auto-refreshes.</p>"
+            "</body>"
+        )
+        return Response(content=placeholder, media_type="text/html")
+
+    try:
+        body = target.read_bytes()
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read response file: {e}")
+    return Response(content=body, media_type="text/html")

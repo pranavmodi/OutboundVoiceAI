@@ -55,6 +55,12 @@ async def dashboard_websocket(websocket: WebSocket):
         active_call = await call_log_provider.get_active_call()
         statistics = await call_log_provider.get_statistics()
 
+        # Hide /v2-test mock calls from the production dashboard. The
+        # operator console shares this WebSocket; a mock call here would
+        # show up as "live" in the main UI.
+        if active_call and getattr(active_call, "mock_mode", False):
+            active_call = None
+
         await websocket.send_json({
             "type": "initial_state",
             "queue_state": queue_provider.get_state().to_dict(),
@@ -93,33 +99,46 @@ async def voice_websocket(websocket: WebSocket):
 
     # Set up callbacks to forward to WebSocket
     async def on_call_started(call):
-        await websocket.send_json({
-            "type": "call_started",
-            "call": call.to_dict(),
-        })
+        get_dispatcher().notify_call_started(call.patient_id)
+        try:
+            await websocket.send_json({
+                "type": "call_started",
+                "call": call.to_dict(),
+            })
+        except Exception:
+            logger.warning("Voice WS send failed on call_started (client may have disconnected)")
         await broadcast_to_dashboards({
             "type": "call_started",
             "call": call.to_dict(),
         })
-        get_dispatcher().notify_call_started(call.patient_id)
 
     async def on_call_ended(call):
-        await websocket.send_json({
-            "type": "call_ended",
-            "call": call.to_dict(),
-        })
+        # Thread the call's patient_id through so the dispatcher drops the
+        # right entry from _active_calls at MAX_PARALLEL_CALLS > 1. (The
+        # legacy no-arg form falls back to the oldest entry, which is
+        # ambiguous when multiple calls are in flight.)
+        get_dispatcher().notify_call_ended(getattr(call, "patient_id", None))
+        try:
+            await websocket.send_json({
+                "type": "call_ended",
+                "call": call.to_dict(),
+            })
+        except Exception:
+            logger.warning("Voice WS send failed on call_ended (client may have disconnected)")
         await broadcast_to_dashboards({
             "type": "call_ended",
             "call": call.to_dict(),
         })
-        get_dispatcher().notify_call_ended()
 
     async def on_transcript_update(speaker, text):
-        await websocket.send_json({
-            "type": "transcript",
-            "speaker": speaker,
-            "text": text,
-        })
+        try:
+            await websocket.send_json({
+                "type": "transcript",
+                "speaker": speaker,
+                "text": text,
+            })
+        except Exception:
+            pass
         # Only broadcast complete transcripts to dashboard
         if speaker in ("ai", "patient"):
             await broadcast_to_dashboards({
@@ -130,27 +149,36 @@ async def voice_websocket(websocket: WebSocket):
 
     async def on_audio_output(audio_data):
         # Send audio as base64
-        audio_b64 = base64.b64encode(audio_data).decode("utf-8")
-        await websocket.send_json({
-            "type": "audio",
-            "data": audio_b64,
-        })
+        try:
+            audio_b64 = base64.b64encode(audio_data).decode("utf-8")
+            await websocket.send_json({
+                "type": "audio",
+                "data": audio_b64,
+            })
+        except Exception:
+            pass
 
     async def on_status_update(status):
-        await websocket.send_json({
-            "type": "status",
-            "status": status,
-        })
+        try:
+            await websocket.send_json({
+                "type": "status",
+                "status": status,
+            })
+        except Exception:
+            pass
         await broadcast_to_dashboards({
             "type": "status_update",
             "status": status,
         })
 
     async def on_error(error):
-        await websocket.send_json({
-            "type": "error",
-            "message": error,
-        })
+        try:
+            await websocket.send_json({
+                "type": "error",
+                "message": error,
+            })
+        except Exception:
+            pass
 
     # Attach callbacks
     orchestrator.on_call_started = on_call_started
@@ -173,7 +201,11 @@ async def voice_websocket(websocket: WebSocket):
 
                 if msg_type == "start_call":
                     patient_id = data.get("patient_id")
-                    call_mode = data.get("call_mode", "web")
+                    from app.providers import get_settings_provider
+                    settings_provider = get_settings_provider()
+                    settings = await settings_provider.get_settings()
+                    call_mode = settings.call_mode or "web"
+                    print(f"[WS] start_call: call_mode={call_mode} (from DB)")
                     if patient_id:
                         await orchestrator.start_call(patient_id, call_mode=call_mode)
 
@@ -234,9 +266,40 @@ async def twilio_media_websocket(websocket: WebSocket, stream_id: str):
         await websocket.close(code=4000, reason="No pending bridge")
         return
 
+    disconnect_reason = "unknown"
     try:
         await bridge.handle_twilio_ws(websocket)
-    except WebSocketDisconnect:
-        logger.info(f"Twilio media stream disconnected: stream_id={stream_id}")
+        disconnect_reason = "stream_ended_normally"
+    except WebSocketDisconnect as e:
+        disconnect_reason = f"websocket_disconnect (code={e.code})"
+        print(f"[TwilioMedia] Stream disconnected: stream_id={stream_id}, code={e.code}")
     except Exception as e:
-        logger.error(f"Twilio media stream error: {e}")
+        disconnect_reason = f"error: {type(e).__name__}: {e}"
+        print(f"[TwilioMedia] Stream error: stream_id={stream_id}, {disconnect_reason}")
+    finally:
+        # Look up the session that owns this stream rather than using the
+        # global singleton — at MAX_PARALLEL_CALLS > 1 the singleton is the
+        # wrong session for Twilio-mode calls.
+        from app.services.orchestrator_registry import get_registry
+        from app.services.call_orchestrator import get_orchestrator
+        session = get_registry().by_stream_id(stream_id) or get_orchestrator()
+        if session.is_call_active:
+            # Grace period before ending the call: with DetectMessageEnd,
+            # the media stream may close while AMD is still waiting for
+            # the beep.  If _machine_detected is set (machine_start
+            # received), wait longer for the machine_end_* signal.
+            machine_early = getattr(session, "_machine_detected", False)
+            grace_iters = 75 if machine_early else 20  # ~15s vs ~4s
+            print(f"[TwilioMedia] Stream closed while call active — waiting for AMD (machine_early={machine_early}, grace={grace_iters*0.2:.0f}s, reason={disconnect_reason}, stream_id={stream_id})")
+            import asyncio as _asyncio
+            for _ in range(grace_iters):
+                await _asyncio.sleep(0.2)
+                if getattr(session, "_voicemail_handled", False) or not session.is_call_active:
+                    break
+            if session.is_call_active and not getattr(session, "_voicemail_handled", False):
+                print(f"[TwilioMedia] No AMD within grace period — ending as DISCONNECTED, stream_id={stream_id}")
+                await session.end_call(CallOutcome.DISCONNECTED)
+            else:
+                print(f"[TwilioMedia] Voicemail handler took over or call already ended, stream_id={stream_id}")
+        else:
+            print(f"[TwilioMedia] Stream closed (call already ended) — reason={disconnect_reason}, stream_id={stream_id}")

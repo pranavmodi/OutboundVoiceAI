@@ -23,6 +23,7 @@ async def seed_default_settings(session: AsyncSession):
             "enabled": False,
             "timezone": "America/New_York",
             "days_of_week": [0, 1, 2, 3, 4],  # Mon-Fri
+            "holidays": [],
         },
         queue_thresholds={
             "calls_waiting_threshold": 1,
@@ -57,51 +58,59 @@ async def seed_sample_patients(session: AsyncSession):
             language="en", order_id="ORD001",
             order_created=now - timedelta(days=1),
             has_abandoned_before=True, ai_called_before=False,
-            due_by=now + timedelta(days=1), priority_bucket=1,
+            due_by=now + timedelta(days=1),
+            radflow_status="No Show", priority_bucket=2,
         ),
         PatientRow(
             patient_id="PRE002", name="Maria Garcia", phone="555-0102",
             language="es", order_id="ORD002",
             order_created=now - timedelta(days=2),
             has_abandoned_before=True, ai_called_before=False,
-            due_by=now, priority_bucket=1,
+            due_by=now,
+            radflow_status="No Show", priority_bucket=2,
         ),
         PatientRow(
             patient_id="PRE003", name="Robert Johnson", phone="555-0103",
             language="en", order_id="ORD003",
             order_created=now - timedelta(days=1),
             has_abandoned_before=True, ai_called_before=True,
-            attempt_count=1, last_attempt_at=now - timedelta(hours=8),
+            ai_attempt_count=1, attempt_count=1,
+            last_attempt_at=now - timedelta(hours=8),
             last_outcome="no_answer",
-            due_by=now + timedelta(days=1), priority_bucket=2,
+            due_by=now + timedelta(days=1),
+            radflow_status="No Show", priority_bucket=2,
         ),
         PatientRow(
             patient_id="PRE004", name="Emily Davis", phone="555-0104",
             language="en", order_id="ORD004",
             order_created=now - timedelta(hours=12),
             has_called_in_before=True, ai_called_before=False,
-            due_by=now + timedelta(days=2), priority_bucket=3,
+            due_by=now + timedelta(days=2),
+            radflow_status="Ordered", priority_bucket=1,
         ),
         PatientRow(
             patient_id="PRE005", name="Michael Wilson", phone="555-0105",
             language="en", order_id="ORD005",
             order_created=now - timedelta(hours=6),
             ai_called_before=False,
-            due_by=now + timedelta(days=2), priority_bucket=4,
+            due_by=now + timedelta(days=2),
+            radflow_status="Ordered", priority_bucket=1,
         ),
         PatientRow(
             patient_id="PRE006", name="Sarah Brown", phone="555-0106",
             language="en", order_id="ORD006",
             order_created=now - timedelta(hours=3),
             intake_status="incomplete", ai_called_before=False,
-            due_by=now + timedelta(days=2), priority_bucket=4,
+            due_by=now + timedelta(days=2),
+            radflow_status="Ordered", priority_bucket=1,
         ),
         PatientRow(
             patient_id="PRE007", name="Wei Zhang", phone="555-0107",
             language="zh", order_id="ORD007",
             order_created=now - timedelta(hours=18),
             has_called_in_before=True, ai_called_before=False,
-            due_by=now + timedelta(days=1), priority_bucket=3,
+            due_by=now + timedelta(days=1),
+            radflow_status="Ordered", priority_bucket=1,
         ),
     ]
     session.add_all(samples)
@@ -125,7 +134,7 @@ async def seed_builtin_scenarios(session: AsyncSession):
             is_builtin=True,
             ami_connected=True,
             queues=[
-                {"Queue": "scheduling_en", "Calls": 0, "Holdtime": 0, "AvailableAgents": 1},
+                {"Queue": "9006", "Calls": 0, "Holdtime": 0, "AvailableAgents": 1},
             ],
             patients=[
                 {"name": "Pranav Modi", "phone": "+918287149638", "language": "en",
@@ -141,9 +150,9 @@ async def seed_builtin_scenarios(session: AsyncSession):
             is_builtin=True,
             ami_connected=True,
             queues=[
-                {"Queue": "scheduling_en", "Calls": 0, "Holdtime": 0, "AvailableAgents": 2},
-                {"Queue": "scheduling_es", "Calls": 0, "Holdtime": 0, "AvailableAgents": 1},
-                {"Queue": "intake", "Calls": 0, "Holdtime": 0, "AvailableAgents": 1},
+                {"Queue": "9006", "Calls": 0, "Holdtime": 0, "AvailableAgents": 2},
+                {"Queue": "9009", "Calls": 0, "Holdtime": 0, "AvailableAgents": 1},
+                {"Queue": "9012", "Calls": 0, "Holdtime": 0, "AvailableAgents": 1},
             ],
             patients=[
                 {"name": "John Smith", "phone": "555-0101", "language": "en",
@@ -177,9 +186,9 @@ async def seed_builtin_scenarios(session: AsyncSession):
             is_builtin=True,
             ami_connected=True,
             queues=[
-                {"Queue": "scheduling_en", "Calls": 5, "Holdtime": 120, "AvailableAgents": 0},
-                {"Queue": "scheduling_es", "Calls": 3, "Holdtime": 90, "AvailableAgents": 0},
-                {"Queue": "intake", "Calls": 4, "Holdtime": 60, "AvailableAgents": 0},
+                {"Queue": "9006", "Calls": 5, "Holdtime": 120, "AvailableAgents": 0},
+                {"Queue": "9009", "Calls": 3, "Holdtime": 90, "AvailableAgents": 0},
+                {"Queue": "9012", "Calls": 4, "Holdtime": 60, "AvailableAgents": 0},
             ],
             patients=[
                 {"name": "John Smith", "phone": "555-0101", "language": "en",
@@ -198,7 +207,7 @@ async def seed_builtin_scenarios(session: AsyncSession):
             is_builtin=True,
             ami_connected=False,
             queues=[
-                {"Queue": "scheduling_en", "Calls": 0, "Holdtime": 0, "AvailableAgents": 2},
+                {"Queue": "9006", "Calls": 0, "Holdtime": 0, "AvailableAgents": 2},
             ],
             patients=[
                 {"name": "John Smith", "phone": "555-0101", "language": "en",
@@ -214,8 +223,8 @@ async def seed_builtin_scenarios(session: AsyncSession):
             is_builtin=True,
             ami_connected=True,
             queues=[
-                {"Queue": "scheduling_en", "Calls": 0, "Holdtime": 0, "AvailableAgents": 1},
-                {"Queue": "scheduling_es", "Calls": 0, "Holdtime": 0, "AvailableAgents": 1},
+                {"Queue": "9006", "Calls": 0, "Holdtime": 0, "AvailableAgents": 1},
+                {"Queue": "9009", "Calls": 0, "Holdtime": 0, "AvailableAgents": 1},
             ],
             patients=[
                 {"name": "John Smith", "phone": "555-0101", "language": "en",
@@ -237,7 +246,7 @@ async def seed_builtin_scenarios(session: AsyncSession):
             is_builtin=True,
             ami_connected=True,
             queues=[
-                {"Queue": "scheduling_en", "Calls": 0, "Holdtime": 0, "AvailableAgents": 1},
+                {"Queue": "9006", "Calls": 0, "Holdtime": 0, "AvailableAgents": 1},
             ],
             patients=[
                 {"name": "Robert Johnson", "phone": "555-0103", "language": "en",
@@ -256,7 +265,7 @@ async def seed_builtin_scenarios(session: AsyncSession):
             is_builtin=True,
             ami_connected=True,
             queues=[
-                {"Queue": "scheduling_en", "Calls": 0, "Holdtime": 0, "AvailableAgents": 2},
+                {"Queue": "9006", "Calls": 0, "Holdtime": 0, "AvailableAgents": 2},
             ],
             patients=[],
             dispatcher={},

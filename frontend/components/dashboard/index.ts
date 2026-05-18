@@ -3,4 +3,5 @@ export { PatientQueueCard } from "./PatientQueueCard";
 export { ActiveCallCard } from "./ActiveCallCard";
 export { CallHistoryCard } from "./CallHistoryCard";
 export { DispatcherEventsCard } from "./DispatcherEventsCard";
-export { TranscriptBrowserCard } from "./TranscriptBrowserCard";
+export { KpiBar } from "./KpiBar";
+export { AuditLogCard } from "./AuditLogCard";

@@ -28,6 +28,7 @@ interface ActiveCallCardProps {
   onEndCall: () => void;
   onToggleMic: () => void;
   lastCallInfo?: { patientName: string; duration: number } | null;
+  isTwilioMode?: boolean;
 }
 
 export function ActiveCallCard({
@@ -39,6 +40,7 @@ export function ActiveCallCard({
   onEndCall,
   onToggleMic,
   lastCallInfo,
+  isTwilioMode,
 }: ActiveCallCardProps) {
   const [duration, setDuration] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -180,7 +182,7 @@ export function ActiveCallCard({
             </div>
             <Badge variant="outline" className="text-xs flex items-center gap-1">
               P{call.priority_bucket}
-              <InfoTooltip content="Priority bucket: P1=Abandoned/No AI, P2=Abandoned/AI called, P3=Called in/No AI, P4=Never contacted. Lower = higher priority." />
+              <InfoTooltip content="Status rank at dispatch time: 1=Ordered, 2=No Show, 3=Needs to Reschedule. Lower = higher priority." />
             </Badge>
           </div>
         </div>
@@ -188,51 +190,56 @@ export function ActiveCallCard({
         {/* Status */}
         <div className="flex items-center justify-between text-sm">
           <span className="text-muted-foreground">Status</span>
-          <span className="font-medium">{status || "Connected"}</span>
+          <div className="flex items-center gap-2">
+            {isTwilioMode && <Badge variant="outline" className="text-[10px] px-1.5 py-0">Twilio</Badge>}
+            <span className="font-medium">{status || "Connected"}</span>
+          </div>
         </div>
 
         <Separator />
 
-        {/* Audio Controls */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <Button
-              variant={isRecording ? "default" : "outline"}
-              size="sm"
-              className="h-8 text-xs"
-              onClick={onToggleMic}
-            >
-              {isRecording ? (
-                <>
-                  <Mic className="h-3.5 w-3.5 mr-1.5" />
-                  Mic On
-                </>
-              ) : (
-                <>
-                  <MicOff className="h-3.5 w-3.5 mr-1.5" />
-                  Muted
-                </>
+        {/* Audio Controls — hidden in Twilio mode (audio handled by Twilio) */}
+        {!isTwilioMode && (
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <Button
+                variant={isRecording ? "default" : "outline"}
+                size="sm"
+                className="h-8 text-xs"
+                onClick={onToggleMic}
+              >
+                {isRecording ? (
+                  <>
+                    <Mic className="h-3.5 w-3.5 mr-1.5" />
+                    Mic On
+                  </>
+                ) : (
+                  <>
+                    <MicOff className="h-3.5 w-3.5 mr-1.5" />
+                    Muted
+                  </>
+                )}
+              </Button>
+              {isRecording && (
+                <div className="flex items-center gap-0.5 h-5">
+                  {[...Array(5)].map((_, i) => (
+                    <div
+                      key={i}
+                      className="audio-bar w-0.5 bg-emerald-500 rounded-full"
+                      style={{
+                        height: `${Math.max(3, audioLevel * 20 * (0.5 + Math.random() * 0.5))}px`,
+                      }}
+                    />
+                  ))}
+                </div>
               )}
+            </div>
+            <Button variant="destructive" size="sm" className="h-8 text-xs" onClick={onEndCall}>
+              <PhoneOff className="h-3.5 w-3.5 mr-1.5" />
+              End Call
             </Button>
-            {isRecording && (
-              <div className="flex items-center gap-0.5 h-5">
-                {[...Array(5)].map((_, i) => (
-                  <div
-                    key={i}
-                    className="audio-bar w-0.5 bg-emerald-500 rounded-full"
-                    style={{
-                      height: `${Math.max(3, audioLevel * 20 * (0.5 + Math.random() * 0.5))}px`,
-                    }}
-                  />
-                ))}
-              </div>
-            )}
           </div>
-          <Button variant="destructive" size="sm" className="h-8 text-xs" onClick={onEndCall}>
-            <PhoneOff className="h-3.5 w-3.5 mr-1.5" />
-            End Call
-          </Button>
-        </div>
+        )}
 
         <Separator />
 

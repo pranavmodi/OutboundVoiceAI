@@ -1,13 +1,12 @@
 from openai import OpenAI
-from .config import get_settings
+from .providers.settings_provider import get_api_key_sync
 
 
 def generate_ai_reply(user_text: str) -> str:
     """
     Call OpenAI chat completion to produce a short, friendly response.
     """
-    settings = get_settings()
-    client = OpenAI(api_key=settings.openai_api_key)
+    client = OpenAI(api_key=get_api_key_sync("openai"))
 
     system_prompt = "You are a polite assistant on a phone call. Keep responses under 20 words."
     completion = client.chat.completions.create(

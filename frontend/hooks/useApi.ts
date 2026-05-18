@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useMemo } from "react";
-import type { SystemStatus, Patient, CallLog, QueueState, SystemSettings, BusinessHours, QueueThresholds, DispatcherSettings, SimulationScenario, ScenarioPatient } from "@/types";
+import type { SystemStatus, Patient, CallLog, QueueState, SystemSettings, BusinessHours, QueueThresholds, DispatcherSettings, SimulationScenario, ScenarioPatient, TodayKpis, TimePerformance, AuditEvent, ApiKeysStatusResponse } from "@/types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -67,19 +67,36 @@ export function useApi() {
     }
   }, []);
 
-  const getCalls = useCallback(async (limit: number = 50): Promise<CallLog[]> => {
+  const getCalls = useCallback(async (
+    limit: number = 25,
+    offset: number = 0,
+    search?: string,
+    includeTest: boolean = false,
+  ): Promise<{ calls: CallLog[]; total: number }> => {
     try {
-      const data = await fetchApi<{ calls: CallLog[] }>(`/api/calls?limit=${limit}`);
-      return data.calls;
+      const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+      if (search && search.trim()) params.set("search", search.trim());
+      if (includeTest) params.set("include_test", "true");
+      const data = await fetchApi<{ calls: CallLog[]; total: number }>(`/api/calls?${params.toString()}`);
+      return { calls: data.calls, total: data.total };
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unknown error");
-      return [];
+      return { calls: [], total: 0 };
     }
   }, []);
 
   const getCall = useCallback(async (callId: string): Promise<CallLog | null> => {
     try {
       return await fetchApi<CallLog>(`/api/calls/${callId}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
+  const getTodayKpis = useCallback(async (): Promise<TodayKpis | null> => {
+    try {
+      return await fetchApi<TodayKpis>(`/api/statistics/today`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unknown error");
       return null;
@@ -417,6 +434,59 @@ export function useApi() {
     }
   }, []);
 
+  const setVoiceProvider = useCallback(async (voiceProvider: string): Promise<SystemSettings | null> => {
+    try {
+      return await fetchApi<SystemSettings>("/api/settings/voice-provider", {
+        method: "PUT",
+        body: JSON.stringify({ voice_provider: voiceProvider }),
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
+  const updateCallGreeting = useCallback(async (callGreeting: string): Promise<SystemSettings | null> => {
+    try {
+      return await fetchApi<SystemSettings>("/api/settings/call-greeting", {
+        method: "PUT",
+        body: JSON.stringify({ call_greeting: callGreeting }),
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
+  const updateVoices = useCallback(async (openaiVoice: string, geminiVoice: string): Promise<SystemSettings | null> => {
+    try {
+      return await fetchApi<SystemSettings>("/api/settings/voices", {
+        method: "PUT",
+        body: JSON.stringify({ openai_voice: openaiVoice, gemini_voice: geminiVoice }),
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
+  const previewVoice = useCallback(async (provider: string, voice: string): Promise<string | null> => {
+    try {
+      const baseUrl = process.env.NEXT_PUBLIC_API_URL || "";
+      const resp = await fetch(`${baseUrl}/api/settings/voice-preview`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider, voice }),
+      });
+      if (!resp.ok) throw new Error(`Voice preview failed: ${resp.status}`);
+      const blob = await resp.blob();
+      return URL.createObjectURL(blob);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
   const setCallMode = useCallback(async (callMode: string): Promise<SystemSettings | null> => {
     try {
       return await fetchApi<SystemSettings>("/api/settings/call-mode", {
@@ -426,6 +496,80 @@ export function useApi() {
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unknown error");
       return null;
+    }
+  }, []);
+
+  const setMockMode = useCallback(async (enabled: boolean, mock_phone: string): Promise<SystemSettings | null> => {
+    try {
+      return await fetchApi<SystemSettings>("/api/settings/mock-mode", {
+        method: "PUT",
+        body: JSON.stringify({ enabled, mock_phone }),
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
+  const updateDailyReport = useCallback(async (config: {
+    enabled: boolean;
+    webhook_url: string;
+    hour: number;
+    timezone: string;
+  }): Promise<SystemSettings | null> => {
+    try {
+      return await fetchApi<SystemSettings>("/api/settings/daily-report", {
+        method: "PUT",
+        body: JSON.stringify(config),
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
+  const sendTestDailyReport = useCallback(async (): Promise<{ sent: boolean } | null> => {
+    try {
+      return await fetchApi<{ sent: boolean }>(`/api/reports/daily/test`, { method: "POST" });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
+  const getTimePerformance = useCallback(async (days: number = 90): Promise<TimePerformance | null> => {
+    try {
+      return await fetchApi<TimePerformance>(`/api/statistics/time-performance?days=${days}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
+  const getAuditLog = useCallback(async (params: {
+    limit?: number;
+    offset?: number;
+    event_type?: string;
+    status?: string;
+    patient_id?: string;
+    search?: string;
+    start_date?: string;
+    end_date?: string;
+  } = {}): Promise<{ events: AuditEvent[]; total: number }> => {
+    try {
+      const sp = new URLSearchParams();
+      if (params.limit) sp.set("limit", String(params.limit));
+      if (params.offset) sp.set("offset", String(params.offset));
+      if (params.event_type && params.event_type !== "all") sp.set("event_type", params.event_type);
+      if (params.status && params.status !== "all") sp.set("status", params.status);
+      if (params.patient_id) sp.set("patient_id", params.patient_id);
+      if (params.search) sp.set("search", params.search);
+      if (params.start_date) sp.set("start_date", params.start_date);
+      if (params.end_date) sp.set("end_date", params.end_date);
+      return await fetchApi<{ events: AuditEvent[]; total: number }>(`/api/audit?${sp.toString()}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return { events: [], total: 0 };
     }
   }, []);
 
@@ -448,6 +592,53 @@ export function useApi() {
     }
   }, []);
 
+  const getApiKeysStatus = useCallback(async (): Promise<ApiKeysStatusResponse | null> => {
+    try {
+      return await fetchApi<ApiKeysStatusResponse>("/api/settings/api-keys");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
+  const updateApiKey = useCallback(async (provider: "openai" | "gemini", apiKey: string): Promise<ApiKeysStatusResponse> => {
+    const resp = await fetch(`${API_BASE}/api/settings/api-keys`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider, api_key: apiKey }),
+    });
+    if (!resp.ok) {
+      let detail = `HTTP ${resp.status}`;
+      try {
+        const body = await resp.json();
+        if (body?.detail) detail = body.detail;
+      } catch {}
+      throw new Error(detail);
+    }
+    return await resp.json();
+  }, []);
+
+  const clearApiKey = useCallback(async (provider: "openai" | "gemini"): Promise<ApiKeysStatusResponse | null> => {
+    try {
+      return await fetchApi<ApiKeysStatusResponse>(`/api/settings/api-keys/${provider}`, { method: "DELETE" });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
+  const revealApiKey = useCallback(async (provider: "openai" | "gemini"): Promise<string | null> => {
+    try {
+      const data = await fetchApi<{ provider: string; source: string; api_key: string }>(
+        `/api/settings/api-keys/${provider}/reveal`
+      );
+      return data.api_key || "";
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
   return useMemo(() => ({
     loading,
     error,
@@ -457,6 +648,7 @@ export function useApi() {
     getOutboundQueue,
     getCalls,
     getCall,
+    getTodayKpis,
     simulateBusyQueue,
     simulateQuietQueue,
     simulateAmiFailure,
@@ -482,10 +674,23 @@ export function useApi() {
     updateAllowedPhones,
     setQueueSource,
     setPatientSource,
+    setVoiceProvider,
+    updateCallGreeting,
+    updateVoices,
+    previewVoice,
     setCallMode,
+    setMockMode,
+    updateDailyReport,
+    sendTestDailyReport,
+    getTimePerformance,
+    getAuditLog,
     getTimezones,
     deleteAllCalls,
-  }), [
+    getApiKeysStatus,
+    updateApiKey,
+    clearApiKey,
+    revealApiKey,
+}), [
     loading,
     error,
     getStatus,
@@ -494,6 +699,7 @@ export function useApi() {
     getOutboundQueue,
     getCalls,
     getCall,
+    getTodayKpis,
     simulateBusyQueue,
     simulateQuietQueue,
     simulateAmiFailure,
@@ -519,8 +725,21 @@ export function useApi() {
     updateAllowedPhones,
     setQueueSource,
     setPatientSource,
+    setVoiceProvider,
+    updateCallGreeting,
+    updateVoices,
+    previewVoice,
     setCallMode,
+    setMockMode,
+    updateDailyReport,
+    sendTestDailyReport,
+    getTimePerformance,
+    getAuditLog,
     getTimezones,
     deleteAllCalls,
-  ]);
+    getApiKeysStatus,
+    updateApiKey,
+    clearApiKey,
+    revealApiKey,
+]);
 }

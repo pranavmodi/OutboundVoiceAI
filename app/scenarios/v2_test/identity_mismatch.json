@@ -1,0 +1,23 @@
+{
+  "id": "identity_mismatch",
+  "name": "Identity mismatch (DOB)",
+  "description": "Patient on the line states a DOB that doesn't match the order. Expect IDENTITY_VERIFICATION_FAILED handoff with zero captured fields.",
+  "patient": {
+    "name": "Maria Garcia",
+    "tenant_id": "TEST",
+    "order_id": "TEST-ORD-003",
+    "dob_on_order": "1990-07-22"
+  },
+  "expected_patient_dob": "1990-08-22",
+  "modality": "MR_NON_CONTRAST",
+  "outstanding_tasks": [
+    { "category": "PRESCREEN", "field_id": "claustrophobia" }
+  ],
+  "flag_overrides": {
+    "mode_voice_capture": true,
+    "mode_portal_copilot": false,
+    "multi_call_resume": false
+  },
+  "expected_handoff_reason": "IDENTITY_VERIFICATION_FAILED",
+  "expected_behavior": "Identity check fails. Agent transfers immediately without asking any intake questions."
+}

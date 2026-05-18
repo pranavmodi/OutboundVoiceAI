@@ -1,6 +1,7 @@
 """Twilio outbound call + media stream bridge to OpenAI Realtime API."""
 import asyncio
 import base64
+import html
 import json
 import logging
 import os
@@ -13,6 +14,22 @@ from fastapi import WebSocket
 from app.services.realtime_voice import RealtimeVoiceService
 
 logger = logging.getLogger(__name__)
+
+# Lazily-cached Twilio REST client (one per process).
+_twilio_client: Optional[Client] = None
+
+
+def _get_twilio_client() -> Client:
+    """Return a cached Twilio Client, creating one on first use."""
+    global _twilio_client
+    if _twilio_client is None:
+        account_sid = os.getenv("TWILIO_ACCOUNT_SID", "")
+        auth_token = os.getenv("TWILIO_AUTH_TOKEN", "")
+        if not account_sid or not auth_token:
+            raise RuntimeError("Twilio is not configured. Set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN.")
+        _twilio_client = Client(account_sid, auth_token)
+    return _twilio_client
+
 
 # Registry of pending Twilio streams keyed by stream_id.
 # When the orchestrator places a call it registers a bridge here;
@@ -31,12 +48,19 @@ def pop_bridge(stream_id: str) -> Optional["TwilioMediaBridge"]:
 class TwilioMediaBridge:
     """Bridges a Twilio media stream WebSocket with an OpenAI RealtimeVoiceService."""
 
-    def __init__(self, voice_service: RealtimeVoiceService):
+    # Twilio rings for up to ~30s before giving up.  After answer, it still
+    # needs to fetch TwiML, open the WebSocket, and send the "start" event.
+    # 60s gives headroom for ring + connection without false-positive timeouts.
+    DEFAULT_STREAM_TIMEOUT = 60.0
+
+    def __init__(self, voice_service: RealtimeVoiceService, verbose: bool = False):
         self.voice_service = voice_service
+        self._verbose = verbose
         self._twilio_ws: Optional[WebSocket] = None
         self._stream_sid: Optional[str] = None
         self._call_sid: Optional[str] = None
         self._connected = asyncio.Event()
+        self._aborted = asyncio.Event()
 
         # Wire OpenAI audio output → Twilio
         self._original_on_audio = voice_service.on_audio
@@ -73,12 +97,14 @@ class TwilioMediaBridge:
                 event = msg.get("event")
 
                 if event == "connected":
-                    logger.info("Twilio stream connected")
+                    if self._verbose:
+                        logger.info("Twilio stream connected")
 
                 elif event == "start":
                     self._stream_sid = msg["start"]["streamSid"]
                     self._call_sid = msg["start"].get("callSid")
-                    logger.info(f"Twilio stream started: streamSid={self._stream_sid}")
+                    if self._verbose:
+                        logger.info(f"Twilio stream started: streamSid={self._stream_sid}")
                     self._connected.set()
 
                 elif event == "media":
@@ -89,27 +115,49 @@ class TwilioMediaBridge:
                         await self.voice_service.send_audio(audio_bytes)
 
                 elif event == "stop":
-                    logger.info("Twilio stream stopped")
+                    reason = msg.get("stop", {}).get("reason", "unknown")
+                    print(f"[TwilioMedia] Twilio sent stop event: reason={reason}, callSid={self._call_sid}")
                     break
 
+                elif event not in ("connected", "start", "media"):
+                    print(f"[TwilioMedia] Unexpected event: {event}")
+
         except Exception as e:
-            logger.error(f"Twilio media stream error: {e}")
+            print(f"[TwilioMedia] Bridge error: {type(e).__name__}: {e}")
         finally:
             self._twilio_ws = None
             self._connected.clear()
 
-    async def wait_for_connection(self, timeout: float = 30.0) -> bool:
-        """Wait for Twilio to connect the media stream."""
+    def abort(self):
+        """Signal that the call failed (canceled/no-answer/busy) so
+        wait_for_connection returns immediately instead of blocking
+        until the full timeout."""
+        self._aborted.set()
+
+    async def wait_for_connection(self, timeout: float | None = None) -> bool:
+        """Wait for Twilio to connect the media stream, or abort early
+        if the call is canceled/failed before media connects."""
+        if timeout is None:
+            timeout = self.DEFAULT_STREAM_TIMEOUT
         try:
-            await asyncio.wait_for(self._connected.wait(), timeout=timeout)
-            return True
-        except asyncio.TimeoutError:
+            done, _ = await asyncio.wait(
+                [
+                    asyncio.create_task(self._connected.wait()),
+                    asyncio.create_task(self._aborted.wait()),
+                ],
+                timeout=timeout,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            return self._connected.is_set() and not self._aborted.is_set()
+        except Exception:
             return False
 
 
 def place_twilio_call(
     to_number: str,
     twiml_url: str,
+    status_callback_url: Optional[str] = None,
+    recording_status_callback_url: Optional[str] = None,
 ) -> str:
     """Place an outbound call via Twilio REST API. Returns Call SID.
 
@@ -120,19 +168,149 @@ def place_twilio_call(
             "Twilio calls are disabled. Set ALLOW_TWILIO_CALLS=true to enable."
         )
 
-    account_sid = os.getenv("TWILIO_ACCOUNT_SID", "")
-    auth_token = os.getenv("TWILIO_AUTH_TOKEN", "")
     from_number = os.getenv("TWILIO_FROM_NUMBER", "")
 
-    client = Client(account_sid, auth_token)
-    call = client.calls.create(
-        to=to_number,
-        from_=from_number,
-        url=twiml_url,
-    )
+    client = _get_twilio_client()
+    create_kwargs = {
+        "to": to_number,
+        "from_": from_number,
+        "url": twiml_url,
+        # AMD for voicemail detection. "DetectMessageEnd" waits for the
+        # voicemail greeting to finish and the beep to play before firing
+        # the callback.  This lets us suppress the AI greeting on
+        # "machine_start" (early signal) and inject the voicemail script
+        # only after "machine_end_beep" (beep detected) so the AI never
+        # talks over the VM greeting.
+        "machine_detection": "DetectMessageEnd",
+        # Max seconds Twilio will wait while trying to classify the call.
+        # 30s accommodates long voicemail greetings.
+        "machine_detection_timeout": 30,
+    }
+    if status_callback_url:
+        create_kwargs["status_callback"] = status_callback_url
+        create_kwargs["status_callback_method"] = "POST"
+        create_kwargs["status_callback_event"] = ["answered", "completed"]
+
+    # Enable call recording (dual-channel for transcript debugging)
+    if recording_status_callback_url:
+        create_kwargs["record"] = True
+        create_kwargs["recording_channels"] = "dual"
+        create_kwargs["recording_status_callback"] = recording_status_callback_url
+        create_kwargs["recording_status_callback_method"] = "POST"
+        create_kwargs["recording_status_callback_event"] = ["completed"]
+
+    call = client.calls.create(**create_kwargs)
     logger.info(f"Twilio call placed: SID={call.sid}, to={to_number}")
     return call.sid
 
 
 def generate_stream_id() -> str:
     return uuid.uuid4().hex[:12]
+
+
+def hangup_twilio_call(call_sid: str):
+    """Hang up an in-progress Twilio call by setting its status to completed."""
+    client = _get_twilio_client()
+    client.calls(call_sid).update(status="completed")
+    logger.info(f"Twilio call hung up: SID={call_sid}")
+
+
+def play_voicemail_and_hangup(call_sid: str, message: str):
+    """Update an in-progress Twilio call to play voicemail then hang up."""
+    escaped = html.escape(message, quote=True)
+    twiml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        "<Response>"
+        f"<Say voice=\"alice\">{escaped}</Say>"
+        "<Hangup/>"
+        "</Response>"
+    )
+
+    client = _get_twilio_client()
+    client.calls(call_sid).update(twiml=twiml)
+
+
+def _normalize_to_e164(phone: str, default_country_code: str = "1") -> str:
+    """Normalize a phone number to E.164 format (e.g. +16692253551).
+
+    Accepts formats like:
+      - "6692253551"       (10 digits, assume US)
+      - "16692253551"      (11 digits starting with 1)
+      - "+16692253551"     (already E.164)
+      - "(669) 225-3551"   (formatted with separators)
+    Returns "" if the input doesn't look like a valid phone number.
+    """
+    if not phone:
+        return ""
+    # Preserve a leading + but strip all other non-digits
+    has_plus = phone.strip().startswith("+")
+    digits = "".join(c for c in phone if c.isdigit())
+    if not digits:
+        return ""
+    if has_plus:
+        return f"+{digits}"
+    if len(digits) == 10:
+        return f"+{default_country_code}{digits}"
+    if len(digits) == 11 and digits.startswith(default_country_code):
+        return f"+{digits}"
+    # Unknown format — return with + if it looks international
+    if len(digits) > 10:
+        return f"+{digits}"
+    return ""
+
+
+def transfer_call_to_destination(
+    call_sid: str,
+    destination: str,
+    caller_id: Optional[str] = None,
+):
+    """Transfer an in-progress Twilio call to a PSTN/SIP destination.
+
+    Args:
+        call_sid: Twilio CallSid of the active call to update.
+        destination: SIP URI or PSTN number to dial.
+        caller_id: Number to present as caller ID on the new leg.  Typically
+            the original patient's phone number so the scheduler sees who is
+            calling.  Falls back to TWILIO_FROM_NUMBER if unset/invalid.
+    """
+    fallback_from_number = os.getenv("TWILIO_FROM_NUMBER", "")
+    if not destination or not destination.strip():
+        raise RuntimeError("Missing transfer destination")
+
+    destination = destination.strip()
+    escaped_destination = html.escape(destination, quote=True)
+
+    # Normalize the caller ID — prefer the provided one (patient's phone),
+    # fall back to our Twilio number if that fails.
+    normalized_caller_id = _normalize_to_e164(caller_id or "") or fallback_from_number
+    escaped_caller_id = html.escape(normalized_caller_id, quote=True) if normalized_caller_id else ""
+
+    # Build dial action URL for debugging transfer outcomes
+    backend_host = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+    if not backend_host:
+        backend_host = os.getenv("NEXT_PUBLIC_API_URL", "http://localhost:8000").rstrip("/")
+    action_url = html.escape(f"{backend_host}/api/twilio/dial-status", quote=True)
+
+    # Build inner target: <Sip> for SIP endpoints, <Number> for PSTN.
+    # Only offer codecs that FreePBX has enabled on its end (per Bill Simon: G722, PCMU).
+    sip_codecs = os.getenv("SIP_TRANSFER_CODECS", "G722,PCMU").strip()
+    dial_attrs = f' action="{action_url}" method="POST"'
+    if escaped_caller_id:
+        dial_attrs += f' callerId="{escaped_caller_id}"'
+
+    if destination.lower().startswith("sip:"):
+        escaped_codecs = html.escape(sip_codecs, quote=True)
+        inner = f'<Sip codecs="{escaped_codecs}">{escaped_destination}</Sip>'
+    else:
+        inner = f"<Number>{escaped_destination}</Number>"
+
+    twiml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        "<Response>"
+        f"<Dial{dial_attrs}>{inner}</Dial>"
+        "</Response>"
+    )
+    print(f"[Transfer] TwiML: {twiml}")
+
+    client = _get_twilio_client()
+    client.calls(call_sid).update(twiml=twiml)

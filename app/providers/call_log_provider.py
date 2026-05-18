@@ -3,19 +3,28 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import select, delete, func, case
+from sqlalchemy import select, delete, func, case, extract, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import AsyncSessionLocal
 from app.db.models import CallLogRow
-from app.models import CallLog, CallOutcome, TranscriptEntry
+from app.models import (
+    CallLog, CallOutcome, CallStatus, CallDisposition, TranscriptEntry,
+    derive_status_and_disposition,
+)
+
+
+def _safe_enum(enum_cls, value, default):
+    try:
+        return enum_cls(value)
+    except (ValueError, TypeError):
+        return default
 
 
 def _row_to_call_log(row: CallLogRow) -> CallLog:
-    try:
-        outcome = CallOutcome(row.outcome)
-    except ValueError:
-        outcome = CallOutcome.IN_PROGRESS
+    outcome = _safe_enum(CallOutcome, row.outcome, CallOutcome.IN_PROGRESS)
+    call_status = _safe_enum(CallStatus, row.call_status, CallStatus.IN_PROGRESS)
+    call_disposition = _safe_enum(CallDisposition, row.call_disposition, CallDisposition.IN_PROGRESS)
 
     cl = CallLog.__new__(CallLog)
     cl.call_id = row.call_id
@@ -28,13 +37,23 @@ def _row_to_call_log(row: CallLogRow) -> CallLog:
     cl.ended_at = row.ended_at
     cl.duration_seconds = row.duration_seconds
     cl.outcome = outcome
+    cl.call_status = call_status
+    cl.call_disposition = call_disposition
+    cl.mock_mode = bool(row.mock_mode)
+    cl.voice_provider = getattr(row, "voice_provider", None) or "openai"
     cl.transfer_attempted = row.transfer_attempted
     cl.transfer_success = row.transfer_success
     cl.voicemail_left = row.voicemail_left
     cl.sms_sent = row.sms_sent
+    cl.preferred_callback_time = row.preferred_callback_time
     cl.queue_snapshot = row.queue_snapshot
     cl.error_code = row.error_code
     cl.error_message = row.error_message
+    cl.recording_sid = row.recording_sid
+    cl.recording_path = row.recording_path
+    cl.recording_size_bytes = row.recording_size_bytes
+    cl.recording_duration_seconds = row.recording_duration_seconds
+    cl.recording_format = row.recording_format
 
     # Convert JSONB transcript list to TranscriptEntry objects
     raw = row.transcript or []
@@ -60,7 +79,11 @@ class CallLogProvider:
     """Stores and retrieves call logs in PostgreSQL."""
 
     def __init__(self):
-        self._active_call_id: Optional[str] = None
+        # Track all in-flight call_ids. Insertion-ordered (Python 3.7+ dict
+        # preserves insertion order) so get_active_call() returns "the
+        # earliest still-running call" deterministically at MAX_PARALLEL_CALLS > 1.
+        # The value is unused — only the keys matter.
+        self._active_call_ids: dict[str, None] = {}
 
     async def create_call(
         self,
@@ -70,6 +93,8 @@ class CallLogProvider:
         order_id: Optional[str] = None,
         priority_bucket: int = 0,
         queue_snapshot: Optional[dict] = None,
+        mock_mode: bool = False,
+        voice_provider: str = "openai",
     ) -> CallLog:
         call_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
@@ -84,12 +109,14 @@ class CallLogProvider:
                 started_at=now,
                 outcome="in_progress",
                 queue_snapshot=queue_snapshot,
+                mock_mode=mock_mode,
+                voice_provider=voice_provider,
                 transcript=[],
             )
             session.add(row)
             await session.commit()
 
-        self._active_call_id = call_id
+        self._active_call_ids[call_id] = None
         # Return as dataclass
         cl = CallLog.__new__(CallLog)
         cl.call_id = call_id
@@ -102,14 +129,24 @@ class CallLogProvider:
         cl.ended_at = None
         cl.duration_seconds = 0
         cl.outcome = CallOutcome.IN_PROGRESS
+        cl.call_status = CallStatus.IN_PROGRESS
+        cl.call_disposition = CallDisposition.IN_PROGRESS
+        cl.mock_mode = mock_mode
+        cl.voice_provider = voice_provider
         cl.transfer_attempted = False
         cl.transfer_success = False
         cl.voicemail_left = False
         cl.sms_sent = False
+        cl.preferred_callback_time = None
         cl.queue_snapshot = queue_snapshot
         cl.transcript = []
         cl.error_code = None
         cl.error_message = None
+        cl.recording_sid = None
+        cl.recording_path = None
+        cl.recording_size_bytes = None
+        cl.recording_duration_seconds = None
+        cl.recording_format = None
         return cl
 
     async def get_call(self, call_id: str) -> Optional[CallLog]:
@@ -121,18 +158,91 @@ class CallLogProvider:
             return _row_to_call_log(row) if row else None
 
     async def get_active_call(self) -> Optional[CallLog]:
-        if self._active_call_id is None:
+        """Return the earliest in-flight call (insertion-ordered).
+        Callers wanting all live calls should use get_active_calls()."""
+        if not self._active_call_ids:
             return None
-        return await self.get_call(self._active_call_id)
+        call_id = next(iter(self._active_call_ids))
+        return await self.get_call(call_id)
 
-    async def get_all_calls(self, limit: int = 50) -> list[CallLog]:
+    async def get_active_calls(self) -> list[CallLog]:
+        """Return every in-flight call the provider is tracking."""
+        calls: list[CallLog] = []
+        for call_id in list(self._active_call_ids):
+            c = await self.get_call(call_id)
+            if c:
+                calls.append(c)
+        return calls
+
+    async def get_all_calls(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        search: Optional[str] = None,
+        include_test: bool = False,
+    ) -> list[CallLog]:
+        """Paginated history. By default mock-mode rows are hidden so
+        /v2-test QA calls don't pollute the production history view.
+        Pass ``include_test=True`` to surface them (e.g., for the "Show
+        test calls" toggle on the dashboard)."""
         async with AsyncSessionLocal() as session:
+            stmt = select(CallLogRow)
+            if not include_test:
+                stmt = stmt.where(CallLogRow.mock_mode != True)  # noqa: E712
+            if search and search.strip():
+                q = f"%{search.strip().lower()}%"
+                from sqlalchemy import or_, func as _func
+                stmt = stmt.where(
+                    or_(
+                        _func.lower(CallLogRow.patient_name).like(q),
+                        _func.lower(CallLogRow.patient_id).like(q),
+                        _func.lower(CallLogRow.phone).like(q),
+                        _func.lower(CallLogRow.order_id).like(q),
+                        _func.lower(CallLogRow.call_disposition).like(q),
+                        _func.lower(CallLogRow.call_status).like(q),
+                        _func.lower(CallLogRow.outcome).like(q),
+                    )
+                )
             result = await session.execute(
-                select(CallLogRow)
-                .order_by(CallLogRow.started_at.desc())
+                stmt.order_by(CallLogRow.started_at.desc())
+                .offset(offset)
                 .limit(limit)
             )
             return [_row_to_call_log(r) for r in result.scalars().all()]
+
+    async def count_all_calls(
+        self,
+        search: Optional[str] = None,
+        include_test: bool = False,
+    ) -> int:
+        async with AsyncSessionLocal() as session:
+            stmt = select(func.count(CallLogRow.call_id))
+            if not include_test:
+                stmt = stmt.where(CallLogRow.mock_mode != True)  # noqa: E712
+            if search and search.strip():
+                q = f"%{search.strip().lower()}%"
+                from sqlalchemy import or_, func as _func
+                stmt = stmt.where(
+                    or_(
+                        _func.lower(CallLogRow.patient_name).like(q),
+                        _func.lower(CallLogRow.patient_id).like(q),
+                        _func.lower(CallLogRow.phone).like(q),
+                        _func.lower(CallLogRow.order_id).like(q),
+                        _func.lower(CallLogRow.call_disposition).like(q),
+                        _func.lower(CallLogRow.call_status).like(q),
+                        _func.lower(CallLogRow.outcome).like(q),
+                    )
+                )
+            result = await session.execute(stmt)
+            return result.scalar() or 0
+
+    async def get_total_call_count(self, include_test: bool = False) -> int:
+        async with AsyncSessionLocal() as session:
+            stmt = select(func.count(CallLogRow.call_id))
+            if not include_test:
+                stmt = stmt.where(CallLogRow.mock_mode != True)  # noqa: E712
+            result = await session.execute(stmt)
+            return result.scalar() or 0
 
     async def get_calls_by_patient(self, patient_id: str) -> list[CallLog]:
         async with AsyncSessionLocal() as session:
@@ -171,9 +281,23 @@ class CallLogProvider:
                 row.outcome = outcome.value
                 if row.started_at:
                     row.duration_seconds = int((now - row.started_at).total_seconds())
+
+                # Derive call_status + call_disposition from the full context
+                transcript = row.transcript or []
+                had_patient_speech = any(
+                    entry.get("speaker") == "patient" and (entry.get("text") or "").strip()
+                    for entry in transcript
+                )
+                status, disposition = derive_status_and_disposition(
+                    outcome=outcome,
+                    error_code=row.error_code,
+                    had_patient_speech=had_patient_speech,
+                    duration_seconds=row.duration_seconds,
+                )
+                row.call_status = status.value
+                row.call_disposition = disposition.value
                 await session.commit()
-        if self._active_call_id == call_id:
-            self._active_call_id = None
+        self._active_call_ids.pop(call_id, None)
 
     async def update_call(
         self,
@@ -182,6 +306,7 @@ class CallLogProvider:
         transfer_success: Optional[bool] = None,
         voicemail_left: Optional[bool] = None,
         sms_sent: Optional[bool] = None,
+        preferred_callback_time: Optional[str] = None,
         error_code: Optional[str] = None,
         error_message: Optional[str] = None,
     ):
@@ -199,23 +324,306 @@ class CallLogProvider:
                     row.voicemail_left = voicemail_left
                 if sms_sent is not None:
                     row.sms_sent = sms_sent
+                if preferred_callback_time is not None:
+                    row.preferred_callback_time = preferred_callback_time
                 if error_code is not None:
                     row.error_code = error_code
                 if error_message is not None:
                     row.error_message = error_message
                 await session.commit()
 
+    async def set_recording(
+        self,
+        call_id: str,
+        recording_sid: str,
+        recording_path: str,
+        recording_size_bytes: int,
+        recording_duration_seconds: int,
+        recording_format: str = "mp3",
+    ):
+        """Attach a downloaded recording to a call log row."""
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(CallLogRow).where(CallLogRow.call_id == call_id)
+            )
+            row = result.scalar_one_or_none()
+            if row:
+                row.recording_sid = recording_sid
+                row.recording_path = recording_path
+                row.recording_size_bytes = recording_size_bytes
+                row.recording_duration_seconds = recording_duration_seconds
+                row.recording_format = recording_format
+                await session.commit()
+
     def clear_active_call(self):
-        self._active_call_id = None
+        self._active_call_ids.clear()
 
     async def reset(self):
         async with AsyncSessionLocal() as session:
             await session.execute(delete(CallLogRow))
             await session.commit()
-        self._active_call_id = None
+        self._active_call_ids.clear()
 
-    def has_active_call(self) -> bool:
-        return self._active_call_id is not None
+    def has_active_call(self, call_id: Optional[str] = None) -> bool:
+        """True if any call is in flight (or a specific call when call_id is given)."""
+        if call_id is None:
+            return bool(self._active_call_ids)
+        return call_id in self._active_call_ids
+
+    def active_call_count(self) -> int:
+        return len(self._active_call_ids)
+
+    async def get_stats_for_date(self, target_date, tz_name: str = "America/Los_Angeles") -> dict:
+        """Get a full disposition breakdown for a specific local date.
+
+        Used by the daily Slack report.  `target_date` is a datetime.date
+        interpreted in the given timezone; all calls started_at between
+        local midnight and the next local midnight are counted.
+        """
+        from datetime import datetime as _dt, time as _time, timedelta as _td
+        from zoneinfo import ZoneInfo
+
+        try:
+            tz = ZoneInfo(tz_name)
+        except Exception:
+            tz = ZoneInfo("America/Los_Angeles")
+        local_start = _dt.combine(target_date, _time.min).replace(tzinfo=tz)
+        local_end = local_start + _td(days=1)
+        start_utc = local_start.astimezone(timezone.utc)
+        end_utc = local_end.astimezone(timezone.utc)
+
+        async with AsyncSessionLocal() as session:
+            # Total
+            total_result = await session.execute(
+                select(func.count(CallLogRow.call_id))
+                .where(CallLogRow.started_at >= start_utc)
+                .where(CallLogRow.started_at < end_utc)
+            )
+            total = total_result.scalar() or 0
+
+            # Disposition breakdown
+            disp_result = await session.execute(
+                select(CallLogRow.call_disposition, func.count(CallLogRow.call_id))
+                .where(CallLogRow.started_at >= start_utc)
+                .where(CallLogRow.started_at < end_utc)
+                .group_by(CallLogRow.call_disposition)
+            )
+            dispositions = {row[0]: row[1] for row in disp_result.all()}
+
+            # SMS count
+            sms_result = await session.execute(
+                select(func.count(CallLogRow.call_id))
+                .where(CallLogRow.started_at >= start_utc)
+                .where(CallLogRow.started_at < end_utc)
+                .where(CallLogRow.sms_sent == True)  # noqa: E712
+            )
+            sms = sms_result.scalar() or 0
+
+        return {
+            "date": target_date.isoformat(),
+            "timezone": tz_name,
+            "total_calls": total,
+            "dispositions": dispositions,
+            "sms": sms,
+        }
+
+    async def get_today_kpis(self) -> dict:
+        """Return today's headline numbers for the dashboard KPI row.
+
+        'Today' is computed in the server's local timezone so the numbers
+        line up with the operator's actual workday.
+        """
+        from datetime import datetime as _dt, time as _time
+        # Midnight today in local time, then converted to an aware UTC datetime
+        # to match how started_at is stored.
+        local_midnight = _dt.combine(_dt.now().date(), _time.min).astimezone()
+        start_utc = local_midnight.astimezone(timezone.utc)
+
+        async with AsyncSessionLocal() as session:
+            # Total calls placed today (any outcome)
+            total_result = await session.execute(
+                select(func.count(CallLogRow.call_id))
+                .where(CallLogRow.started_at >= start_utc)
+            )
+            total_calls = total_result.scalar() or 0
+
+            # Transferred today
+            transferred_result = await session.execute(
+                select(func.count(CallLogRow.call_id))
+                .where(CallLogRow.started_at >= start_utc)
+                .where(CallLogRow.transfer_success == True)  # noqa: E712
+            )
+            transferred = transferred_result.scalar() or 0
+
+            # Voicemails left today
+            vm_result = await session.execute(
+                select(func.count(CallLogRow.call_id))
+                .where(CallLogRow.started_at >= start_utc)
+                .where(CallLogRow.voicemail_left == True)  # noqa: E712
+            )
+            voicemails = vm_result.scalar() or 0
+
+            # SMS sent today
+            sms_result = await session.execute(
+                select(func.count(CallLogRow.call_id))
+                .where(CallLogRow.started_at >= start_utc)
+                .where(CallLogRow.sms_sent == True)  # noqa: E712
+            )
+            sms = sms_result.scalar() or 0
+
+        return {
+            "total_calls": total_calls,
+            "transferred": transferred,
+            "voicemails": voicemails,
+            "sms": sms,
+        }
+
+    async def get_time_performance(self, days: int = 90, tz_name: str = "America/Los_Angeles") -> dict:
+        """Aggregate call outcomes by day-of-week and hour-of-day over the last N days.
+
+        Returns two breakdowns:
+        - by_day: list of {day, day_name, total, transferred, no_answer, voicemail, transfer_rate, ...}
+        - by_hour: list of {hour, label, total, transferred, no_answer, voicemail, transfer_rate, ...}
+        """
+        from datetime import timedelta
+
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
+        # Use PostgreSQL AT TIME ZONE to convert started_at to local time
+        local_ts = func.timezone(tz_name, CallLogRow.started_at)
+        dow = extract("dow", local_ts)  # 0=Sunday in PG
+        hour = extract("hour", local_ts)
+
+        transferred_count = func.count(case(
+            (CallLogRow.call_disposition == "transferred", 1),
+        ))
+        no_answer_count = func.count(case(
+            (CallLogRow.call_disposition == "no_answer", 1),
+        ))
+        voicemail_count = func.count(case(
+            (CallLogRow.call_disposition == "voicemail_left", 1),
+        ))
+        callback_count = func.count(case(
+            (CallLogRow.call_disposition == "callback_requested", 1),
+        ))
+        hung_up_count = func.count(case(
+            (CallLogRow.call_disposition == "hung_up", 1),
+        ))
+        wrong_number_count = func.count(case(
+            (CallLogRow.call_disposition == "wrong_number", 1),
+        ))
+        technical_error_count = func.count(case(
+            (CallLogRow.call_disposition == "technical_error", 1),
+        ))
+        disconnected_number_count = func.count(case(
+            (CallLogRow.call_disposition == "disconnected_number", 1),
+        ))
+        completed_count = func.count(case(
+            (CallLogRow.call_disposition == "completed", 1),
+        ))
+        total_count = func.count(CallLogRow.call_id)
+
+        # Exclude mock-mode calls and known test patients
+        base_filter = [
+            CallLogRow.started_at >= cutoff,
+            CallLogRow.mock_mode != True,  # noqa: E712
+            CallLogRow.patient_name.notin_(["Pranav Modi", "Neha"]),
+        ]
+
+        async with AsyncSessionLocal() as session:
+            # By day of week
+            day_result = await session.execute(
+                select(
+                    dow.label("dow"),
+                    total_count.label("total"),
+                    transferred_count.label("transferred"),
+                    no_answer_count.label("no_answer"),
+                    voicemail_count.label("voicemail"),
+                    callback_count.label("callback"),
+                    hung_up_count.label("hung_up"),
+                    wrong_number_count.label("wrong_number"),
+                    technical_error_count.label("technical_error"),
+                    disconnected_number_count.label("disconnected_number"),
+                    completed_count.label("completed"),
+                )
+                .where(*base_filter)
+                .group_by(dow)
+                .order_by(dow)
+            )
+            day_rows = day_result.all()
+
+            # By hour of day
+            hour_result = await session.execute(
+                select(
+                    hour.label("hour"),
+                    total_count.label("total"),
+                    transferred_count.label("transferred"),
+                    no_answer_count.label("no_answer"),
+                    voicemail_count.label("voicemail"),
+                    callback_count.label("callback"),
+                    hung_up_count.label("hung_up"),
+                    wrong_number_count.label("wrong_number"),
+                    technical_error_count.label("technical_error"),
+                    disconnected_number_count.label("disconnected_number"),
+                    completed_count.label("completed"),
+                )
+                .where(*base_filter)
+                .group_by(hour)
+                .order_by(hour)
+            )
+            hour_rows = hour_result.all()
+
+        # PG dow: 0=Sunday, 1=Monday, ...
+        day_names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+
+        def _rate(n, total):
+            return round(n / total * 100, 1) if total > 0 else 0.0
+
+        def _build_row(r, **extra):
+            t = r.total
+            return {
+                **extra,
+                "total": t,
+                "transferred": r.transferred,
+                "no_answer": r.no_answer,
+                "voicemail": r.voicemail,
+                "callback": r.callback,
+                "hung_up": r.hung_up,
+                "wrong_number": r.wrong_number,
+                "technical_error": r.technical_error,
+                "disconnected_number": r.disconnected_number,
+                "completed": r.completed,
+                "transfer_rate": _rate(r.transferred, t),
+                "no_answer_rate": _rate(r.no_answer, t),
+                "voicemail_rate": _rate(r.voicemail, t),
+            }
+
+        by_day = []
+        for r in day_rows:
+            by_day.append(_build_row(r, day=int(r.dow), day_name=day_names[int(r.dow)]))
+
+        by_hour = []
+        for r in hour_rows:
+            h = int(r.hour)
+            label = f"{h % 12 or 12} {'AM' if h < 12 else 'PM'}"
+            by_hour.append(_build_row(r, hour=h, label=label))
+
+        # Grand totals
+        grand_total = sum(d["total"] for d in by_day)
+        grand_transferred = sum(d["transferred"] for d in by_day)
+        grand_no_answer = sum(d["no_answer"] for d in by_day)
+        grand_voicemail = sum(d["voicemail"] for d in by_day)
+
+        return {
+            "days": days,
+            "timezone": tz_name,
+            "total_calls": grand_total,
+            "overall_transfer_rate": _rate(grand_transferred, grand_total),
+            "overall_no_answer_rate": _rate(grand_no_answer, grand_total),
+            "overall_voicemail_rate": _rate(grand_voicemail, grand_total),
+            "by_day": by_day,
+            "by_hour": by_hour,
+        }
 
     async def get_statistics(self) -> dict:
         async with AsyncSessionLocal() as session:

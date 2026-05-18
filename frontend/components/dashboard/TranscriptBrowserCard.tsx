@@ -20,6 +20,7 @@ import {
   PhoneForwarded,
   PhoneMissed,
   PhoneOff,
+  Loader2,
 } from "lucide-react";
 import { formatDate, formatTime } from "@/lib/utils";
 import type { CallLog } from "@/types";
@@ -27,6 +28,8 @@ import type { CallLog } from "@/types";
 interface TranscriptBrowserCardProps {
   calls: CallLog[];
   onRefresh: () => void;
+  onLoadMore: () => void;
+  hasMore: boolean;
 }
 
 const outcomeConfig: Record<
@@ -49,7 +52,8 @@ interface DateGroup {
   calls: CallLog[];
 }
 
-export function TranscriptBrowserCard({ calls, onRefresh }: TranscriptBrowserCardProps) {
+export function TranscriptBrowserCard({ calls, onRefresh, onLoadMore, hasMore }: TranscriptBrowserCardProps) {
+  const [loadingMore, setLoadingMore] = useState(false);
   const dateGroups = useMemo(() => {
     const filtered = calls.filter((c) => c.outcome !== "in_progress");
 
@@ -170,13 +174,13 @@ export function TranscriptBrowserCard({ calls, onRefresh }: TranscriptBrowserCar
 
                             {/* Transcript */}
                             <div className="px-4 py-3">
-                              {call.transcript.length === 0 ? (
+                              {call.transcript.filter((e) => e.speaker !== "system").length === 0 ? (
                                 <p className="text-xs text-muted-foreground italic">
                                   No transcript recorded
                                 </p>
                               ) : (
                                 <div className="space-y-2">
-                                  {call.transcript.map((entry, i) => (
+                                  {call.transcript.filter((e) => e.speaker !== "system").map((entry, i) => (
                                     <div
                                       key={i}
                                       className={`flex gap-2 ${
@@ -216,6 +220,25 @@ export function TranscriptBrowserCard({ calls, onRefresh }: TranscriptBrowserCar
                   </CollapsibleContent>
                 </Collapsible>
               ))
+            )}
+            {hasMore && dateGroups.length > 0 && (
+              <div className="flex justify-center pt-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs text-muted-foreground"
+                  disabled={loadingMore}
+                  onClick={async () => {
+                    setLoadingMore(true);
+                    try { await onLoadMore(); } finally { setLoadingMore(false); }
+                  }}
+                >
+                  {loadingMore ? (
+                    <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+                  ) : null}
+                  Load older transcripts
+                </Button>
+              </div>
             )}
           </div>
         </ScrollArea>

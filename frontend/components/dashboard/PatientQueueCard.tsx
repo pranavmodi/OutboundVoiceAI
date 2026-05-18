@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/select";
 import { Users, Phone, RefreshCw, UserRound, Clock, RotateCcw, Pencil, Trash2 } from "lucide-react";
 import { InfoTooltip } from "@/components/ui/info-tooltip";
+import { Skeleton } from "@/components/ui/skeleton";
 import type { Patient } from "@/types";
 
 interface PatientQueueCardProps {
@@ -31,6 +32,7 @@ interface PatientQueueCardProps {
   onCallPatient: (patientId: string) => void;
   onRefresh: () => void;
   onReloadScenario?: () => void;
+  loading?: boolean;
   onDeletePatient?: (patientId: string) => Promise<void>;
   onUpdatePatient?: (patientId: string, data: {
     name?: string;
@@ -45,20 +47,21 @@ interface PatientQueueCardProps {
   outboundAllowed: boolean;
   source?: "simulation" | "live";
   lastUpdated?: Date | null;
+  // Phase 7: live in-flight calls reported by the dispatcher tick.
+  activeCalls?: Array<{
+    patient_id: string;
+    patient_name: string;
+    phase: "dispatched" | "active" | "voicemail";
+    call_id: string | null;
+  }>;
+  maxParallelCalls?: number;
 }
 
-const priorityLabels: Record<number, string> = {
-  1: "Abandoned, No AI Call",
-  2: "Abandoned, AI Called",
-  3: "No AI Call, Called In",
-  4: "No AI Call, Never Called",
-};
-
-const priorityColors: Record<number, "destructive" | "warning" | "secondary" | "outline"> = {
-  1: "destructive",
-  2: "warning",
-  3: "secondary",
-  4: "outline",
+const statusColors: Record<string, "destructive" | "warning" | "secondary" | "outline"> = {
+  "Ordered": "destructive",
+  "No Show": "warning",
+  "Needs to Reschedule": "secondary",
+  "Couldnt Schedule": "outline",
 };
 
 function formatLastUpdated(date: Date | null | undefined): string {
@@ -82,8 +85,11 @@ export function PatientQueueCard({
   onUpdatePatient,
   isCallActive,
   outboundAllowed,
+  loading,
   source = "simulation",
   lastUpdated,
+  activeCalls = [],
+  maxParallelCalls = 1,
 }: PatientQueueCardProps) {
   const [editingPatient, setEditingPatient] = useState<Patient | null>(null);
   const [editForm, setEditForm] = useState({
@@ -237,7 +243,7 @@ export function PatientQueueCard({
           <CardTitle className="flex items-center gap-2 text-lg">
             <Users className="h-5 w-5" />
             Outbound Queue
-            <InfoTooltip content="Patients awaiting outbound calls, sorted by priority. P1 = highest priority (abandoned, no AI call), P4 = lowest. Click Call to initiate." />
+            <InfoTooltip content="Patients awaiting outbound calls. Ordered by RadFlow status (Ordered → No Show → Needs to Reschedule), then by fewest total attempts (AI + human). At max attempts, status flips to Couldnt Schedule and the patient leaves the queue." />
           </CardTitle>
           <div className="flex items-center gap-2">
             <Badge
@@ -271,11 +277,43 @@ export function PatientQueueCard({
             Updated {formatLastUpdated(lastUpdated)}
           </div>
         )}
+        {maxParallelCalls > 1 && (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            <span className="text-xs text-muted-foreground">
+              Active calls {activeCalls.filter((c) => c.phase !== "voicemail").length}/{maxParallelCalls}
+            </span>
+            {activeCalls.map((c) => (
+              <Badge
+                key={c.patient_id}
+                variant={c.phase === "voicemail" ? "secondary" : c.phase === "active" ? "default" : "outline"}
+                className="text-[10px] tabular-nums"
+                title={`call_id=${c.call_id ?? "(pending)"}`}
+              >
+                {c.patient_name || c.patient_id}
+                {c.phase === "voicemail" && " · VM"}
+                {c.phase === "dispatched" && " · dialing"}
+              </Badge>
+            ))}
+          </div>
+        )}
       </CardHeader>
       <CardContent className="flex-1 p-0">
         <ScrollArea className="h-[400px]">
           <div className="space-y-1.5 px-6 pb-6">
-            {patients.length === 0 ? (
+            {loading ? (
+              <div className="space-y-2">
+                {[0, 1, 2, 3, 4].map((i) => (
+                  <div key={i} className="flex items-center gap-3 rounded-lg bg-muted/40 px-3 py-2.5">
+                    <Skeleton className="h-4 w-4 shrink-0" />
+                    <div className="flex-1 space-y-1.5">
+                      <Skeleton className="h-4 w-32" />
+                      <Skeleton className="h-3 w-48" />
+                    </div>
+                    <Skeleton className="h-8 w-16" />
+                  </div>
+                ))}
+              </div>
+            ) : patients.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
                 <UserRound className="h-10 w-10 mb-3 opacity-20" />
                 <p className="text-sm font-medium">No patients in queue</p>
@@ -293,16 +331,23 @@ export function PatientQueueCard({
                         {index + 1}
                       </span>
                       <span className="text-sm font-medium truncate">{patient.name}</span>
-                      <Badge variant={priorityColors[patient.priority_bucket]} className="text-[10px] px-1.5 py-0">
-                        P{patient.priority_bucket}
-                      </Badge>
+                      {patient.radflow_status && (
+                        <Badge
+                          variant={statusColors[patient.radflow_status] || "outline"}
+                          className="text-[10px] px-1.5 py-0"
+                        >
+                          {patient.radflow_status}
+                        </Badge>
+                      )}
                     </div>
                     <div className="flex items-center gap-2.5 mt-1 ml-7 text-xs text-muted-foreground">
+                      <span className="font-mono">{patient.patient_id}</span>
                       <span className="tabular-nums">{patient.phone}</span>
                       <span className="uppercase font-medium">{patient.language}</span>
-                      {patient.attempt_count > 0 && (
-                        <span className="tabular-nums">{patient.attempt_count} attempt{patient.attempt_count !== 1 ? "s" : ""}</span>
-                      )}
+                      <span className="tabular-nums" title="Total attempts (AI + human)">
+                        {patient.total_attempts ?? patient.attempt_count ?? 0} total
+                        {" "}(AI {patient.ai_attempt_count ?? 0} / human {patient.human_attempt_count ?? 0})
+                      </span>
                     </div>
                   </div>
                   <div className="flex items-center gap-1 ml-3 shrink-0">

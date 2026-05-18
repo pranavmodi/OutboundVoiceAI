@@ -15,26 +15,36 @@ import {
   Activity,
 } from "lucide-react";
 import { InfoTooltip } from "@/components/ui/info-tooltip";
+import { Skeleton } from "@/components/ui/skeleton";
 import type { QueueState } from "@/types";
 
 interface QueueStatusCardProps {
   queueState: QueueState | null;
   source?: "simulation" | "live";
+  loading?: boolean;
 }
 
-export function QueueStatusCard({ queueState, source = "simulation" }: QueueStatusCardProps) {
-  if (!queueState) {
+export function QueueStatusCard({ queueState, source = "simulation", loading }: QueueStatusCardProps) {
+  if (loading || !queueState) {
     return (
       <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-lg">
-            <Activity className="h-5 w-5" />
-            Queue Status
-          </CardTitle>
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="flex items-center gap-2 text-lg">
+              <Activity className="h-5 w-5" />
+              Queue Status
+            </CardTitle>
+            <Skeleton className="h-5 w-20" />
+          </div>
         </CardHeader>
-        <CardContent>
-          <div className="flex items-center justify-center py-8">
-            <p className="text-sm text-muted-foreground">Loading queue data...</p>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} className="rounded-lg bg-muted/50 p-3 space-y-2">
+                <Skeleton className="h-3 w-24" />
+                <Skeleton className="h-7 w-10" />
+              </div>
+            ))}
           </div>
         </CardContent>
       </Card>
