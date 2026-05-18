@@ -12,4 +12,11 @@ fi
 
 PORT="${BACKFILL_BACKEND_PORT:-8001}"
 echo "Starting backfill-backend on http://localhost:${PORT}"
-exec uvicorn app.main:app --reload --host 0.0.0.0 --port "${PORT}"
+
+if [ ! -x .venv/bin/uvicorn ]; then
+  echo "Error: .venv not found or uvicorn not installed. Run:"
+  echo "  python3 -m venv .venv && .venv/bin/pip install -r requirements.txt"
+  exit 1
+fi
+
+exec .venv/bin/uvicorn app.main:app --reload --host 0.0.0.0 --port "${PORT}"
