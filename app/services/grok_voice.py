@@ -6,8 +6,13 @@ level, with three documented deltas (per docs.x.ai/docs/guides/voice/agent):
 1. session.update audio format is NESTED. OpenAI uses flat string fields
    (input_audio_format / output_audio_format); xAI uses
    audio.input.format.{type,rate} / audio.output.format.{type,rate}.
-2. response.text.delta replaces OpenAI's response.output_text.delta
-   (irrelevant here — we only consume audio + audio_transcript events).
+2. Event-name renames:
+   - response.output_audio.delta            (xAI)  ←→ response.audio.delta            (OpenAI)
+   - response.output_audio_transcript.delta (xAI)  ←→ response.audio_transcript.delta (OpenAI)
+   - response.output_audio_transcript.done  (xAI)  ←→ response.audio_transcript.done  (OpenAI)
+   - response.text.delta                    (xAI)  ←→ response.output_text.delta      (OpenAI)
+   Note the inconsistent infix: audio events gain "output_" in xAI; text
+   events lose it. We only consume the audio + transcript events.
 3. xAI does NOT emit conversation.item.done, input_audio_buffer.timeout_triggered,
    or rate_limits.updated. We don't handle any of those in OpenAI either, so
    this is a no-op for us.
@@ -250,7 +255,12 @@ class GrokVoiceService(BaseVoiceService):
             data = json.loads(message)
             msg_type = data.get("type", "")
 
-            if self._verbose and msg_type not in ("response.audio.delta", "response.audio_transcript.delta"):
+            # Skip the two highest-frequency event types in verbose log.
+            # xAI's audio + transcript delta events both carry the "output_"
+            # infix in the type name (response.output_audio.delta /
+            # response.output_audio_transcript.delta) — different from
+            # OpenAI's response.audio.delta / response.audio_transcript.delta.
+            if self._verbose and msg_type not in ("response.output_audio.delta", "response.output_audio_transcript.delta"):
                 print(f"[GrokVoice] Received: {msg_type}")
 
             if msg_type == "session.created":
@@ -261,17 +271,19 @@ class GrokVoiceService(BaseVoiceService):
             elif msg_type == "session.updated":
                 pass
 
-            elif msg_type == "response.audio.delta":
+            elif msg_type == "response.output_audio.delta":
+                # xAI's name for the audio chunk event (OpenAI uses
+                # response.audio.delta — note: no "output_" prefix).
                 audio_b64 = data.get("delta", "")
                 if audio_b64 and self.on_audio:
                     await self.on_audio(base64.b64decode(audio_b64))
 
-            elif msg_type == "response.audio_transcript.delta":
+            elif msg_type == "response.output_audio_transcript.delta":
                 text = data.get("delta", "")
                 if text and self.on_transcript:
                     await self.on_transcript("ai", text)
 
-            elif msg_type == "response.audio_transcript.done":
+            elif msg_type == "response.output_audio_transcript.done":
                 text = data.get("transcript", "")
                 if text and self.on_transcript:
                     await self.on_transcript("ai_complete", text)

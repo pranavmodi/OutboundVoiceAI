@@ -378,7 +378,12 @@ class CallSession:
         self._call_mode = call_mode
         self._web_voicemail_simulated = False
         self._machine_detected = False
-        self._verbose = settings.dispatcher_settings.verbose_logging
+        # Env var override for voice-service verbose logging — used to debug
+        # the realtime WebSocket without touching DB settings or the UI.
+        # Set VOICE_VERBOSE=true on the backend process to force every voice
+        # service into verbose mode for this and future calls.
+        _env_verbose = (os.getenv("VOICE_VERBOSE", "") or "").strip().lower() in ("1", "true", "yes", "on")
+        self._verbose = settings.dispatcher_settings.verbose_logging or _env_verbose
 
         # v2 intake gate: evaluate eligibility and log the decision. The
         # returned decision drives whether the consent / recording
