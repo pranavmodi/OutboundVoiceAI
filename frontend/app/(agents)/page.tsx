@@ -707,8 +707,8 @@ export default function Dashboard() {
                       onSetQueueSource={handleSetQueueSource}
                       onSetPatientSource={handleSetPatientSource}
                       onSetActiveScenario={handleSetActiveScenario}
-                      onUpdateVoices={async (ov, gv) => {
-                        const newSettings = await api.updateVoices(ov, gv);
+                      onUpdateVoices={async (ov, gv, xv) => {
+                        const newSettings = await api.updateVoices(ov, gv, xv);
                         if (newSettings) setSettings(newSettings);
                       }}
                       onPreviewVoice={api.previewVoice}

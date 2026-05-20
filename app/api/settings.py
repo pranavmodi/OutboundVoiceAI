@@ -48,6 +48,7 @@ class DispatcherSettingsRequest(BaseModel):
     verbose_logging: bool = False
     openai_voice: str = "alloy"
     gemini_voice: str = "Aoede"
+    grok_voice: str = "eve"
     call_greeting: str = ""
     max_parallel_calls: int = 1
     dispatch_pacing_seconds: int = 1
@@ -125,7 +126,7 @@ class CallModeRequest(BaseModel):
 
 
 class VoiceProviderRequest(BaseModel):
-    voice_provider: str  # "openai" or "gemini"
+    voice_provider: str  # "openai" | "gemini" | "grok"
 
 
 class MockModeRequest(BaseModel):
@@ -189,6 +190,7 @@ async def settings_to_response(provider) -> SystemSettingsResponse:
             verbose_logging=settings.dispatcher_settings.verbose_logging,
             openai_voice=settings.dispatcher_settings.openai_voice,
             gemini_voice=settings.dispatcher_settings.gemini_voice,
+            grok_voice=settings.dispatcher_settings.grok_voice,
             call_greeting=settings.dispatcher_settings.call_greeting,
             max_parallel_calls=settings.dispatcher_settings.max_parallel_calls,
             dispatch_pacing_seconds=settings.dispatcher_settings.dispatch_pacing_seconds,
@@ -399,6 +401,7 @@ async def update_dispatcher_settings(request: DispatcherSettingsRequest):
         verbose_logging=request.verbose_logging,
         openai_voice=request.openai_voice,
         gemini_voice=request.gemini_voice,
+        grok_voice=request.grok_voice,
         call_greeting=request.call_greeting,
         max_parallel_calls=request.max_parallel_calls,
         dispatch_pacing_seconds=request.dispatch_pacing_seconds,
@@ -545,8 +548,8 @@ async def set_voice_provider(request: VoiceProviderRequest):
     """Set the voice provider (openai or gemini)."""
     from fastapi import HTTPException
 
-    if request.voice_provider not in ("openai", "gemini"):
-        raise HTTPException(status_code=400, detail="voice_provider must be 'openai' or 'gemini'")
+    if request.voice_provider not in ("openai", "gemini", "grok"):
+        raise HTTPException(status_code=400, detail="voice_provider must be 'openai', 'gemini', or 'grok'")
 
     provider = get_settings_provider()
     current_settings = await provider.get_settings()
@@ -648,6 +651,7 @@ async def update_call_greeting(request: CallGreetingRequest):
 
 OPENAI_VOICES = ["alloy", "ash", "ballad", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer", "verse"]
 GEMINI_VOICES = ["Aoede", "Charon", "Fenrir", "Kore", "Puck", "Leda", "Orus", "Perseus", "Zephyr"]
+GROK_VOICES = ["eve", "ara", "rex", "sal", "leo"]
 
 
 class VoicePreviewRequest(BaseModel):
@@ -663,6 +667,7 @@ class VoicePreviewRequest(BaseModel):
 class VoiceSettingsRequest(BaseModel):
     openai_voice: str = "alloy"
     gemini_voice: str = "Aoede"
+    grok_voice: str = "eve"
 
 
 @router.get("/voices")
@@ -673,8 +678,10 @@ async def get_voices():
     return {
         "openai_voices": OPENAI_VOICES,
         "gemini_voices": GEMINI_VOICES,
+        "grok_voices": GROK_VOICES,
         "openai_voice": settings.dispatcher_settings.openai_voice,
         "gemini_voice": settings.dispatcher_settings.gemini_voice,
+        "grok_voice": settings.dispatcher_settings.grok_voice,
     }
 
 
@@ -686,14 +693,17 @@ async def update_voices(request: VoiceSettingsRequest):
         raise HTTPException(400, f"Invalid OpenAI voice: {request.openai_voice}")
     if request.gemini_voice not in GEMINI_VOICES:
         raise HTTPException(400, f"Invalid Gemini voice: {request.gemini_voice}")
+    if request.grok_voice not in GROK_VOICES:
+        raise HTTPException(400, f"Invalid Grok voice: {request.grok_voice}")
 
     provider = get_settings_provider()
     settings = await provider.get_settings()
     ds = settings.dispatcher_settings
     ds.openai_voice = request.openai_voice
     ds.gemini_voice = request.gemini_voice
+    ds.grok_voice = request.grok_voice
     await provider.update_dispatcher_settings(ds)
-    print(f"[SETTINGS] voices → openai={request.openai_voice}, gemini={request.gemini_voice}")
+    print(f"[SETTINGS] voices → openai={request.openai_voice}, gemini={request.gemini_voice}, grok={request.grok_voice}")
     return await settings_response_and_broadcast(provider)
 
 
@@ -833,8 +843,48 @@ async def voice_preview(request: VoicePreviewRequest):
         )
         return FastResponse(content=wav_header + pcm_data, media_type="audio/wav")
 
+    elif request.provider == "grok":
+        if request.voice not in GROK_VOICES:
+            raise HTTPException(400, f"Invalid Grok voice: {request.voice}")
+        from app.providers.settings_provider import get_api_key_sync
+        api_key = get_api_key_sync("grok")
+        if not api_key:
+            raise HTTPException(500, "xAI Grok API key not configured")
+        # xAI TTS is a simple HTTP POST that returns raw audio bytes.
+        # Codec defaults to mp3; we ask for it explicitly so the
+        # Content-Type we hand back is unambiguous.
+        import httpx
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(
+                    "https://api.x.ai/v1/tts",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "text": request.text,
+                        "voice_id": request.voice,
+                        "language": "en",
+                        "output_format": {"codec": "mp3", "sample_rate": 24000},
+                    },
+                )
+            if resp.status_code != 200:
+                # xAI returns a JSON error body on failure.
+                detail = resp.text[:500] if resp.text else f"HTTP {resp.status_code}"
+                logger.error("[VoicePreview] Grok TTS failed: %s", detail)
+                raise HTTPException(500, f"Grok TTS failed (HTTP {resp.status_code}): {detail}")
+            audio_bytes = resp.content
+            logger.info("[VoicePreview] Grok OK, %d bytes", len(audio_bytes))
+            return FastResponse(content=audio_bytes, media_type="audio/mpeg")
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error("[VoicePreview] Grok TTS error: %s", e)
+            raise HTTPException(500, f"Grok TTS failed: {e}")
+
     else:
-        raise HTTPException(400, f"provider must be 'openai' or 'gemini'")
+        raise HTTPException(400, f"provider must be 'openai', 'gemini', or 'grok'")
 
 
 # --- API-key configuration ----------------------------------------------------
@@ -842,7 +892,7 @@ async def voice_preview(request: VoicePreviewRequest):
 # the key against the provider before saving; GET returns masked status only.
 
 class ApiKeyUpdateRequest(BaseModel):
-    provider: str  # "openai" or "gemini"
+    provider: str  # "openai" | "gemini" | "grok"
     api_key: str
 
 
@@ -855,6 +905,12 @@ class ApiKeyStatus(BaseModel):
 class ApiKeysStatusResponse(BaseModel):
     openai: ApiKeyStatus
     gemini: ApiKeyStatus
+    grok: ApiKeyStatus
+
+
+# Single source of truth for which provider names the API-keys endpoints
+# accept. Keep in sync with _API_KEY_ENV_NAMES in settings_provider.py.
+_API_KEY_PROVIDERS = ("openai", "gemini", "grok")
 
 
 def _mask_key(key: str) -> str:
@@ -939,6 +995,7 @@ async def get_api_keys_status():
     return ApiKeysStatusResponse(
         openai=_status_for("openai"),
         gemini=_status_for("gemini"),
+        grok=_status_for("grok"),
     )
 
 
@@ -954,8 +1011,8 @@ async def reveal_api_key(provider: str):
     this endpoint is the explicit "view" action behind the UI eye-toggle."""
     from fastapi import HTTPException
     provider_name = (provider or "").strip().lower()
-    if provider_name not in ("openai", "gemini"):
-        raise HTTPException(400, "provider must be 'openai' or 'gemini'")
+    if provider_name not in _API_KEY_PROVIDERS:
+        raise HTTPException(400, f"provider must be one of {_API_KEY_PROVIDERS}")
     # Refresh the cache from DB before reading
     await get_settings_provider().get_settings()
     status = _status_for(provider_name)
@@ -973,16 +1030,22 @@ async def update_api_key(request: ApiKeyUpdateRequest):
     from fastapi import HTTPException
 
     provider_name = (request.provider or "").strip().lower()
-    if provider_name not in ("openai", "gemini"):
-        raise HTTPException(400, "provider must be 'openai' or 'gemini'")
+    if provider_name not in _API_KEY_PROVIDERS:
+        raise HTTPException(400, f"provider must be one of {_API_KEY_PROVIDERS}")
     api_key = (request.api_key or "").strip()
     if not api_key:
         raise HTTPException(400, "api_key cannot be empty (use DELETE to clear)")
 
     if provider_name == "openai":
         await _validate_openai_key(api_key)
-    else:
+    elif provider_name == "gemini":
         await _validate_gemini_key(api_key)
+    elif provider_name == "grok":
+        # xAI keys are validated by format only; xAI doesn't expose a cheap
+        # `validate-credentials` endpoint and the realtime endpoint is the
+        # natural integration test.
+        if not api_key.startswith("xai-"):
+            raise HTTPException(400, "xAI keys must start with 'xai-'")
 
     provider = get_settings_provider()
     await provider.set_api_key(provider_name, api_key)
@@ -999,6 +1062,7 @@ async def update_api_key(request: ApiKeyUpdateRequest):
     return ApiKeysStatusResponse(
         openai=_status_for("openai"),
         gemini=_status_for("gemini"),
+        grok=_status_for("grok"),
     )
 
 
@@ -1008,8 +1072,8 @@ async def clear_api_key(provider: str):
     from fastapi import HTTPException
 
     provider_name = (provider or "").strip().lower()
-    if provider_name not in ("openai", "gemini"):
-        raise HTTPException(400, "provider must be 'openai' or 'gemini'")
+    if provider_name not in _API_KEY_PROVIDERS:
+        raise HTTPException(400, f"provider must be one of {_API_KEY_PROVIDERS}")
 
     settings_provider = get_settings_provider()
     await settings_provider.clear_api_key(provider_name)
@@ -1024,4 +1088,5 @@ async def clear_api_key(provider: str):
     return ApiKeysStatusResponse(
         openai=_status_for("openai"),
         gemini=_status_for("gemini"),
+        grok=_status_for("grok"),
     )

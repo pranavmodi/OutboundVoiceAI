@@ -56,6 +56,7 @@ import type {
 
 const OPENAI_VOICES = ["alloy", "ash", "ballad", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer", "verse"];
 const GEMINI_VOICES = ["Aoede", "Charon", "Fenrir", "Kore", "Puck", "Leda", "Orus", "Perseus", "Zephyr"];
+const GROK_VOICES = ["eve", "ara", "rex", "sal", "leo"];
 
 function VoiceRow({
   label,
@@ -129,12 +130,14 @@ function VoiceRow({
 function VoiceSelector({
   openaiVoice,
   geminiVoice,
+  grokVoice,
   onSave,
   onPreview,
 }: {
   openaiVoice: string;
   geminiVoice: string;
-  onSave: (openaiVoice: string, geminiVoice: string) => Promise<void>;
+  grokVoice: string;
+  onSave: (openaiVoice: string, geminiVoice: string, grokVoice: string) => Promise<void>;
   onPreview: (provider: string, voice: string) => Promise<string | null>;
 }) {
   return (
@@ -144,7 +147,7 @@ function VoiceSelector({
         provider="openai"
         voices={OPENAI_VOICES}
         currentVoice={openaiVoice}
-        onVoiceChange={(v) => onSave(v, geminiVoice)}
+        onVoiceChange={(v) => onSave(v, geminiVoice, grokVoice)}
         onPreview={onPreview}
       />
       <VoiceRow
@@ -152,7 +155,15 @@ function VoiceSelector({
         provider="gemini"
         voices={GEMINI_VOICES}
         currentVoice={geminiVoice}
-        onVoiceChange={(v) => onSave(openaiVoice, v)}
+        onVoiceChange={(v) => onSave(openaiVoice, v, grokVoice)}
+        onPreview={onPreview}
+      />
+      <VoiceRow
+        label="xAI Grok Voice"
+        provider="grok"
+        voices={GROK_VOICES}
+        currentVoice={grokVoice}
+        onVoiceChange={(v) => onSave(openaiVoice, geminiVoice, v)}
         onPreview={onPreview}
       />
     </div>
@@ -166,7 +177,7 @@ function ApiKeyRow({
   onSaved,
 }: {
   label: string;
-  provider: "openai" | "gemini";
+  provider: "openai" | "gemini" | "grok";
   status: { configured: boolean; source: "db" | "env" | "none"; preview: string } | undefined;
   onSaved: () => Promise<void>;
 }) {
@@ -371,6 +382,7 @@ function ApiKeysCard() {
         <div className="space-y-3">
           <ApiKeyRow label="OpenAI" provider="openai" status={status?.openai} onSaved={refresh} />
           <ApiKeyRow label="Google Gemini" provider="gemini" status={status?.gemini} onSaved={refresh} />
+          <ApiKeyRow label="xAI Grok" provider="grok" status={status?.grok} onSaved={refresh} />
         </div>
       )}
     </div>
@@ -394,7 +406,7 @@ interface OperatorConsoleProps {
   onSetQueueSource: (source: string) => Promise<void>;
   onSetPatientSource: (source: string) => Promise<void>;
   onSetActiveScenario: (id: string) => Promise<void>;
-  onUpdateVoices: (openaiVoice: string, geminiVoice: string) => Promise<void>;
+  onUpdateVoices: (openaiVoice: string, geminiVoice: string, grokVoice: string) => Promise<void>;
   onPreviewVoice: (provider: string, voice: string) => Promise<string | null>;
   onUpdateCallGreeting: (greeting: string) => Promise<void>;
 }
@@ -650,7 +662,7 @@ export function OperatorConsole({
         <div className="flex items-center gap-2">
           <Bot className="h-4 w-4 text-muted-foreground" />
           <h4 className="text-sm font-medium">Voice AI Provider</h4>
-          <InfoTooltip content="Choose which AI model powers the voice conversations. OpenAI uses GPT Realtime API. Gemini uses Google's Live API — typically faster and more natural sounding." />
+          <InfoTooltip content="Choose which AI model powers the voice conversations. OpenAI uses GPT Realtime API. Gemini uses Google's Live API — typically faster and more natural sounding. xAI uses Grok Voice Agent API." />
         </div>
         <div className="flex items-center gap-4">
           <Select value={settings?.voice_provider || "openai"} onValueChange={onVoiceProviderChange}>
@@ -668,19 +680,27 @@ export function OperatorConsole({
                   Google Gemini Live
                 </span>
               </SelectItem>
+              <SelectItem value="grok">
+                <span className="flex items-center gap-2">
+                  xAI Grok Voice
+                </span>
+              </SelectItem>
             </SelectContent>
           </Select>
-          <Badge variant="outline" className={
-            (settings?.voice_provider || "openai") === "gemini"
-              ? "text-blue-600 border-blue-600"
-              : "text-emerald-600 border-emerald-600"
-          }>
-            {(settings?.voice_provider || "openai") === "gemini" ? "Gemini" : "OpenAI"}
-          </Badge>
+          {(() => {
+            const provider = settings?.voice_provider || "openai";
+            const label = provider === "gemini" ? "Gemini" : provider === "grok" ? "Grok" : "OpenAI";
+            const color =
+              provider === "gemini" ? "text-blue-600 border-blue-600"
+              : provider === "grok" ? "text-purple-600 border-purple-600"
+              : "text-emerald-600 border-emerald-600";
+            return <Badge variant="outline" className={color}>{label}</Badge>;
+          })()}
         </div>
         <VoiceSelector
           openaiVoice={settings?.dispatcher_settings?.openai_voice || "alloy"}
           geminiVoice={settings?.dispatcher_settings?.gemini_voice || "Aoede"}
+          grokVoice={settings?.dispatcher_settings?.grok_voice || "eve"}
           onSave={onUpdateVoices}
           onPreview={onPreviewVoice}
         />

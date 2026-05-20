@@ -69,7 +69,7 @@ export interface CallLog {
   call_status: string;         // "called" | "failed" | "in_progress"
   call_disposition: string;    // "transferred" | "hung_up" | "no_answer" | etc.
   mock_mode: boolean;          // true if this call was redirected to a test number
-  voice_provider: string;      // "openai" or "gemini"
+  voice_provider: string;      // "openai" | "gemini" | "grok"
   transfer_attempted: boolean;
   transfer_success: boolean;
   voicemail_left: boolean;
@@ -201,6 +201,7 @@ export interface DispatcherSettings {
   verbose_logging?: boolean;
   openai_voice?: string;
   gemini_voice?: string;
+  grok_voice?: string;
   call_greeting?: string;
   // Phase 7: parallel-call cap (1 = single-call legacy behavior; ceiling 10).
   max_parallel_calls?: number;
@@ -243,6 +244,7 @@ export interface ApiKeyStatus {
 export interface ApiKeysStatusResponse {
   openai: ApiKeyStatus;
   gemini: ApiKeyStatus;
+  grok: ApiKeyStatus;
 }
 
 export interface TimeSlotStats {

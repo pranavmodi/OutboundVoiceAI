@@ -408,6 +408,9 @@ class CallSession:
         if voice_provider == "gemini":
             from app.services.gemini_voice import GeminiVoiceService
             self._voice_service = GeminiVoiceService(audio_format=audio_format, verbose=self._verbose, voice=ds.gemini_voice, call_greeting=effective_greeting)
+        elif voice_provider == "grok":
+            from app.services.grok_voice import GrokVoiceService
+            self._voice_service = GrokVoiceService(audio_format=audio_format, verbose=self._verbose, voice=ds.grok_voice, call_greeting=effective_greeting)
         else:
             from app.services.realtime_voice import RealtimeVoiceService
             self._voice_service = RealtimeVoiceService(audio_format=audio_format, verbose=self._verbose, voice=ds.openai_voice, call_greeting=effective_greeting)

@@ -458,11 +458,19 @@ export function useApi() {
     }
   }, []);
 
-  const updateVoices = useCallback(async (openaiVoice: string, geminiVoice: string): Promise<SystemSettings | null> => {
+  const updateVoices = useCallback(async (
+    openaiVoice: string,
+    geminiVoice: string,
+    grokVoice: string,
+  ): Promise<SystemSettings | null> => {
     try {
       return await fetchApi<SystemSettings>("/api/settings/voices", {
         method: "PUT",
-        body: JSON.stringify({ openai_voice: openaiVoice, gemini_voice: geminiVoice }),
+        body: JSON.stringify({
+          openai_voice: openaiVoice,
+          gemini_voice: geminiVoice,
+          grok_voice: grokVoice,
+        }),
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unknown error");
@@ -601,7 +609,7 @@ export function useApi() {
     }
   }, []);
 
-  const updateApiKey = useCallback(async (provider: "openai" | "gemini", apiKey: string): Promise<ApiKeysStatusResponse> => {
+  const updateApiKey = useCallback(async (provider: "openai" | "gemini" | "grok", apiKey: string): Promise<ApiKeysStatusResponse> => {
     const resp = await fetch(`${API_BASE}/api/settings/api-keys`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -618,7 +626,7 @@ export function useApi() {
     return await resp.json();
   }, []);
 
-  const clearApiKey = useCallback(async (provider: "openai" | "gemini"): Promise<ApiKeysStatusResponse | null> => {
+  const clearApiKey = useCallback(async (provider: "openai" | "gemini" | "grok"): Promise<ApiKeysStatusResponse | null> => {
     try {
       return await fetchApi<ApiKeysStatusResponse>(`/api/settings/api-keys/${provider}`, { method: "DELETE" });
     } catch (e) {
@@ -627,7 +635,7 @@ export function useApi() {
     }
   }, []);
 
-  const revealApiKey = useCallback(async (provider: "openai" | "gemini"): Promise<string | null> => {
+  const revealApiKey = useCallback(async (provider: "openai" | "gemini" | "grok"): Promise<string | null> => {
     try {
       const data = await fetchApi<{ provider: string; source: string; api_key: string }>(
         `/api/settings/api-keys/${provider}/reveal`

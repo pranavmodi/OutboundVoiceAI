@@ -51,6 +51,8 @@ class DispatcherSettings:
     verbose_logging: bool = False
     openai_voice: str = "alloy"
     gemini_voice: str = "Aoede"
+    # xAI Grok Voice Agent voices: eve, ara, rex, sal, leo (plus custom IDs).
+    grok_voice: str = "eve"
     call_greeting: str = DEFAULT_CALL_GREETING
     # Phase 7: parallel-call cap. 1 means single-call (legacy behavior).
     # Hard ceiling enforced in the settings provider; keep low (1-10) until
@@ -85,10 +87,11 @@ class ApiKeys:
     """Per-provider API keys stored in DB so they can be updated without restart.
 
     Empty string means "not set in DB" — consumers should fall back to the env
-    var of the same name (OPENAI_API_KEY, GEMINI_API_KEY).
+    var of the same name (OPENAI_API_KEY, GEMINI_API_KEY, XAI_API_KEY).
     """
     openai: str = ""
     gemini: str = ""
+    grok: str = ""
 
 
 DEFAULT_V2_CONSENT_DISCLOSURE = (
@@ -151,7 +154,7 @@ class SystemSettings:
     call_mode: str = "web"  # "web" or "twilio"
     mock_mode: bool = False
     mock_phone: str = ""  # redirect Twilio calls/SMS here when mock_mode=True
-    voice_provider: str = "openai"  # "openai" or "gemini"
+    voice_provider: str = "openai"  # "openai" | "gemini" | "grok"
     daily_report: DailyReportConfig = field(default_factory=DailyReportConfig)
     intake_v2: IntakeV2Settings = field(default_factory=IntakeV2Settings)
     api_keys: ApiKeys = field(default_factory=ApiKeys)
