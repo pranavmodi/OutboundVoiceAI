@@ -527,28 +527,43 @@ class RealtimeVoiceService(BaseVoiceService):
             await self._send({"type": "response.create"})
 
     async def start_conversation(self):
-        """Start the conversation with AI greeting."""
+        """Start the conversation with AI greeting.
+
+        Sends a single ``response.create`` with the priming user-message
+        inline via ``response.input`` — saves one WebSocket roundtrip vs
+        the older two-message form (conversation.item.create then
+        response.create). The model receives both at once and can begin
+        generating audio without waiting for two separate sends to be
+        parsed.
+
+        The priming message is response-scoped — OpenAI doesn't add it
+        to the conversation history. That's fine here: the patient name
+        is referenced once for the greeting and then echoed back by the
+        agent's own audio_transcript, which DOES land in history.
+        """
         if not self._ws:
             return
 
-        # Send initial user context as a text message
         patient_name = self._session.patient_name if self._session else "there"
         first_name = patient_name.split()[0] if patient_name else "there"
 
         await self._send({
-            "type": "conversation.item.create",
-            "item": {
-                "type": "message",
-                "role": "user",
-                "content": [
+            "type": "response.create",
+            "response": {
+                "input": [
                     {
-                        "type": "input_text",
-                        "text": f"[System: The call has just connected. The patient's name is {first_name}. Please greet them and begin the call.]",
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_text",
+                                "text": f"[System: The call has just connected. The patient's name is {first_name}. Please greet them and begin the call.]",
+                            }
+                        ],
                     }
                 ],
             },
         })
-        await self._send({"type": "response.create"})
 
     async def inject_system_message(self, text: str) -> None:
         """Inject a system-level text message into the active conversation."""

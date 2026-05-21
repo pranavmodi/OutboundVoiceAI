@@ -55,6 +55,10 @@ def _row_to_call_log(row: CallLogRow) -> CallLog:
     cl.recording_duration_seconds = row.recording_duration_seconds
     cl.recording_format = row.recording_format
 
+    # Timings (per-call latency milestones, snake_case key → cumulative ms).
+    # Empty dict on legacy rows pre-migration; guarded so legacy queries don't crash.
+    cl.timings = dict(getattr(row, "timings", None) or {})
+
     # Convert JSONB transcript list to TranscriptEntry objects
     raw = row.transcript or []
     cl.transcript = []
@@ -363,7 +367,7 @@ class CallLogProvider:
 
         return len(rows)
 
-    async def end_call(self, call_id: str, outcome: CallOutcome):
+    async def end_call(self, call_id: str, outcome: CallOutcome, timings: Optional[dict] = None):
         now = datetime.now(timezone.utc)
         async with AsyncSessionLocal() as session:
             result = await session.execute(
@@ -375,6 +379,12 @@ class CallLogProvider:
                 row.outcome = outcome.value
                 if row.started_at:
                     row.duration_seconds = int((now - row.started_at).total_seconds())
+                if timings:
+                    # Merge with anything already on the row — last write wins
+                    # per key. Lets a partial timings dict (e.g. a call that
+                    # errored before first_audio) coexist with any pre-existing
+                    # values.
+                    row.timings = {**(row.timings or {}), **timings}
 
                 # Derive call_status + call_disposition from the full context
                 transcript = row.transcript or []

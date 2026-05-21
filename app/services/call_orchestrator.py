@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import os
+import time
 from typing import Optional, Callable, Any
 
 from app.models import CallLog, CallOutcome, Patient, SystemSettings
@@ -72,6 +73,36 @@ class CallSession:
         self._transfer.on_status_update = self.on_status_update
         self._carrier_failure.on_status_update = self.on_status_update
         self._carrier_failure.verbose = self._verbose
+
+    def _timing(self, key: str, label: Optional[str] = None) -> None:
+        """Record + log a latency milestone for the current call.
+
+        ``key`` is a stable snake_case identifier persisted as a JSON key
+        in call_logs.timings (e.g. "voice_connected", "first_audio_out").
+        ``label`` is the optional human-readable string printed to logs;
+        defaults to ``key``.
+
+        Always-on (not verbose-gated) so the timings are captured on every
+        production call. Output:
+
+          [Timing] CALL-abc12345 voice_connected (+412ms)
+
+        Cheap (a single time.monotonic + print + dict assignment); fires
+        ~6 times per call. Persisted to the row at end_call.
+        """
+        t0 = getattr(self, "_t0", None)
+        if t0 is None:
+            return
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
+        # Last write wins if the same key fires twice (e.g. media stream
+        # connect with success=False then success=True on retry) — that's
+        # the right behavior for these milestones.
+        if getattr(self, "_timings", None) is None:
+            self._timings = {}
+        self._timings[key] = elapsed_ms
+        call_tag = self._current_call.call_id[:8] if self._current_call else "????????"
+        printable = label or key
+        print(f"[Timing] CALL-{call_tag} {printable} (+{elapsed_ms}ms)")
 
     async def _evaluate_intake_v2_gate(self, call, patient, intake_v2_settings):
         """Evaluate the v2 intake gate, log the decision, return it.
@@ -325,6 +356,14 @@ class CallSession:
         test.
         """
         self._last_start_error = None
+        # Stopwatch for time-to-first-speech measurement. Sampled at every
+        # milestone via _timing(); grep '[Timing]' on prod logs to see where
+        # time goes between dispatcher decision and patient hearing the AI.
+        # The collected dict is persisted to call_logs.timings at end_call
+        # so the history UI can show TTFS badges and the full breakdown.
+        self._t0 = time.monotonic()
+        self._timings: dict[str, int] = {}
+        self._first_audio_logged = False
         # Per-session refusal: a single CallSession can only hold one live
         # call at a time. Parallelism comes from creating multiple sessions,
         # not from reusing one. Dispatcher gating handles cross-session caps.
@@ -429,11 +468,13 @@ class CallSession:
         provider_label = voice_provider.capitalize()
         if self._verbose:
             print(f"[CallOrchestrator] Connecting to {provider_label} Realtime for call {call.call_id}...")
+        self._timing("voice_connecting", f"connecting to {provider_label}")
         success = await self._voice_service.connect(
             call.call_id,
             patient.name,
             normalize_language_code(patient.language),
         )
+        self._timing("voice_connected", f"{provider_label} connect done success={success}")
         if not success:
             print(f"[CallOrchestrator] {provider_label} Realtime connection FAILED for call {call.call_id}")
             self._last_start_error = f"Failed to connect to {provider_label} Realtime API"
@@ -492,12 +533,14 @@ class CallSession:
 
                 status_callback_url = f"{backend_host}/api/twilio/status"
                 recording_callback_url = f"{backend_host}/api/twilio/recording-status/{call.call_id}"
+                self._timing("twilio_dial_requested")
                 call_sid = place_twilio_call(
                     to_number=dial_number,
                     twiml_url=twiml_url,
                     status_callback_url=status_callback_url,
                     recording_status_callback_url=recording_callback_url,
                 )
+                self._timing("twilio_dial_accepted", "twilio dial accepted (call SID issued)")
                 self._twilio_call_sid = call_sid
                 self._voicemail_handled = False
                 self._machine_detected = False
@@ -543,6 +586,7 @@ class CallSession:
             if self._verbose:
                 print(f"[CallOrchestrator] Waiting for Twilio media stream to connect for call {call.call_id}...")
             connected = await self._twilio_bridge.wait_for_connection()
+            self._timing("media_stream_connected", f"twilio media stream wait done connected={connected}")
             if not connected:
                 print(f"[CallOrchestrator] Twilio media stream timed out for call {call.call_id}")
                 self._last_start_error = "Twilio media stream did not connect (call may not have been answered)"
@@ -590,7 +634,9 @@ class CallSession:
             if self.on_status_update:
                 await self.on_status_update("Machine detected — waiting for beep before speaking")
         else:
+            self._timing("start_conversation_sending")
             await self._voice_service.start_conversation()
+            self._timing("start_conversation_sent", "start_conversation sent — waiting on first audio")
             if self._verbose:
                 print(f"[CallOrchestrator] Conversation started for call {call.call_id}")
 
@@ -655,7 +701,13 @@ class CallSession:
             self._twilio_bridge = None
 
             call_log_provider = get_call_log_provider()
-            await call_log_provider.end_call(call.call_id, outcome)
+            # Persist the time-to-first-speech milestones collected during
+            # the call. Empty dict on calls that bailed before _t0 was set
+            # (e.g. concurrent-call refusal at the very top of start_call).
+            await call_log_provider.end_call(
+                call.call_id, outcome,
+                timings=dict(getattr(self, "_timings", None) or {}),
+            )
 
             if patient:
                 # Use the derived call_disposition (e.g. "no_answer") rather than
@@ -762,6 +814,9 @@ class CallSession:
 
     async def _handle_audio(self, audio_data: bytes):
         """Handle audio output from voice service."""
+        if not self._first_audio_logged:
+            self._first_audio_logged = True
+            self._timing("first_audio_out", "FIRST AUDIO OUT — patient hears AI now")
         if self.on_audio_output:
             await self.on_audio_output(audio_data)
 

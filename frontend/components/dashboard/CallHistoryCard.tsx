@@ -160,6 +160,126 @@ function getDateKeyFromCall(call: CallLog): string {
   return toDateKey(new Date(source));
 }
 
+// Human-friendly labels for the snake_case milestone keys persisted on the
+// call_log row. Keep in sync with the keys passed to CallSession._timing().
+const TIMING_LABELS: Record<string, string> = {
+  voice_connecting: "Voice service: connect started",
+  voice_connected: "Voice service: connected",
+  twilio_dial_requested: "Twilio: dial requested",
+  twilio_dial_accepted: "Twilio: dial accepted (SID issued)",
+  media_stream_connected: "Twilio: media stream connected (patient picked up)",
+  start_conversation_sending: "Conversation: start sent to model",
+  start_conversation_sent: "Conversation: start acknowledged",
+  first_audio_out: "First audio out — patient hears AI",
+};
+
+interface TimingRow {
+  key: string;
+  label: string;
+  cumulativeMs: number;
+  deltaMs: number;
+}
+
+// Convert the dict into a sorted list of milestones with deltas so the UI
+// can highlight where time was spent. Sort by cumulative ms ascending so
+// the order reflects what actually happened on the call.
+function rowsFromTimings(timings: Record<string, number> | undefined): TimingRow[] {
+  if (!timings) return [];
+  const entries = Object.entries(timings).filter(([, v]) => typeof v === "number");
+  entries.sort((a, b) => a[1] - b[1]);
+  const rows: TimingRow[] = [];
+  let prev = 0;
+  for (const [key, value] of entries) {
+    const cumulativeMs = value as number;
+    rows.push({
+      key,
+      label: TIMING_LABELS[key] ?? key,
+      cumulativeMs,
+      deltaMs: cumulativeMs - prev,
+    });
+    prev = cumulativeMs;
+  }
+  return rows;
+}
+
+// Full milestone breakdown for the Events modal. Highlights the slowest
+// gap with an amber row so a debugger sees the bottleneck at a glance.
+function TimingsBreakdown({ timings }: { timings: Record<string, number> | undefined }) {
+  const rows = rowsFromTimings(timings);
+  if (rows.length === 0) return null;
+
+  // Find the biggest delta (excluding the first row whose delta is just
+  // the cumulative-from-zero). That's the natural bottleneck per call.
+  const deltasOnly = rows.slice(1);
+  const maxDelta = deltasOnly.length > 0
+    ? Math.max(...deltasOnly.map((r) => r.deltaMs))
+    : 0;
+
+  return (
+    <div className="rounded-lg border bg-muted/10 mb-4">
+      <div className="px-4 py-2 border-b text-xs uppercase tracking-wide text-muted-foreground font-medium">
+        Timings (cumulative since call start)
+      </div>
+      <div className="divide-y">
+        {rows.map((row, idx) => {
+          const isBottleneck = idx > 0 && row.deltaMs === maxDelta && maxDelta > 0;
+          return (
+            <div
+              key={row.key}
+              className={`px-4 py-1.5 flex items-center justify-between text-xs tabular-nums ${
+                isBottleneck ? "bg-amber-50 dark:bg-amber-950/30" : ""
+              }`}
+            >
+              <span className="text-foreground/80 truncate pr-3" title={row.key}>
+                {row.label}
+              </span>
+              <span className="flex items-center gap-3 shrink-0">
+                {idx > 0 && (
+                  <span className={isBottleneck ? "text-amber-700 dark:text-amber-300 font-semibold" : "text-muted-foreground"}>
+                    +{row.deltaMs.toLocaleString()} ms
+                  </span>
+                )}
+                <span className="text-foreground font-mono w-20 text-right">
+                  {row.cumulativeMs.toLocaleString()} ms
+                </span>
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// Time-to-first-speech: the key milestone for perceived call-start latency.
+// Color-coded so a slow call jumps out of the list at a glance.
+//   < 2s  → green   (target)
+//   2-4s  → amber   (acceptable but worth investigating)
+//   > 4s  → red     (likely a problem)
+// Hidden when no timing data (legacy calls pre-rollout, or calls that
+// errored before first_audio_out fired).
+function TtfsBadge({ timings }: { timings: Record<string, number> | undefined }) {
+  const ms = timings?.first_audio_out;
+  if (typeof ms !== "number" || ms <= 0) return null;
+  const seconds = ms / 1000;
+  const color =
+    ms < 2000
+      ? "border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300"
+      : ms < 4000
+      ? "border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300"
+      : "border-red-300 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-950/40 dark:text-red-300";
+  return (
+    <Badge
+      variant="outline"
+      className={`text-[10px] px-1.5 py-0 shrink-0 tabular-nums ${color}`}
+      title={`Time to first speech: ${ms} ms — the elapsed time from call-start to the moment the patient first heard the AI.`}
+    >
+      TTFS {seconds.toFixed(1)}s
+    </Badge>
+  );
+}
+
+
 function getDateLabel(dateKey: string): string {
   if (dateKey === "unknown-date") return "Unknown Date";
   const today = new Date();
@@ -610,6 +730,7 @@ export function CallHistoryCard({ calls, callsTotal, onRefresh, onLoadMore, hasM
                                           MOCK
                                         </Badge>
                                       )}
+                                      <TtfsBadge timings={call.timings} />
                                     </div>
                                     <div className="flex items-center gap-1.5 mt-0.5">
                                       <span className="text-xs text-muted-foreground tabular-nums">
@@ -944,6 +1065,9 @@ export function CallHistoryCard({ calls, callsTotal, onRefresh, onLoadMore, hasM
                     </div>
                   </div>
                 </div>
+
+                {/* Timings breakdown — bottleneck-finder for latency tuning */}
+                <TimingsBreakdown timings={eventsCall.timings} />
 
                 {/* Timeline */}
                 <div className="flex-1 min-h-0 overflow-y-auto rounded-lg border bg-muted/10">

@@ -77,6 +77,10 @@ export interface CallLog {
   preferred_callback_time?: string | null;
   queue_snapshot: QueueState | null;
   transcript: TranscriptEntry[];
+  // Per-call latency milestones (snake_case key → cumulative ms since
+  // start_call). Empty {} for calls placed before the timings rollout
+  // or calls that bailed before _timing() fired.
+  timings: Record<string, number>;
   error_code: string | null;
   error_message: string | null;
   recording_sid?: string | null;

@@ -778,6 +778,7 @@ export default function Dashboard() {
                 sms_sent: false,
                 queue_snapshot: null,
                 transcript: [],
+                timings: {},
                 error_code: null,
                 error_message: null,
               } as CallLog) : dashboard.activeCall}

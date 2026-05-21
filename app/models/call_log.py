@@ -153,6 +153,12 @@ class CallLog:
     error_code: Optional[str] = None
     error_message: Optional[str] = None
 
+    # Per-call latency milestones. Keys are stable snake_case identifiers
+    # (e.g. "voice_connected", "first_audio_out"); values are cumulative
+    # milliseconds since start_call entry. Populated by CallSession._timing
+    # and written at end_call. Empty {} on legacy rows.
+    timings: dict = field(default_factory=dict)
+
     def add_transcript(self, speaker: str, text: str):
         """Add a transcript entry."""
         self.transcript.append(TranscriptEntry(speaker=speaker, text=text))
@@ -187,6 +193,7 @@ class CallLog:
             "preferred_callback_time": self.preferred_callback_time,
             "queue_snapshot": self.queue_snapshot,
             "transcript": [t.to_dict() for t in self.transcript],
+            "timings": dict(self.timings or {}),
             "error_code": self.error_code,
             "error_message": self.error_message,
             "recording_sid": self.recording_sid,
