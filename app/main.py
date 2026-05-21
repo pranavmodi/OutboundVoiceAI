@@ -29,6 +29,26 @@ async def lifespan(app: FastAPI):
     # Copy any env-var API keys into the DB on first boot. Subsequent
     # changes from the UI take effect without restart via the cache.
     await get_settings_provider().bootstrap_api_keys_from_env()
+    # Sweep orphaned in_progress call_log rows from previous runs. Any
+    # call started >10 min ago that still says "in_progress" was almost
+    # certainly killed mid-call (backend restart, missed Twilio webhook,
+    # page closed during /v2-test). Mark them DISCONNECTED so the history
+    # view doesn't show ghosts forever.
+    try:
+        from app.providers import get_call_log_provider
+        clp = get_call_log_provider()
+        # First, relabel any rows the earlier sweep marked as FAILED+
+        # TECHNICAL_ERROR — those should be COMPLETED so the badge reads
+        # neutrally. One-shot retroactive migration; idempotent.
+        relabeled = await clp.relabel_swept_technical_errors()
+        if relabeled:
+            print(f"[STARTUP] relabeled {relabeled} previously-swept rows as completed")
+        swept = await clp.sweep_stale_in_progress_calls()
+        if swept:
+            print(f"[STARTUP] swept {swept} stale in_progress call_log rows")
+    except Exception as e:
+        # Best-effort cleanup — never block startup on a sweep failure.
+        print(f"[STARTUP] in_progress sweep failed (non-fatal): {e}")
     # Apply persisted source settings
     settings = await get_settings_provider().get_settings()
     set_queue_source(settings.queue_source)

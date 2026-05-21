@@ -1,6 +1,6 @@
 """Call log provider — DB-backed."""
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from sqlalchemy import select, delete, func, case, extract, text
@@ -268,6 +268,100 @@ class CallLogProvider:
                 })
                 row.transcript = current
                 await session.commit()
+
+    async def relabel_swept_technical_errors(self) -> int:
+        """One-shot migration: rows previously swept as technical_error
+        (when this method labelled them FAILED+TECHNICAL_ERROR) should be
+        relabeled as COMPLETED so they read neutrally.
+
+        Heuristic: outcome='disconnected' AND call_disposition='technical_error'.
+        That combination is only produced by an older version of
+        sweep_stale_in_progress_calls — the live end_call path always uses
+        derive_status_and_disposition, which never emits this pair (a real
+        DISCONNECTED outcome derives to either CALLED+HUNG_UP or
+        FAILED+DISCONNECTED_NUMBER depending on had_patient_speech /
+        duration; a real TECHNICAL_ERROR disposition comes from
+        outcome=FAILED). Idempotent — once relabeled the row no longer
+        matches the filter.
+        """
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(CallLogRow).where(
+                    CallLogRow.outcome == "disconnected",
+                    CallLogRow.call_disposition == "technical_error",
+                )
+            )
+            rows = list(result.scalars().all())
+            for row in rows:
+                row.outcome = CallOutcome.COMPLETED.value
+                status, disposition = derive_status_and_disposition(
+                    outcome=CallOutcome.COMPLETED,
+                    error_code=row.error_code,
+                    had_patient_speech=False,
+                    duration_seconds=row.duration_seconds or 0,
+                )
+                row.call_status = status.value
+                row.call_disposition = disposition.value
+            if rows:
+                await session.commit()
+        return len(rows)
+
+    async def sweep_stale_in_progress_calls(self, older_than_minutes: int = 10) -> int:
+        """Mark orphaned in_progress call_log rows as DISCONNECTED.
+
+        A row gets stuck at outcome='in_progress' when the orchestrator's
+        end_call cleanup never runs — backend killed mid-call, Twilio
+        webhook missed, page closed mid-/v2-test call, etc. Such rows
+        clutter the history view forever ("In Progress" with 0:00 duration)
+        and inflate active-call counts.
+
+        Sweeps any row with outcome='in_progress' and started_at older than
+        ``older_than_minutes`` (default 10), setting:
+          - ended_at = now
+          - duration_seconds = now - started_at
+          - outcome = COMPLETED (→ derives to CallStatus.CALLED +
+            CallDisposition.COMPLETED so the history badge reads neutrally
+            instead of as a system error; if anything went wrong it's
+            already captured in the dispatcher_events / voice_error log
+            for that call, and that's where to look for diagnostics).
+
+        Idempotent: re-running on a clean DB is a no-op. Safe to call from
+        the FastAPI lifespan startup hook.
+
+        Returns the number of rows updated.
+        """
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(minutes=older_than_minutes)
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(CallLogRow).where(
+                    CallLogRow.outcome == "in_progress",
+                    CallLogRow.started_at < cutoff,
+                )
+            )
+            rows = result.scalars().all()
+            for row in rows:
+                row.outcome = CallOutcome.COMPLETED.value
+                row.ended_at = now
+                if row.started_at:
+                    row.duration_seconds = int((now - row.started_at).total_seconds())
+                status, disposition = derive_status_and_disposition(
+                    outcome=CallOutcome.COMPLETED,
+                    error_code=row.error_code,
+                    had_patient_speech=False,  # can't tell post-hoc; doesn't affect COMPLETED branch
+                    duration_seconds=row.duration_seconds or 0,
+                )
+                row.call_status = status.value
+                row.call_disposition = disposition.value
+            if rows:
+                await session.commit()
+
+        # Drop them from the in-memory active set too so dispatcher slots
+        # don't stay reserved against ghosts.
+        for row in rows:
+            self._active_call_ids.pop(row.call_id, None)
+
+        return len(rows)
 
     async def end_call(self, call_id: str, outcome: CallOutcome):
         now = datetime.now(timezone.utc)
