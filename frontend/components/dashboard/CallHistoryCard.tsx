@@ -589,11 +589,17 @@ export function CallHistoryCard({ calls, callsTotal, onRefresh, onLoadMore, hasM
                                         className={`text-[10px] px-1.5 py-0 shrink-0 ${
                                           call.voice_provider === "gemini"
                                             ? "border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-300"
+                                            : call.voice_provider === "grok"
+                                            ? "border-purple-300 bg-purple-50 text-purple-700 dark:border-purple-800 dark:bg-purple-950/40 dark:text-purple-300"
                                             : "border-violet-300 bg-violet-50 text-violet-700 dark:border-violet-800 dark:bg-violet-950/40 dark:text-violet-300"
                                         }`}
                                         title={`Voice provider: ${call.voice_provider || "openai"}`}
                                       >
-                                        {(call.voice_provider || "openai") === "gemini" ? "Gemini" : "OpenAI"}
+                                        {call.voice_provider === "gemini"
+                                          ? "Gemini"
+                                          : call.voice_provider === "grok"
+                                          ? "Grok"
+                                          : "OpenAI"}
                                       </Badge>
                                       {call.mock_mode && (
                                         <Badge
