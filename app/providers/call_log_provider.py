@@ -144,6 +144,10 @@ class CallLogProvider:
         cl.preferred_callback_time = None
         cl.queue_snapshot = queue_snapshot
         cl.transcript = []
+        # CallLog uses __new__ here to skip the dataclass __init__, so the
+        # default_factory for timings never fires. Set it explicitly — the
+        # to_dict path reads self.timings unconditionally.
+        cl.timings = {}
         cl.error_code = None
         cl.error_message = None
         cl.recording_sid = None

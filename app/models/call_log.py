@@ -193,7 +193,11 @@ class CallLog:
             "preferred_callback_time": self.preferred_callback_time,
             "queue_snapshot": self.queue_snapshot,
             "transcript": [t.to_dict() for t in self.transcript],
-            "timings": dict(self.timings or {}),
+            # getattr guard: any code path that builds CallLog via __new__
+            # (e.g. CallLogProvider.create_call) without setting timings will
+            # otherwise crash to_dict() mid-call. Defensive — the dispatcher
+            # broadcasts to_dict on every status update, so this MUST NOT raise.
+            "timings": dict(getattr(self, "timings", None) or {}),
             "error_code": self.error_code,
             "error_message": self.error_message,
             "recording_sid": self.recording_sid,

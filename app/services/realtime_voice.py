@@ -19,7 +19,25 @@ if _env_path.exists():
 
 
 OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime"
-OPENAI_MODEL = os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-2025-08-28")
+OPENAI_MODEL = os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime")
+
+
+def _audio_format_spec(audio_format: str, twilio_rate: int = 8000, pcm_rate: int = 24000) -> dict:
+    """Translate the orchestrator's flat audio_format string into the GA
+    Realtime API's nested ``{type, rate}`` shape.
+
+    - "g711_ulaw" (Twilio mode)  → {"type": "audio/pcmu"}      (8 kHz fixed)
+    - "g711_alaw"                → {"type": "audio/pcma"}      (8 kHz fixed)
+    - "pcm16"     (web mode)     → {"type": "audio/pcm", "rate": 24000}
+    - anything else              → PCM 24 kHz (defensive default — fail loud
+                                   at OpenAI rather than silently mis-encode)
+    """
+    fmt = (audio_format or "").strip().lower()
+    if fmt in ("g711_ulaw", "pcmu", "audio/pcmu"):
+        return {"type": "audio/pcmu"}
+    if fmt in ("g711_alaw", "pcma", "audio/pcma"):
+        return {"type": "audio/pcma"}
+    return {"type": "audio/pcm", "rate": pcm_rate}
 
 
 @dataclass
@@ -247,10 +265,12 @@ class RealtimeVoiceService(BaseVoiceService):
             return False
 
         try:
+            # GA Realtime API (post-2026-05-12): the OpenAI-Beta header is
+            # rejected with invalid_request_error.beta_api_shape_disabled.
+            # Auth is the only header we send.
             url = f"{OPENAI_REALTIME_URL}?model={OPENAI_MODEL}"
             headers = {
                 "Authorization": f"Bearer {self._api_key}",
-                "OpenAI-Beta": "realtime=v1",
             }
 
             print(f"[RealtimeVoice] Connecting to {url}...")
@@ -289,28 +309,47 @@ class RealtimeVoiceService(BaseVoiceService):
             return False
 
     async def _configure_session(self, patient_name: str, patient_language: str = "en"):
-        """Configure the realtime session."""
+        """Configure the realtime session — GA shape (post-2026-05-12).
+
+        Differences from the deprecated beta shape that this method used to
+        send:
+        - session.type = "realtime" is now required.
+        - "modalities" → "output_modalities" (and dropped "text"; transcripts
+          come through response.output_audio_transcript.delta events anyway).
+        - Audio config moved under session.audio.{input,output}.format with a
+          nested {"type": "audio/pcm|pcmu|pcma", "rate": N} object instead of
+          the old flat input_audio_format / output_audio_format strings.
+        - voice moved under session.audio.output.voice.
+        - turn_detection moved under session.audio.input.turn_detection.
+        - input_audio_transcription → session.audio.input.transcription.
+        - OpenAI-Beta header dropped (see connect()).
+        """
         language_instruction = self._language_instruction(patient_language)
         instructions = build_system_instructions(self._call_greeting)
         config = {
             "type": "session.update",
             "session": {
-                "modalities": ["text", "audio"],
+                "type": "realtime",
+                "output_modalities": ["audio"],
                 "instructions": (
                     f"{instructions}\n\n"
                     f"{language_instruction}"
                 ),
-                "voice": self._voice,
-                "input_audio_format": self._audio_format,
-                "output_audio_format": self._audio_format,
-                "input_audio_transcription": {
-                    "model": "gpt-4o-transcribe",
-                },
-                "turn_detection": {
-                    "type": "server_vad",
-                    "threshold": float(os.getenv("OPENAI_VAD_THRESHOLD", "0.85")),
-                    "prefix_padding_ms": int(os.getenv("OPENAI_VAD_PREFIX_MS", "300")),
-                    "silence_duration_ms": int(os.getenv("OPENAI_VAD_SILENCE_MS", "700")),
+                "audio": {
+                    "input": {
+                        "format": _audio_format_spec(self._audio_format),
+                        "transcription": {"model": "gpt-4o-transcribe"},
+                        "turn_detection": {
+                            "type": "server_vad",
+                            "threshold": float(os.getenv("OPENAI_VAD_THRESHOLD", "0.85")),
+                            "prefix_padding_ms": int(os.getenv("OPENAI_VAD_PREFIX_MS", "300")),
+                            "silence_duration_ms": int(os.getenv("OPENAI_VAD_SILENCE_MS", "700")),
+                        },
+                    },
+                    "output": {
+                        "format": _audio_format_spec(self._audio_format),
+                        "voice": self._voice,
+                    },
                 },
                 "tools": [
                     {
@@ -408,7 +447,9 @@ class RealtimeVoiceService(BaseVoiceService):
             msg_type = data.get("type", "")
 
             # Log message types only in verbose mode (skip high-frequency audio deltas always)
-            if self._verbose and msg_type not in ("response.audio.delta", "response.audio_transcript.delta"):
+            # GA event names: response.output_audio.delta / response.output_audio_transcript.delta
+            # (beta used response.audio.delta / response.audio_transcript.delta — both removed 2026-05-12).
+            if self._verbose and msg_type not in ("response.output_audio.delta", "response.output_audio_transcript.delta"):
                 print(f"[RealtimeVoice] Received: {msg_type}")
 
             if msg_type == "session.created":
@@ -419,21 +460,21 @@ class RealtimeVoiceService(BaseVoiceService):
             elif msg_type == "session.updated":
                 pass  # Session config acknowledged
 
-            elif msg_type == "response.audio.delta":
-                # Audio chunk from AI
+            elif msg_type == "response.output_audio.delta":
+                # Audio chunk from AI (GA event name — was response.audio.delta in beta)
                 audio_b64 = data.get("delta", "")
                 if audio_b64 and self.on_audio:
                     audio_bytes = base64.b64decode(audio_b64)
                     await self.on_audio(audio_bytes)
 
-            elif msg_type == "response.audio_transcript.delta":
-                # AI speech transcript delta
+            elif msg_type == "response.output_audio_transcript.delta":
+                # AI speech transcript delta (GA event name — was response.audio_transcript.delta in beta)
                 text = data.get("delta", "")
                 if text and self.on_transcript:
                     await self.on_transcript("ai", text)
 
-            elif msg_type == "response.audio_transcript.done":
-                # AI finished speaking - full transcript
+            elif msg_type == "response.output_audio_transcript.done":
+                # AI finished speaking - full transcript (GA event name — was response.audio_transcript.done)
                 text = data.get("transcript", "")
                 if text and self.on_transcript:
                     await self.on_transcript("ai_complete", text)
