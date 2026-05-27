@@ -31,6 +31,19 @@ function rateColor(rate: number, metric: "transfer" | "no_answer" | "voicemail")
   return "bg-gray-50 text-gray-400";
 }
 
+function formatMs(ms: number | null | undefined): string {
+  if (typeof ms !== "number") return "--";
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function ttfsColor(ms: number | null | undefined): string {
+  if (typeof ms !== "number") return "text-muted-foreground";
+  if (ms < 2000) return "text-emerald-700";
+  if (ms < 4000) return "text-amber-700";
+  return "text-red-700";
+}
+
 function KpiCard({ label, value, sub }: { label: string; value: string; sub: string }) {
   return (
     <Card>
@@ -80,6 +93,8 @@ function StatsTable<T extends DayStats | HourStats>({
               <th className="py-2 px-3 font-medium text-muted-foreground text-center">Transfer %</th>
               <th className="py-2 px-3 font-medium text-muted-foreground text-center">No Answer %</th>
               <th className="py-2 px-3 font-medium text-muted-foreground text-center">Voicemail %</th>
+              <th className="py-2 px-3 font-medium text-muted-foreground text-right">Avg TTFS</th>
+              <th className="py-2 px-3 font-medium text-muted-foreground text-center">TTFS &lt;2s</th>
               <th className="py-2 px-3 font-medium text-muted-foreground text-right">Transferred</th>
               <th className="py-2 px-3 font-medium text-muted-foreground text-right">No Answer</th>
               <th className="py-2 px-3 font-medium text-muted-foreground text-right">Voicemail</th>
@@ -116,6 +131,12 @@ function StatsTable<T extends DayStats | HourStats>({
                   <td className="py-2 px-3 text-center">
                     <span className={`inline-block px-2.5 py-0.5 rounded-full text-xs font-semibold ${rateColor(row.voicemail_rate, "voicemail")}`}>
                       {row.voicemail_rate}%
+                    </span>
+                  </td>
+                  <td className={`py-2 px-3 text-right font-mono font-semibold ${ttfsColor(row.avg_ttfs_ms)}`}>{formatMs(row.avg_ttfs_ms)}</td>
+                  <td className="py-2 px-3 text-center">
+                    <span className="inline-block px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-50 text-blue-800">
+                      {row.ttfs_count ? `${row.fast_ttfs_rate}%` : "--"}
                     </span>
                   </td>
                   <td className="py-2 px-3 text-right text-muted-foreground">{row.transferred}</td>
@@ -166,16 +187,16 @@ export default function AnalyticsPage() {
             <div>
               <h1 className="text-xl font-semibold flex items-center gap-2">
                 <BarChart3 className="h-5 w-5" />
-                Call Time Performance
+                Reach and First Speech Performance
               </h1>
               <p className="text-sm text-muted-foreground">
-                Best day and time to reach patients ({data?.timezone || "America/Los_Angeles"})
+                Best day/time to reach patients plus time to first AI speech ({data?.timezone || "America/Los_Angeles"})
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
-            {[30, 60, 90].map((d) => (
+            {[1, 7, 30, 60, 90].map((d) => (
               <button
                 key={d}
                 onClick={() => setDays(d)}
@@ -193,8 +214,8 @@ export default function AnalyticsPage() {
 
         {loading ? (
           <div className="space-y-6">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              {[0, 1, 2, 3].map((i) => (
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+              {[0, 1, 2, 3, 4, 5].map((i) => (
                 <Card key={i}>
                   <CardContent className="pt-6 pb-4 text-center">
                     <Skeleton className="h-3 w-20 mx-auto mb-2" />
@@ -230,7 +251,7 @@ export default function AnalyticsPage() {
         ) : (
           <div className="space-y-6">
             {/* KPI row */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
               <KpiCard
                 label="Total Calls"
                 value={data.total_calls.toLocaleString()}
@@ -250,6 +271,16 @@ export default function AnalyticsPage() {
                 label="Voicemail Rate"
                 value={`${data.overall_voicemail_rate}%`}
                 sub="Reached voicemail"
+              />
+              <KpiCard
+                label="Avg TTFS"
+                value={formatMs(data.overall_avg_ttfs_ms)}
+                sub={`${data.ttfs_count.toLocaleString()} calls with timing`}
+              />
+              <KpiCard
+                label="TTFS <2s"
+                value={data.ttfs_count ? `${data.overall_fast_ttfs_rate}%` : "--"}
+                sub="First AI audio under target"
               />
             </div>
 

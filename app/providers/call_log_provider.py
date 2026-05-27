@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import select, delete, func, case, extract, text
+from sqlalchemy import Integer, select, delete, func, case, cast, extract, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import AsyncSessionLocal
@@ -590,8 +590,8 @@ class CallLogProvider:
         """Aggregate call outcomes by day-of-week and hour-of-day over the last N days.
 
         Returns two breakdowns:
-        - by_day: list of {day, day_name, total, transferred, no_answer, voicemail, transfer_rate, ...}
-        - by_hour: list of {hour, label, total, transferred, no_answer, voicemail, transfer_rate, ...}
+        - by_day: list of {day, day_name, total, transferred, no_answer, voicemail, transfer_rate, avg_ttfs_ms, ...}
+        - by_hour: list of {hour, label, total, transferred, no_answer, voicemail, transfer_rate, avg_ttfs_ms, ...}
         """
         from datetime import timedelta
 
@@ -630,6 +630,15 @@ class CallLogProvider:
             (CallLogRow.call_disposition == "completed", 1),
         ))
         total_count = func.count(CallLogRow.call_id)
+        ttfs_ms = cast(CallLogRow.timings["first_audio_out"].astext, Integer)
+        ttfs_count = func.count(ttfs_ms)
+        avg_ttfs_ms = func.avg(ttfs_ms)
+        fast_ttfs_count = func.count(case(
+            (ttfs_ms < 2000, 1),
+        ))
+        acceptable_ttfs_count = func.count(case(
+            (ttfs_ms < 4000, 1),
+        ))
 
         # Exclude mock-mode calls and known test patients
         base_filter = [
@@ -653,6 +662,10 @@ class CallLogProvider:
                     technical_error_count.label("technical_error"),
                     disconnected_number_count.label("disconnected_number"),
                     completed_count.label("completed"),
+                    ttfs_count.label("ttfs_count"),
+                    avg_ttfs_ms.label("avg_ttfs_ms"),
+                    fast_ttfs_count.label("fast_ttfs_count"),
+                    acceptable_ttfs_count.label("acceptable_ttfs_count"),
                 )
                 .where(*base_filter)
                 .group_by(dow)
@@ -674,6 +687,10 @@ class CallLogProvider:
                     technical_error_count.label("technical_error"),
                     disconnected_number_count.label("disconnected_number"),
                     completed_count.label("completed"),
+                    ttfs_count.label("ttfs_count"),
+                    avg_ttfs_ms.label("avg_ttfs_ms"),
+                    fast_ttfs_count.label("fast_ttfs_count"),
+                    acceptable_ttfs_count.label("acceptable_ttfs_count"),
                 )
                 .where(*base_filter)
                 .group_by(hour)
@@ -687,8 +704,12 @@ class CallLogProvider:
         def _rate(n, total):
             return round(n / total * 100, 1) if total > 0 else 0.0
 
+        def _ms(value):
+            return int(round(float(value))) if value is not None else None
+
         def _build_row(r, **extra):
             t = r.total
+            ttfs_samples = r.ttfs_count or 0
             return {
                 **extra,
                 "total": t,
@@ -701,6 +722,12 @@ class CallLogProvider:
                 "technical_error": r.technical_error,
                 "disconnected_number": r.disconnected_number,
                 "completed": r.completed,
+                "ttfs_count": ttfs_samples,
+                "avg_ttfs_ms": _ms(r.avg_ttfs_ms),
+                "fast_ttfs_count": r.fast_ttfs_count or 0,
+                "acceptable_ttfs_count": r.acceptable_ttfs_count or 0,
+                "fast_ttfs_rate": _rate(r.fast_ttfs_count, ttfs_samples),
+                "acceptable_ttfs_rate": _rate(r.acceptable_ttfs_count, ttfs_samples),
                 "transfer_rate": _rate(r.transferred, t),
                 "no_answer_rate": _rate(r.no_answer, t),
                 "voicemail_rate": _rate(r.voicemail, t),
@@ -721,6 +748,10 @@ class CallLogProvider:
         grand_transferred = sum(d["transferred"] for d in by_day)
         grand_no_answer = sum(d["no_answer"] for d in by_day)
         grand_voicemail = sum(d["voicemail"] for d in by_day)
+        grand_ttfs_count = sum(d["ttfs_count"] for d in by_day)
+        grand_ttfs_weighted = sum((d["avg_ttfs_ms"] or 0) * d["ttfs_count"] for d in by_day)
+        grand_fast_ttfs = sum(d["fast_ttfs_count"] for d in by_day)
+        grand_acceptable_ttfs = sum(d["acceptable_ttfs_count"] for d in by_day)
 
         return {
             "days": days,
@@ -729,6 +760,10 @@ class CallLogProvider:
             "overall_transfer_rate": _rate(grand_transferred, grand_total),
             "overall_no_answer_rate": _rate(grand_no_answer, grand_total),
             "overall_voicemail_rate": _rate(grand_voicemail, grand_total),
+            "ttfs_count": grand_ttfs_count,
+            "overall_avg_ttfs_ms": int(round(grand_ttfs_weighted / grand_ttfs_count)) if grand_ttfs_count else None,
+            "overall_fast_ttfs_rate": _rate(grand_fast_ttfs, grand_ttfs_count),
+            "overall_acceptable_ttfs_rate": _rate(grand_acceptable_ttfs, grand_ttfs_count),
             "by_day": by_day,
             "by_hour": by_hour,
         }

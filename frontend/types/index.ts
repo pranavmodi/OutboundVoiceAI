@@ -262,6 +262,12 @@ export interface TimeSlotStats {
   technical_error: number;
   disconnected_number: number;
   completed: number;
+  ttfs_count: number;
+  avg_ttfs_ms: number | null;
+  fast_ttfs_count: number;
+  acceptable_ttfs_count: number;
+  fast_ttfs_rate: number;
+  acceptable_ttfs_rate: number;
   transfer_rate: number;
   no_answer_rate: number;
   voicemail_rate: number;
@@ -284,6 +290,10 @@ export interface TimePerformance {
   overall_transfer_rate: number;
   overall_no_answer_rate: number;
   overall_voicemail_rate: number;
+  ttfs_count: number;
+  overall_avg_ttfs_ms: number | null;
+  overall_fast_ttfs_rate: number;
+  overall_acceptable_ttfs_rate: number;
   by_day: DayStats[];
   by_hour: HourStats[];
 }

@@ -483,7 +483,11 @@ class CallSession:
                 error_code=f"{voice_provider}_connect_failed",
                 error_message=self._last_start_error,
             )
-            await call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
+            await call_log_provider.end_call(
+                call.call_id,
+                CallOutcome.FAILED,
+                timings=dict(getattr(self, "_timings", None) or {}),
+            )
             await self._mark_patient_attempt(patient, "failed")
             get_registry().unregister(call.call_id)
             self._voice_service = None
@@ -558,7 +562,11 @@ class CallSession:
                     error_code="twilio_place_failed",
                     error_message=self._last_start_error,
                 )
-                await call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
+                await call_log_provider.end_call(
+                    call.call_id,
+                    CallOutcome.FAILED,
+                    timings=dict(getattr(self, "_timings", None) or {}),
+                )
                 await self._mark_patient_attempt(patient, "failed")
                 get_registry().unregister(call.call_id)
                 voice = self._voice_service
@@ -608,7 +616,11 @@ class CallSession:
                     mock_mode=self._mock_mode,
                     mock_phone=self._mock_phone,
                 )
-                await call_log_provider.end_call(call.call_id, CallOutcome.FAILED)
+                await call_log_provider.end_call(
+                    call.call_id,
+                    CallOutcome.FAILED,
+                    timings=dict(getattr(self, "_timings", None) or {}),
+                )
                 await self._mark_patient_attempt(patient, "failed")
                 get_registry().unregister(call.call_id)
                 voice = self._voice_service
