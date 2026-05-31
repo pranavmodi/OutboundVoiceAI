@@ -9,6 +9,8 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from app.config import settings
+from app.db import Base
+import app.models  # noqa: F401 — register tables on Base.metadata
 
 config = context.config
 if config.config_file_name is not None:
@@ -18,8 +20,7 @@ if config.config_file_name is not None:
 url = os.environ.get("BACKFILL_DATABASE_URL", settings.backfill_database_url)
 config.set_main_option("sqlalchemy.url", url)
 
-# No models registered yet — set when domain tables are added.
-target_metadata = None
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:

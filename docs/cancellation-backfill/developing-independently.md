@@ -8,12 +8,15 @@ The two systems are deliberately decoupled per [`architecture.md`](./architectur
 
 ## What you need running
 
-Two processes, full stop:
+Three processes for full backfill dev (backend + operator UI + appointment simulator):
 
 | Process | Path | Default port | What it serves |
 |---|---|---|---|
-| Backfill backend (FastAPI) | [`backfill-backend/`](../../backfill-backend/) | 8011 (was 8001 — see note below) | `/api/health`, future campaign/candidate/settings endpoints |
-| Shared frontend (Next.js dev) | [`frontend/`](../../frontend/) | 3000 (falls through to 3001/3002/3003 if busy) | `/backfill` page + AgentShell chrome |
+| Backfill backend (FastAPI) | [`backfill-backend/`](../../backfill-backend/) | 8011 (was 8001 — see note below) | `/api/health`, campaigns, [`/api/simulator/*`](../../backfill-backend/simulator/) (dev mock CRUD + cancel) |
+| Operator frontend (Next.js) | [`frontend/`](../../frontend/) | 3000 | `/backfill` campaigns UI + AgentShell chrome |
+| Appointment simulator (Next.js) | [`frontend-dev/`](../../frontend-dev/) | **3001** | `/dev/appointments` — seed/cancel appointments (not on :3000) |
+
+For campaigns-only work, two processes are enough (backend + `frontend` on 3000).
 
 ## What you do NOT need
 
@@ -69,6 +72,11 @@ cd frontend
 npm install
 cd ..
 
+# 2b. Appointment simulator deps (only if using /dev/appointments on :3001)
+cd frontend-dev
+npm install
+cd ..
+
 # 3. Frontend env — point hooks at localhost
 # Edit frontend/.env.local (gitignored) and ensure it has:
 #   NEXT_PUBLIC_BACKFILL_API_URL=http://localhost:8011
@@ -85,12 +93,14 @@ The `.env` and `.env.local` files are gitignored — they hold per-developer con
 cd backfill-backend
 ./run.sh                                       # uses .venv/bin/uvicorn, --reload on
 
-# Terminal 2 — shared frontend
-cd frontend
-npm run dev                                    # binds 3000 (or whatever PORT you set)
+# Terminal 2 — operator frontend
+./run-frontend.sh                              # :3000 → /backfill
+
+# Terminal 3 (optional) — appointment simulator
+./run-frontend-dev.sh                          # :3001 → /dev/appointments
 ```
 
-Then open <http://localhost:3000/backfill> in a browser. The page should render and the "Backend status" card should flip from "Checking backfill-backend..." to "Backfill backend is reachable" within a second.
+Then open <http://localhost:3000/backfill> for campaigns and <http://localhost:3001/dev/appointments> to seed/cancel appointments. The page should render and the "Backend status" card should flip from "Checking backfill-backend..." to "Backfill backend is reachable" within a second.
 
 ---
 
@@ -164,6 +174,59 @@ curl -s -o /dev/null -w "code=%{http_code}\n" http://localhost:3000/backfill
 ```
 
 If all three pass, opening `/backfill` in a browser will show the green-check "Backfill backend is reachable" state.
+
+---
+
+## Milestone 1 manual QA checklist
+
+Run with backfill-backend on `:8001`, frontend on `http://localhost:3000`, and use **`localhost`** (not `127.0.0.1`) in the browser for CORS.
+
+### Settings
+- [ ] **Settings** tab loads without hanging
+- [ ] Toggle **Agent enabled**, change a value (e.g. wave delay), **Save** — banner clears; refresh shows new values
+- [ ] Top nav **Cancellation Backfill** shows **On** / **Off** after refresh
+
+### Campaigns
+- [ ] **Settings → Agent ON**, then cancel an appointment at `/dev/appointments` with **≥ 24h** notice before exam
+- [ ] **Campaigns** tab lists the new campaign; filters (facility, status, CPT, filled) work
+- [ ] Open campaign **detail**: candidates table + **Outreach timeline** (`CampaignCreated`, `CandidatesBuilt`, etc.)
+- [ ] Only patients scheduled **after** the open slot (date + time) show as **Eligible**; earlier dates are **ExcludedNotAfterOpenSlot**
+- [ ] **Stop** on a **Running** campaign → `ClosedManually` + new timeline row
+
+### APIs (optional curl)
+```bash
+curl -s http://localhost:8001/api/agent/status
+curl -s "http://localhost:8001/api/campaigns?sort=started_at_desc"
+curl -s http://localhost:8001/api/settings
+```
+
+### RadFlow webhook (local, no UI)
+
+Requires migration `b8f2a1c90d4e` and `RADFLOW_WEBHOOK_TOKEN` in `backfill-backend/.env` (see `.env.example`).
+
+```bash
+cd backfill-backend && .venv/bin/alembic upgrade head
+
+curl -sS -X POST "http://localhost:8001/api/integrations/radflow/appointment-cancellations" \
+  -H "Authorization: Bearer dev-change-me" \
+  -H "Content-Type: application/json" \
+  -H "X-RadFlow-Event-Id: evt_dev_001" \
+  -d @../docs/cancellation-backfill/fixtures/radflow-cancel-sample.json
+```
+
+- [ ] First call returns JSON with `status` (`campaign_created`, `ineligible`, or `agent_disabled` depending on settings and slot time)
+- [ ] Second call with the **same** `X-RadFlow-Event-Id` returns the **same** body (idempotent)
+- [ ] Wrong Bearer token → `401`
+- [ ] Campaign visible on `/backfill` → Campaigns when eligible and agent enabled
+
+See [`implementation-log.md`](./implementation-log.md) for response `status` meanings.
+
+### Unit tests
+```bash
+cd backfill-backend && .venv/bin/python -m unittest discover -s tests -v
+```
+
+When the checklist passes, Milestone 1 foundation is ready for handoff to [Milestone 2](./milestone-2-outreach-and-completion.md) (SMS/voice waves).
 
 ---
 

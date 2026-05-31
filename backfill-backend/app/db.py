@@ -22,5 +22,9 @@ AsyncSessionLocal = async_sessionmaker(
 
 
 class Base(DeclarativeBase):
-    """Declarative base for BackfillCampaign, BackfillCandidate, BackfillActionLog."""
+    """Declarative base — import app.models so metadata is populated for Alembic."""
     pass
+
+
+# Register ORM tables on metadata (import after Base is defined).
+from app import models as _models  # noqa: F401, E402

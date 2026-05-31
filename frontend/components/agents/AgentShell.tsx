@@ -1,7 +1,9 @@
 "use client";
 
+import { useBackfillApi } from "@/hooks/useBackfillApi";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
 import { Phone, CalendarX } from "lucide-react";
 
 type AgentTab = {
@@ -22,12 +24,28 @@ const AGENTS: AgentTab[] = [
     href: "/backfill",
     label: "Cancellation Backfill",
     icon: CalendarX,
-    match: (p) => p.startsWith("/backfill"),
+    match: (p) => p === "/backfill",
   },
 ];
 
 export function AgentShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const { getAgentStatus } = useBackfillApi();
+  const [backfillEnabled, setBackfillEnabled] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    if (pathname !== "/backfill") {
+      setBackfillEnabled(null);
+      return;
+    }
+    let cancelled = false;
+    getAgentStatus().then((res) => {
+      if (!cancelled && res) setBackfillEnabled(res.enabled);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [pathname, getAgentStatus]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -48,6 +66,19 @@ export function AgentShell({ children }: { children: React.ReactNode }) {
               >
                 <Icon className="h-4 w-4" />
                 {label}
+                {href === "/backfill" && backfillEnabled !== null && (
+                  <span
+                    className={`ml-1 text-xs px-1.5 py-0.5 rounded ${
+                      active
+                        ? "bg-primary-foreground/20 text-primary-foreground"
+                        : backfillEnabled
+                          ? "bg-green-600/15 text-green-700 dark:text-green-400"
+                          : "bg-muted text-muted-foreground"
+                    }`}
+                  >
+                    {backfillEnabled ? "On" : "Off"}
+                  </span>
+                )}
               </Link>
             );
           })}

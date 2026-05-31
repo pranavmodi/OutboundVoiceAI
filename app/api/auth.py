@@ -14,7 +14,17 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 _SECRET = os.getenv("APP_SESSION_SECRET", "change-me-in-production")
 _APP_USERNAME = os.getenv("APP_USERNAME", "admin")
 _APP_PASSWORD = os.getenv("APP_PASSWORD", "")
+# Set to "localhost" in local dev so the session cookie is visible to Next.js (port 3000)
+# and the API (port 8000). Leave unset in production (host-only cookie).
+_COOKIE_DOMAIN = os.getenv("APP_COOKIE_DOMAIN") or None
 _SESSION_DAYS = 30
+
+
+def _session_cookie_kwargs() -> dict:
+    kwargs: dict = {"key": "session", "path": "/"}
+    if _COOKIE_DOMAIN:
+        kwargs["domain"] = _COOKIE_DOMAIN
+    return kwargs
 
 
 def _sign(payload: str) -> str:
@@ -62,12 +72,11 @@ async def login(request: LoginRequest, response: Response):
 
     token = _make_token()
     response.set_cookie(
-        key="session",
+        **_session_cookie_kwargs(),
         value=token,
         httponly=True,
         samesite="lax",
         max_age=_SESSION_DAYS * 86400,
-        path="/",
     )
     return {"ok": True}
 
@@ -75,7 +84,7 @@ async def login(request: LoginRequest, response: Response):
 @router.post("/logout")
 async def logout(response: Response):
     """Clear session cookie."""
-    response.delete_cookie(key="session", path="/")
+    response.delete_cookie(**_session_cookie_kwargs())
     return {"ok": True}
 
 

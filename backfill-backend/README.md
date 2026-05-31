@@ -26,6 +26,24 @@ The service listens on `BACKFILL_BACKEND_PORT` (default `8001`) so it doesn't co
 GET /api/health → {"status": "ok", "service": "backfill-backend"}
 ```
 
-## Status
+## Appointment data (dev vs production)
 
-Skeleton only. Domain code (campaigns, candidates, action log, wave scheduler, inbound SMS handling) is not yet implemented — see the spec for scope.
+See [`../docs/cancellation-backfill/integrations.md`](../docs/cancellation-backfill/integrations.md).
+
+- **Dev:** [`simulator/`](./simulator/) — mock CRUD + cancel at `/api/simulator/*` when `BACKFILL_SIMULATOR_ENABLED=true`
+- **Prod / staging:** `POST /api/integrations/radflow/appointment-cancellations` (RadFlow webhook) — see [`../docs/cancellation-backfill/integrations.md`](../docs/cancellation-backfill/integrations.md)
+- **Implementation log:** [`../docs/cancellation-backfill/implementation-log.md`](../docs/cancellation-backfill/implementation-log.md)
+
+## Status (Milestone 1)
+
+- [x] Schema, migrations, cancel → campaign + ranked candidates (later-scheduled only)
+- [x] Settings API, campaigns list/detail/timeline/stop, agent status
+- [x] Frontend `/backfill` — Campaigns + Settings tabs
+- [x] RadFlow cancellation webhook + idempotency (`X-RadFlow-Event-Id`)
+- [ ] Milestone 2 — wave engine, SMS/voice, Reports
+
+## Tests
+
+```bash
+.venv/bin/python -m unittest discover -s tests -v
+```

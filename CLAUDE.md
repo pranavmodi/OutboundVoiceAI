@@ -48,6 +48,10 @@ Route groups (`(agents)/`) do not change URLs. The outbound dashboard's URL is s
 
 # Shared frontend (proxies to whichever backend each hook targets)
 ./run-frontend.sh                           # Next.js on :3000
+
+# Dev-only appointment simulator (:3001) — or use http://localhost:3000/dev/appointments
+./run-frontend-dev.sh                       # Next.js on :3001
+./run-backfill-ui.sh                        # Starts :3001 simulator + :3000 operator UI together
 ```
 
 Required env (see [`.env.example`](./.env.example) and [`backfill-backend/.env.example`](./backfill-backend/.env.example)):
