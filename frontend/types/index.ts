@@ -211,6 +211,10 @@ export interface DispatcherSettings {
   max_parallel_calls?: number;
   // Minimum gap (seconds) between consecutive call starts.
   dispatch_pacing_seconds?: number;
+  // OpenAI Realtime server-VAD turn-detection tuning.
+  openai_vad_silence_ms?: number;
+  openai_vad_prefix_ms?: number;
+  openai_vad_threshold?: number;
 }
 
 export interface DailyReportConfig {

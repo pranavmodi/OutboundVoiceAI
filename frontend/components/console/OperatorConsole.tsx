@@ -127,6 +127,146 @@ function VoiceRow({
   );
 }
 
+function OpenAIVadCard({
+  silenceMs,
+  prefixMs,
+  threshold,
+  onSave,
+}: {
+  silenceMs: number;
+  prefixMs: number;
+  threshold: number;
+  onSave: (silenceMs: number, prefixMs: number, threshold: number) => Promise<void>;
+}) {
+  // Local form state — only commit on Save so users can experiment without
+  // half-applied values mid-typing.
+  const [silence, setSilence] = useState(silenceMs);
+  const [prefix, setPrefix] = useState(prefixMs);
+  const [thresh, setThresh] = useState(threshold);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [errorText, setErrorText] = useState<string | null>(null);
+
+  // Reflect external settings changes (other tab saved, settings reloaded).
+  useEffect(() => { setSilence(silenceMs); }, [silenceMs]);
+  useEffect(() => { setPrefix(prefixMs); }, [prefixMs]);
+  useEffect(() => { setThresh(threshold); }, [threshold]);
+
+  const dirty = silence !== silenceMs || prefix !== prefixMs || thresh !== threshold;
+
+  const handleSave = async () => {
+    setErrorText(null);
+    if (silence < 100 || silence > 2000) {
+      setErrorText("Silence must be between 100 and 2000 ms.");
+      return;
+    }
+    if (prefix < 0 || prefix > 1000) {
+      setErrorText("Prefix must be between 0 and 1000 ms.");
+      return;
+    }
+    if (thresh < 0 || thresh > 1) {
+      setErrorText("Threshold must be between 0.0 and 1.0.");
+      return;
+    }
+    setSaving(true);
+    setSaved(false);
+    try {
+      await onSave(silence, prefix, thresh);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 3000);
+    } catch (e) {
+      setErrorText(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleReset = () => {
+    setSilence(700);
+    setPrefix(300);
+    setThresh(0.85);
+  };
+
+  return (
+    <div className="space-y-3 mt-3 rounded-md border p-3">
+      <div className="flex items-center gap-2">
+        <Label className="text-sm font-medium">OpenAI Realtime — Turn detection</Label>
+        <InfoTooltip content="Server-VAD knobs the OpenAI Realtime API uses to decide when the patient finished speaking. Lower silence_ms cuts dead air; lower threshold is more sensitive to quiet speakers. Applies on the next call." />
+      </div>
+      <div className="grid grid-cols-3 gap-3">
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-1.5">
+            <Label htmlFor="vad-silence" className="text-xs">Silence (ms)</Label>
+            <InfoTooltip content="How long the AI waits in silence after the patient stops talking before it responds. Lower = snappier replies but more likely to cut off mid-sentence pauses, especially with elderly or slow speakers." />
+          </div>
+          <Input
+            id="vad-silence"
+            type="number"
+            min={100}
+            max={2000}
+            step={50}
+            value={silence}
+            onChange={(e) => setSilence(parseInt(e.target.value || "0", 10))}
+          />
+          <p className="text-[11px] text-muted-foreground">100–2000. Default 700.</p>
+        </div>
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-1.5">
+            <Label htmlFor="vad-prefix" className="text-xs">Prefix (ms)</Label>
+            <InfoTooltip content="How much audio just before detected speech is kept on the patient's turn, so the first syllable isn't clipped. Doesn't change response latency — only what the model hears of the utterance." />
+          </div>
+          <Input
+            id="vad-prefix"
+            type="number"
+            min={0}
+            max={1000}
+            step={50}
+            value={prefix}
+            onChange={(e) => setPrefix(parseInt(e.target.value || "0", 10))}
+          />
+          <p className="text-[11px] text-muted-foreground">0–1000. Default 300.</p>
+        </div>
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-1.5">
+            <Label htmlFor="vad-threshold" className="text-xs">Threshold</Label>
+            <InfoTooltip content="How loud audio must be to count as speech (0 = anything, 1 = only very loud). Lower picks up quiet or elderly speakers; higher rejects background noise and breathing." />
+          </div>
+          <Input
+            id="vad-threshold"
+            type="number"
+            min={0}
+            max={1}
+            step={0.05}
+            value={thresh}
+            onChange={(e) => setThresh(parseFloat(e.target.value || "0"))}
+          />
+          <p className="text-[11px] text-muted-foreground">0.0–1.0. Default 0.85.</p>
+        </div>
+      </div>
+      {errorText && (
+        <p className="text-xs text-destructive">{errorText}</p>
+      )}
+      <div className="flex items-center gap-2">
+        <Button size="sm" onClick={handleSave} disabled={saving || !dirty}>
+          {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : <Save className="h-3.5 w-3.5 mr-1.5" />}
+          Save VAD
+        </Button>
+        <Button variant="outline" size="sm" onClick={handleReset} disabled={saving}>
+          <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
+          Reset to defaults
+        </Button>
+        {saved && (
+          <span className="text-xs text-emerald-600 flex items-center gap-1">
+            <CheckCircle className="h-3.5 w-3.5" />
+            Saved
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
 function VoiceSelector({
   openaiVoice,
   geminiVoice,
@@ -407,6 +547,7 @@ interface OperatorConsoleProps {
   onSetPatientSource: (source: string) => Promise<void>;
   onSetActiveScenario: (id: string) => Promise<void>;
   onUpdateVoices: (openaiVoice: string, geminiVoice: string, grokVoice: string) => Promise<void>;
+  onUpdateOpenAIVad: (silenceMs: number, prefixMs: number, threshold: number) => Promise<void>;
   onPreviewVoice: (provider: string, voice: string) => Promise<string | null>;
   onUpdateCallGreeting: (greeting: string) => Promise<void>;
 }
@@ -429,6 +570,7 @@ export function OperatorConsole({
   onSetPatientSource,
   onSetActiveScenario,
   onUpdateVoices,
+  onUpdateOpenAIVad,
   onPreviewVoice,
   onUpdateCallGreeting,
 }: OperatorConsoleProps) {
@@ -703,6 +845,12 @@ export function OperatorConsole({
           grokVoice={settings?.dispatcher_settings?.grok_voice || "eve"}
           onSave={onUpdateVoices}
           onPreview={onPreviewVoice}
+        />
+        <OpenAIVadCard
+          silenceMs={settings?.dispatcher_settings?.openai_vad_silence_ms ?? 700}
+          prefixMs={settings?.dispatcher_settings?.openai_vad_prefix_ms ?? 300}
+          threshold={settings?.dispatcher_settings?.openai_vad_threshold ?? 0.85}
+          onSave={onUpdateOpenAIVad}
         />
       </div>
 

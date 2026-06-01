@@ -719,3 +719,69 @@ async def get_claude_latest_html(request: Request):
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"Failed to read response file: {e}")
     return Response(content=body, media_type="text/html")
+
+
+def _read_claude_response_file(relative: "Path") -> bytes:
+    """Read a file under ~/.claude/responses/, refusing anything outside it.
+
+    Resolving + relative_to handles both ``..`` segments and absolute paths
+    smuggled in via FastAPI path params.
+    """
+    from pathlib import Path
+
+    root = (Path.home() / ".claude" / "responses").resolve()
+    target = (root / relative).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="Not found")
+    try:
+        return target.read_bytes()
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read response file: {e}")
+
+
+@router.get("/claude-html/library")
+@router.get("/claude-html/library.html")
+async def get_claude_library_html(request: Request):
+    """Serve the saved-snapshots index. 404s with a placeholder if not yet generated."""
+    from pathlib import Path
+    from app.api.auth import verify_token
+
+    if not verify_token(request.cookies.get("session", "")):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    try:
+        body = _read_claude_response_file(Path("library.html"))
+    except HTTPException as e:
+        if e.status_code == 404:
+            placeholder = (
+                "<!doctype html><meta charset='utf-8'>"
+                "<meta http-equiv='refresh' content='5'>"
+                "<title>Claude — no snapshots yet</title>"
+                "<body style='background:#0d1117;color:#8b949e;"
+                "font:16px/1.6 system-ui;padding:48px;text-align:center'>"
+                "<p>No saved responses yet. Ask Claude to \"save\" a response to snapshot it here.</p>"
+                "</body>"
+            )
+            return Response(content=placeholder, media_type="text/html")
+        raise
+    return Response(content=body, media_type="text/html")
+
+
+@router.get("/claude-html/saved/{filename}")
+async def get_claude_saved_html(request: Request, filename: str):
+    """Serve a single snapshot from ~/.claude/responses/saved/."""
+    from pathlib import Path
+    from app.api.auth import verify_token
+
+    if not verify_token(request.cookies.get("session", "")):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    if not filename.endswith(".html"):
+        raise HTTPException(status_code=400, detail="Only .html snapshots are served")
+
+    body = _read_claude_response_file(Path("saved") / filename)
+    return Response(content=body, media_type="text/html")

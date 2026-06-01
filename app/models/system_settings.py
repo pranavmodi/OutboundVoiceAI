@@ -61,6 +61,14 @@ class DispatcherSettings:
     # Minimum gap (seconds) between successive call starts. Avoids tripping
     # carrier per-second rate limits when max_parallel_calls > 1.
     dispatch_pacing_seconds: int = 1
+    # OpenAI Realtime server-VAD turn-detection tuning. Lower silence_ms cuts
+    # dead air at the cost of more false "turn ended" calls; lower threshold
+    # is more sensitive to quiet speakers but more prone to noise misfires.
+    # Defaults mirror the historical env-var defaults so existing deployments
+    # are unchanged when this column is empty.
+    openai_vad_silence_ms: int = 700
+    openai_vad_prefix_ms: int = 300
+    openai_vad_threshold: float = 0.85
 
     @property
     def max_attempts(self) -> int:
