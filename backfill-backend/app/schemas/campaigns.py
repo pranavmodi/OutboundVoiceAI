@@ -42,6 +42,15 @@ class CandidateOut(BaseModel):
     rank_order: int
     eligibility_status: str
     exclusion_reason: str | None
+    wave_number_first_contacted: int | None = None
+    last_contacted_at: datetime | None = None
+    current_contact_status: str | None = None
+    interested_flag: bool | None = None
+    declined_flag: bool | None = None
+    no_response_flag: bool | None = None
+    won_slot_flag: bool | None = None
+    lost_slot_flag: bool | None = None
+    response_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 

@@ -180,6 +180,15 @@ async def fetch_candidates(
             rank_order=cand.rank_order,
             eligibility_status=cand.eligibility_status,
             exclusion_reason=cand.exclusion_reason,
+            wave_number_first_contacted=cand.wave_number_first_contacted,
+            last_contacted_at=cand.last_contacted_at,
+            current_contact_status=cand.current_contact_status,
+            interested_flag=cand.interested_flag,
+            declined_flag=cand.declined_flag,
+            no_response_flag=cand.no_response_flag,
+            won_slot_flag=cand.won_slot_flag,
+            lost_slot_flag=cand.lost_slot_flag,
+            response_at=cand.response_at,
         )
         for cand, patient_name in result.all()
     ]

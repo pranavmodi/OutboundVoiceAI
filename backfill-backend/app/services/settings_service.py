@@ -84,9 +84,25 @@ async def update_settings(
 
 def settings_snapshot(settings: BackfillAgentSettings) -> dict:
     return {
+        "enabled": settings.enabled,
         "minimum_cancellation_notice_hours": settings.minimum_cancellation_notice_hours,
         "sms_batch_size_per_wave": settings.sms_batch_size_per_wave,
         "delay_between_waves_minutes": settings.delay_between_waves_minutes,
         "max_waves": settings.max_waves,
+        "ai_call_escalation_enabled": settings.ai_call_escalation_enabled,
+        "ai_call_quantity_per_wave": settings.ai_call_quantity_per_wave,
+        "allowed_contact_days": settings.allowed_contact_days,
+        "contact_window_start": settings.contact_window_start.isoformat(),
+        "contact_window_end": settings.contact_window_end.isoformat(),
+        "contact_window_timezone": settings.contact_window_timezone,
+        "use_shared_holiday_calendar": settings.use_shared_holiday_calendar,
+        "agent_blackout_dates": settings.agent_blackout_dates,
+        "same_facility_required": settings.same_facility_required,
+        "same_cpt_required": settings.same_cpt_required,
         "exclude_no_show_enabled": settings.exclude_no_show_enabled,
+        "campaign_timeout_minutes": settings.campaign_timeout_minutes,
+        "late_response_closeout_enabled": settings.late_response_closeout_enabled,
+        "allowed_sms_template_id": settings.allowed_sms_template_id,
+        "allowed_voice_template_id": settings.allowed_voice_template_id,
+        "closeout_message_template_id": settings.closeout_message_template_id,
     }

@@ -31,6 +31,15 @@ function statusBadgeVariant(status: string): "default" | "success" | "secondary"
   return "secondary";
 }
 
+function responseLabel(candidate: CampaignDetail["candidates"][number]) {
+  if (candidate.won_slot_flag) return "Won";
+  if (candidate.lost_slot_flag) return "Lost";
+  if (candidate.interested_flag) return "Interested";
+  if (candidate.declined_flag) return "Declined";
+  if (candidate.no_response_flag) return "No response";
+  return candidate.current_contact_status ?? "—";
+}
+
 const STATUS_OPTIONS = [
   "Running",
   "Pending",
@@ -288,6 +297,10 @@ export function CampaignsPanel({ refreshKey = 0 }: Props) {
                     <th className="py-2 pr-2">CPT</th>
                     <th className="py-2 pr-2">Slot</th>
                     <th className="py-2 pr-2">Status</th>
+                    <th className="py-2 pr-2">Started</th>
+                    <th className="py-2 pr-2">Ended</th>
+                    <th className="py-2 pr-2">Filled by</th>
+                    <th className="py-2 pr-2">Close reason</th>
                     <th className="py-2 pr-2">Actions</th>
                   </tr>
                 </thead>
@@ -312,6 +325,15 @@ export function CampaignsPanel({ refreshKey = 0 }: Props) {
                       <td className="py-2 pr-2">
                         <Badge variant={statusBadgeVariant(c.campaign_status)}>{c.campaign_status}</Badge>
                       </td>
+                      <td className="py-2 pr-2 whitespace-nowrap">{formatDt(c.started_at)}</td>
+                      <td className="py-2 pr-2 whitespace-nowrap">
+                        {c.ended_at ? formatDt(c.ended_at) : "—"}
+                      </td>
+                      <td className="py-2 pr-2">
+                        {c.filled_by_patient_name ??
+                          (c.filled_by_patient_id ? `Patient #${c.filled_by_patient_id}` : "—")}
+                      </td>
+                      <td className="py-2 pr-2">{c.closed_reason ?? "—"}</td>
                       <td className="py-2 pr-2 space-x-1">
                         <Button type="button" size="sm" variant="outline" onClick={() => selectCampaign(c.id)}>
                           View
@@ -388,8 +410,13 @@ export function CampaignsPanel({ refreshKey = 0 }: Props) {
                     <tr className="border-b text-left text-muted-foreground">
                       <th className="py-1">Rank</th>
                       <th className="py-1">Patient</th>
+                      <th className="py-1">IDs</th>
                       <th className="py-1">Appt date</th>
                       <th className="py-1">Status</th>
+                      <th className="py-1">Wave</th>
+                      <th className="py-1">Last contact</th>
+                      <th className="py-1">Response</th>
+                      <th className="py-1">Response time</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -401,9 +428,12 @@ export function CampaignsPanel({ refreshKey = 0 }: Props) {
                             ? "opacity-50 border-b border-border/40"
                             : "border-b border-border/40"
                         }
-                      >
+                        >
                         <td className="py-1">{cand.rank_order < 9000 ? cand.rank_order : "—"}</td>
-                        <td className="py-1">{cand.patient_name}</td>
+                        <td className="py-1">{cand.patient_name ?? `Patient #${cand.patient_id}`}</td>
+                        <td className="py-1 text-xs text-muted-foreground">
+                          P{cand.patient_id} / A{cand.appointment_id}
+                        </td>
                         <td className="py-1">{formatDt(cand.scheduled_appointment_at)}</td>
                         <td className="py-1">
                           {cand.eligibility_status}
@@ -411,6 +441,12 @@ export function CampaignsPanel({ refreshKey = 0 }: Props) {
                             <span className="block text-xs text-muted-foreground">{cand.exclusion_reason}</span>
                           )}
                         </td>
+                        <td className="py-1">{cand.wave_number_first_contacted ?? "—"}</td>
+                        <td className="py-1">
+                          {cand.last_contacted_at ? formatDt(cand.last_contacted_at) : "—"}
+                        </td>
+                        <td className="py-1">{responseLabel(cand)}</td>
+                        <td className="py-1">{cand.response_at ? formatDt(cand.response_at) : "—"}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -426,7 +462,11 @@ export function CampaignsPanel({ refreshKey = 0 }: Props) {
                         <tr className="border-b text-left text-muted-foreground">
                           <th className="py-1 pr-2">Time</th>
                           <th className="py-1 pr-2">Event</th>
+                          <th className="py-1 pr-2">Patient</th>
+                          <th className="py-1 pr-2">Channel</th>
+                          <th className="py-1 pr-2">Wave</th>
                           <th className="py-1 pr-2">Outcome</th>
+                          <th className="py-1 pr-2">Provider ID</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -434,7 +474,14 @@ export function CampaignsPanel({ refreshKey = 0 }: Props) {
                           <tr key={row.id} className="border-b border-border/40">
                             <td className="py-1 pr-2 whitespace-nowrap">{formatDt(row.attempted_at)}</td>
                             <td className="py-1 pr-2">{row.action_type}</td>
+                            <td className="py-1 pr-2">
+                              {row.patient_name ??
+                                (row.patient_id ? `Patient #${row.patient_id}` : "—")}
+                            </td>
+                            <td className="py-1 pr-2">{row.channel}</td>
+                            <td className="py-1 pr-2">{row.wave_number ?? "—"}</td>
                             <td className="py-1 pr-2">{row.outcome ?? "—"}</td>
+                            <td className="py-1 pr-2">{row.provider_message_id ?? "—"}</td>
                           </tr>
                         ))}
                       </tbody>

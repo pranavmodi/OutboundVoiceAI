@@ -34,18 +34,18 @@ export function AgentShell({ children }: { children: React.ReactNode }) {
   const [backfillEnabled, setBackfillEnabled] = useState<boolean | null>(null);
 
   useEffect(() => {
-    if (pathname !== "/backfill") {
-      setBackfillEnabled(null);
-      return;
-    }
     let cancelled = false;
-    getAgentStatus().then((res) => {
-      if (!cancelled && res) setBackfillEnabled(res.enabled);
-    });
+    getAgentStatus()
+      .then((res) => {
+        if (!cancelled) setBackfillEnabled(res?.enabled ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setBackfillEnabled(null);
+      });
     return () => {
       cancelled = true;
     };
-  }, [pathname, getAgentStatus]);
+  }, [getAgentStatus]);
 
   return (
     <div className="min-h-screen bg-background">

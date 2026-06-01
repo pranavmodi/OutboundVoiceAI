@@ -2,16 +2,15 @@
 
 import { CampaignsPanel } from "@/components/backfill/CampaignsPanel";
 import { SettingsPanel } from "@/components/backfill/SettingsPanel";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useBackfillApi } from "@/hooks/useBackfillApi";
 import { useEffect, useState } from "react";
-import { CalendarX, AlertCircle, CheckCircle2 } from "lucide-react";
+import { CalendarX, AlertCircle } from "lucide-react";
 
 export default function BackfillPage() {
   const { getAgentStatus } = useBackfillApi();
   const [status, setStatus] = useState<"loading" | "ok" | "down">("loading");
-  const [agentEnabled, setAgentEnabled] = useState<boolean | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -20,16 +19,13 @@ export default function BackfillPage() {
         if (cancelled) return;
         if (res && res.status === "ok") {
           setStatus("ok");
-          setAgentEnabled(res.enabled);
         } else {
           setStatus("down");
-          setAgentEnabled(null);
         }
       })
       .catch(() => {
         if (!cancelled) {
           setStatus("down");
-          setAgentEnabled(null);
         }
       });
     return () => {
@@ -65,36 +61,17 @@ export default function BackfillPage() {
         </span>
       </header>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Backend status</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {status === "loading" && (
-            <p className="text-sm text-muted-foreground">Checking backfill-backend...</p>
-          )}
-          {status === "ok" && (
-            <div className="space-y-1 text-sm">
-              <p className="flex items-center gap-2">
-                <CheckCircle2 className="h-4 w-4 text-green-600" />
-                Backfill backend is reachable.
-              </p>
-              {agentEnabled !== null && (
-                <p className="text-muted-foreground">
-                  Agent: <strong>{agentEnabled ? "Enabled" : "Disabled"}</strong> (new campaigns{" "}
-                  {agentEnabled ? "allowed" : "blocked"})
-                </p>
-              )}
-            </div>
-          )}
-          {status === "down" && (
+      {status === "down" && (
+        <Card className="border-destructive/40">
+          <CardContent className="py-4">
             <p className="flex items-center gap-2 text-sm">
               <AlertCircle className="h-4 w-4 text-red-600" />
-              Start <code className="bg-muted px-1 rounded">backfill-backend/run.sh</code>
+              Backfill backend is not reachable. Start{" "}
+              <code className="bg-muted px-1 rounded">backfill-backend/run.sh</code>
             </p>
-          )}
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      )}
 
       {status === "ok" && (
         <Tabs defaultValue="campaigns">

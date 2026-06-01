@@ -82,6 +82,15 @@ export type Candidate = {
   rank_order: number;
   eligibility_status: string;
   exclusion_reason: string | null;
+  wave_number_first_contacted: number | null;
+  last_contacted_at: string | null;
+  current_contact_status: string | null;
+  interested_flag: boolean | null;
+  declined_flag: boolean | null;
+  no_response_flag: boolean | null;
+  won_slot_flag: boolean | null;
+  lost_slot_flag: boolean | null;
+  response_at: string | null;
 };
 
 export type CampaignDetail = Campaign & {

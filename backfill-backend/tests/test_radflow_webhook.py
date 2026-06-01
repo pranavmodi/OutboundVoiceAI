@@ -101,6 +101,13 @@ class RadflowWebhookServiceTests(unittest.TestCase):
         )
         self.assertEqual(status, "ineligible")
 
+    def test_non_canceled_appointment_status_is_ineligible(self) -> None:
+        from app.services.radflow_webhook_service import _is_canceled_status
+
+        self.assertTrue(_is_canceled_status("Canceled"))
+        self.assertTrue(_is_canceled_status("cancelled"))
+        self.assertFalse(_is_canceled_status("Scheduled"))
+
 
 if __name__ == "__main__":
     unittest.main()

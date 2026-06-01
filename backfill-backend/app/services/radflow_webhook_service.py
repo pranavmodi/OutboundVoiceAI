@@ -12,6 +12,7 @@ from app.schemas.radflow import RadflowCancellationEvent, RadflowWebhookResponse
 from app.services.campaign_service import cancel_appointment_and_maybe_campaign
 
 RADFLOW_EVENT_TYPE = "appointment.cancelled"
+CANCELED_STATUSES = {"canceled", "cancelled"}
 
 
 def _utcnow() -> datetime:
@@ -25,6 +26,10 @@ def _parse_datetime(value: datetime, fallback_tz: str | None = None) -> datetime
         else:
             value = value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _is_canceled_status(value: str) -> bool:
+    return value.strip().lower() in CANCELED_STATUSES
 
 
 async def get_inbound_event(
@@ -172,6 +177,16 @@ async def handle_radflow_cancellation(
             event_id=radflow_event_id,
             appointment_external_id=appt_external,
             message=f"Unsupported eventType: {event.event_type}",
+        )
+        await _store_inbound_event(session, radflow_event_id, appt_external, response)
+        return response
+
+    if not _is_canceled_status(event.appointment.status):
+        response = RadflowWebhookResponse(
+            status="ineligible",
+            event_id=radflow_event_id,
+            appointment_external_id=appt_external,
+            message=f"Appointment status is not canceled: {event.appointment.status}",
         )
         await _store_inbound_event(session, radflow_event_id, appt_external, response)
         return response
