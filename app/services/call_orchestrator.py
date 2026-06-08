@@ -457,7 +457,15 @@ class CallSession:
             self._voice_service = GrokVoiceService(audio_format=audio_format, verbose=self._verbose, voice=ds.grok_voice, call_greeting=effective_greeting)
         else:
             from app.services.realtime_voice import RealtimeVoiceService
-            self._voice_service = RealtimeVoiceService(audio_format=audio_format, verbose=self._verbose, voice=ds.openai_voice, call_greeting=effective_greeting)
+            self._voice_service = RealtimeVoiceService(
+                audio_format=audio_format,
+                verbose=self._verbose,
+                voice=ds.openai_voice,
+                call_greeting=effective_greeting,
+                vad_silence_ms=ds.openai_vad_silence_ms,
+                vad_prefix_ms=ds.openai_vad_prefix_ms,
+                vad_threshold=ds.openai_vad_threshold,
+            )
 
         self._voice_service.on_transcript = self._handle_transcript
         self._voice_service.on_audio = self._handle_audio

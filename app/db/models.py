@@ -17,11 +17,11 @@ def _utcnow() -> datetime:
 class PatientRow(Base):
     __tablename__ = "patients"
 
-    patient_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    patient_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     phone: Mapped[str] = mapped_column(String(32), nullable=False)
     language: Mapped[str] = mapped_column(String(5), default="en")
-    order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    order_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     order_created: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     intake_status: Mapped[str] = mapped_column(String(20), default="complete")
     has_called_in_before: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -62,10 +62,10 @@ class CallLogRow(Base):
     __tablename__ = "call_logs"
 
     call_id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    patient_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    patient_id: Mapped[str] = mapped_column(String(255), nullable=False)
     patient_name: Mapped[str] = mapped_column(String(255), default="")
     phone: Mapped[str] = mapped_column(String(32), default="")
-    order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    order_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     priority_bucket: Mapped[int] = mapped_column(Integer, default=0)
     started_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), default=_utcnow)
     ended_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
@@ -170,7 +170,7 @@ class PatientCallStateRow(Base):
     """Local call state for live-mode patients (RadFlow is read-only)."""
     __tablename__ = "patient_call_state"
 
-    patient_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    patient_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     # Legacy combined counter, kept for rollout compatibility.
     attempt_count: Mapped[int] = mapped_column(Integer, default=0)
     # AI-only attempt count — authoritative going forward.  Human attempts
@@ -202,9 +202,9 @@ class AuditEventRow(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     call_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    patient_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    patient_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     patient_name: Mapped[str] = mapped_column(String(255), default="")
-    order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    order_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     event_type: Mapped[str] = mapped_column(String(32), nullable=False)  # radflow | hl7 | sms | email | slack
     action: Mapped[str] = mapped_column(String(64), nullable=False)  # post_outcome | post_hl7_status | send_sms | send_email | send_slack
     status: Mapped[str] = mapped_column(String(16), nullable=False)  # success | failed | skipped

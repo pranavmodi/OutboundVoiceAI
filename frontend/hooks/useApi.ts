@@ -478,6 +478,26 @@ export function useApi() {
     }
   }, []);
 
+  const updateOpenAIVad = useCallback(async (
+    silenceMs: number,
+    prefixMs: number,
+    threshold: number,
+  ): Promise<SystemSettings | null> => {
+    try {
+      return await fetchApi<SystemSettings>("/api/settings/openai-vad", {
+        method: "PUT",
+        body: JSON.stringify({
+          silence_ms: silenceMs,
+          prefix_ms: prefixMs,
+          threshold,
+        }),
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+      return null;
+    }
+  }, []);
+
   const previewVoice = useCallback(async (provider: string, voice: string): Promise<string | null> => {
     try {
       const baseUrl = process.env.NEXT_PUBLIC_API_URL || "";
@@ -685,6 +705,7 @@ export function useApi() {
     setVoiceProvider,
     updateCallGreeting,
     updateVoices,
+    updateOpenAIVad,
     previewVoice,
     setCallMode,
     setMockMode,
@@ -736,6 +757,7 @@ export function useApi() {
     setVoiceProvider,
     updateCallGreeting,
     updateVoices,
+    updateOpenAIVad,
     previewVoice,
     setCallMode,
     setMockMode,

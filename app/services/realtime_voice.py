@@ -201,10 +201,35 @@ SYSTEM_INSTRUCTIONS = build_system_instructions()
 class RealtimeVoiceService(BaseVoiceService):
     """Manages OpenAI Realtime API connections for voice calls."""
 
-    def __init__(self, audio_format: str = "pcm16", verbose: bool = False, voice: str = "", call_greeting: str = ""):
+    def __init__(
+        self,
+        audio_format: str = "pcm16",
+        verbose: bool = False,
+        voice: str = "",
+        call_greeting: str = "",
+        vad_silence_ms: Optional[int] = None,
+        vad_prefix_ms: Optional[int] = None,
+        vad_threshold: Optional[float] = None,
+    ):
         super().__init__(audio_format=audio_format, verbose=verbose)
         self._voice = voice or os.getenv("OPENAI_VOICE", "alloy")
         self._call_greeting = call_greeting
+        # VAD knobs: prefer caller-supplied (DB-backed) values, then env, then
+        # hard defaults. Keeping the env fallback means existing deployments
+        # with OPENAI_VAD_* set still work if the orchestrator forgets to pass
+        # the settings object.
+        self._vad_silence_ms = (
+            int(vad_silence_ms) if vad_silence_ms is not None
+            else int(os.getenv("OPENAI_VAD_SILENCE_MS", "700"))
+        )
+        self._vad_prefix_ms = (
+            int(vad_prefix_ms) if vad_prefix_ms is not None
+            else int(os.getenv("OPENAI_VAD_PREFIX_MS", "300"))
+        )
+        self._vad_threshold = (
+            float(vad_threshold) if vad_threshold is not None
+            else float(os.getenv("OPENAI_VAD_THRESHOLD", "0.85"))
+        )
         self._ws = None  # WebSocket connection
         self._session: Optional[VoiceSession] = None
 
@@ -341,9 +366,9 @@ class RealtimeVoiceService(BaseVoiceService):
                         "transcription": {"model": "gpt-4o-transcribe"},
                         "turn_detection": {
                             "type": "server_vad",
-                            "threshold": float(os.getenv("OPENAI_VAD_THRESHOLD", "0.85")),
-                            "prefix_padding_ms": int(os.getenv("OPENAI_VAD_PREFIX_MS", "300")),
-                            "silence_duration_ms": int(os.getenv("OPENAI_VAD_SILENCE_MS", "700")),
+                            "threshold": self._vad_threshold,
+                            "prefix_padding_ms": self._vad_prefix_ms,
+                            "silence_duration_ms": self._vad_silence_ms,
                         },
                     },
                     "output": {

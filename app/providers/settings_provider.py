@@ -151,6 +151,9 @@ def _row_to_settings(row: SystemSettingsRow) -> SystemSettings:
         call_greeting=ds.get("call_greeting", DEFAULT_CALL_GREETING),
         max_parallel_calls=_clamp_parallel(ds.get("max_parallel_calls", 1)),
         dispatch_pacing_seconds=int(ds.get("dispatch_pacing_seconds", 1)),
+        openai_vad_silence_ms=int(ds.get("openai_vad_silence_ms", 700)),
+        openai_vad_prefix_ms=int(ds.get("openai_vad_prefix_ms", 300)),
+        openai_vad_threshold=float(ds.get("openai_vad_threshold", 0.85)),
     )
     settings.allow_live_calls = row.allow_live_calls if row.allow_live_calls is not None else False
     settings.allowed_phones = row.allowed_phones if row.allowed_phones is not None else []
@@ -361,6 +364,9 @@ class SettingsProvider:
                 "call_greeting": dispatcher_settings.call_greeting,
                 "max_parallel_calls": _clamp_parallel(dispatcher_settings.max_parallel_calls),
                 "dispatch_pacing_seconds": int(dispatcher_settings.dispatch_pacing_seconds),
+                "openai_vad_silence_ms": int(dispatcher_settings.openai_vad_silence_ms),
+                "openai_vad_prefix_ms": int(dispatcher_settings.openai_vad_prefix_ms),
+                "openai_vad_threshold": float(dispatcher_settings.openai_vad_threshold),
             }
             await session.commit()
             return _row_to_settings(row)

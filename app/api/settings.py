@@ -52,6 +52,9 @@ class DispatcherSettingsRequest(BaseModel):
     call_greeting: str = ""
     max_parallel_calls: int = 1
     dispatch_pacing_seconds: int = 1
+    openai_vad_silence_ms: int = 700
+    openai_vad_prefix_ms: int = 300
+    openai_vad_threshold: float = 0.85
 
 
 class SourceRequest(BaseModel):
@@ -194,6 +197,9 @@ async def settings_to_response(provider) -> SystemSettingsResponse:
             call_greeting=settings.dispatcher_settings.call_greeting,
             max_parallel_calls=settings.dispatcher_settings.max_parallel_calls,
             dispatch_pacing_seconds=settings.dispatcher_settings.dispatch_pacing_seconds,
+            openai_vad_silence_ms=settings.dispatcher_settings.openai_vad_silence_ms,
+            openai_vad_prefix_ms=settings.dispatcher_settings.openai_vad_prefix_ms,
+            openai_vad_threshold=settings.dispatcher_settings.openai_vad_threshold,
         ),
         allow_live_calls=settings.allow_live_calls,
         allowed_phones=settings.allowed_phones,
@@ -405,6 +411,9 @@ async def update_dispatcher_settings(request: DispatcherSettingsRequest):
         call_greeting=request.call_greeting,
         max_parallel_calls=request.max_parallel_calls,
         dispatch_pacing_seconds=request.dispatch_pacing_seconds,
+        openai_vad_silence_ms=request.openai_vad_silence_ms,
+        openai_vad_prefix_ms=request.openai_vad_prefix_ms,
+        openai_vad_threshold=request.openai_vad_threshold,
     )
 
     await provider.update_dispatcher_settings(dispatcher_settings)
@@ -683,6 +692,42 @@ async def get_voices():
         "gemini_voice": settings.dispatcher_settings.gemini_voice,
         "grok_voice": settings.dispatcher_settings.grok_voice,
     }
+
+
+class OpenAIVadRequest(BaseModel):
+    """Tuning knobs for OpenAI Realtime server-VAD turn detection."""
+    silence_ms: int
+    prefix_ms: int
+    threshold: float
+
+
+@router.put("/openai-vad", response_model=SystemSettingsResponse)
+async def update_openai_vad(request: OpenAIVadRequest):
+    """Update OpenAI Realtime VAD silence / prefix / threshold without touching
+    other dispatcher fields. Read-modify-write on dispatcher_settings so the
+    request only carries the three knobs the UI exposes.
+    """
+    from fastapi import HTTPException
+
+    silence_ms = int(request.silence_ms)
+    prefix_ms = int(request.prefix_ms)
+    threshold = float(request.threshold)
+    if not 100 <= silence_ms <= 2000:
+        raise HTTPException(400, "silence_ms must be between 100 and 2000")
+    if not 0 <= prefix_ms <= 1000:
+        raise HTTPException(400, "prefix_ms must be between 0 and 1000")
+    if not 0.0 <= threshold <= 1.0:
+        raise HTTPException(400, "threshold must be between 0.0 and 1.0")
+
+    provider = get_settings_provider()
+    settings = await provider.get_settings()
+    ds = settings.dispatcher_settings
+    ds.openai_vad_silence_ms = silence_ms
+    ds.openai_vad_prefix_ms = prefix_ms
+    ds.openai_vad_threshold = threshold
+    await provider.update_dispatcher_settings(ds)
+    print(f"[SETTINGS] openai_vad → silence={silence_ms}ms prefix={prefix_ms}ms threshold={threshold}")
+    return await settings_response_and_broadcast(provider)
 
 
 @router.put("/voices", response_model=SystemSettingsResponse)

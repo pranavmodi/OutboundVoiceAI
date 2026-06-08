@@ -711,6 +711,10 @@ export default function Dashboard() {
                         const newSettings = await api.updateVoices(ov, gv, xv);
                         if (newSettings) setSettings(newSettings);
                       }}
+                      onUpdateOpenAIVad={async (silenceMs, prefixMs, threshold) => {
+                        const newSettings = await api.updateOpenAIVad(silenceMs, prefixMs, threshold);
+                        if (newSettings) setSettings(newSettings);
+                      }}
                       onPreviewVoice={api.previewVoice}
                       onUpdateCallGreeting={async (greeting) => {
                         const newSettings = await api.updateCallGreeting(greeting);

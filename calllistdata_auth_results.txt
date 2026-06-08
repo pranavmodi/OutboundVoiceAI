@@ -1,5 +1,5 @@
 ================================================================================
-CallListData Auth Test — 2026-02-02 09:50:14
+CallListData Auth Test — 2026-05-26 13:57:48
 Target: https://app.radflow360.com/chatbotapi/Patient/CallListData?patientId=PRE1068792
 ================================================================================
 
@@ -7,28 +7,28 @@ Target: https://app.radflow360.com/chatbotapi/Patient/CallListData?patientId=PRE
 METHOD 1: No Authentication (plain GET)
 ================================================================================
 Status: 401
-Response Headers: {'transfer-encoding': 'chunked', 'server': '', 'x-frame-options': 'SAMEORIGIN', 'date': 'Mon, 02 Feb 2026 09:49:17 GMT'}
+Response Headers: {'transfer-encoding': 'chunked', 'server': '', 'x-frame-options': 'SAMEORIGIN', 'date': 'Tue, 26 May 2026 13:56:52 GMT'}
 Body: (empty)
 
 ================================================================================
 METHOD 2: Basic Auth (CHATBOT_API_USER / CHATBOT_API_PASSWORD)
 ================================================================================
 Status: 200
-Response Headers: {'transfer-encoding': 'chunked', 'content-type': 'application/json; charset=utf-8', 'server': '', 'x-frame-options': 'SAMEORIGIN', 'date': 'Mon, 02 Feb 2026 09:49:25 GMT'}
+Response Headers: {'transfer-encoding': 'chunked', 'content-type': 'application/json; charset=utf-8', 'server': '', 'x-frame-options': 'SAMEORIGIN', 'date': 'Tue, 26 May 2026 13:56:52 GMT'}
 Body: {"result":"","status":1,"responseStatus":"Success","exception":null}
 
 ================================================================================
 METHOD 3: API Key as query param (partnerApiKey=PARTNER_API_KEY)
 ================================================================================
 Status: 401
-Response Headers: {'transfer-encoding': 'chunked', 'server': '', 'x-frame-options': 'SAMEORIGIN', 'date': 'Mon, 02 Feb 2026 09:49:25 GMT'}
+Response Headers: {'transfer-encoding': 'chunked', 'server': '', 'x-frame-options': 'SAMEORIGIN', 'date': 'Tue, 26 May 2026 13:56:52 GMT'}
 Body: (empty)
 
 ================================================================================
 METHOD 4: API Key as query param (partnerApiKey=CHATBOT_PARTNER_API_KEY)
 ================================================================================
 Status: 401
-Response Headers: {'transfer-encoding': 'chunked', 'server': '', 'x-frame-options': 'SAMEORIGIN', 'date': 'Mon, 02 Feb 2026 09:49:25 GMT'}
+Response Headers: {'transfer-encoding': 'chunked', 'server': '', 'x-frame-options': 'SAMEORIGIN', 'date': 'Tue, 26 May 2026 13:56:52 GMT'}
 Body: (empty)
 
 ================================================================================
