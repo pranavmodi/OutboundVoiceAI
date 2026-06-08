@@ -13,6 +13,7 @@ from app.models.enums import (
 )
 from app.services.audit_service import log_action
 from app.services.settings_service import get_or_create_settings, settings_snapshot
+from app.services.suppression_service import get_sms_suppression_reason
 
 
 def _utcnow() -> datetime:
@@ -233,11 +234,9 @@ def _evaluate_row(
     if settings.exclude_no_show_enabled and patient.no_show_flag:
         return CandidateEligibilityStatus.EXCLUDED_NO_SHOW.value, "Patient has no-show flag"
 
-    if patient.sms_opt_out:
-        return CandidateEligibilityStatus.EXCLUDED_INVALID_CONTACT.value, "SMS opt-out"
-
-    if patient.suppressed:
-        return CandidateEligibilityStatus.EXCLUDED_INVALID_CONTACT.value, "Suppressed by outbound rules"
+    suppression_reason = get_sms_suppression_reason(patient)
+    if suppression_reason:
+        return CandidateEligibilityStatus.EXCLUDED_INVALID_CONTACT.value, suppression_reason
 
     if not patient.phone:
         return CandidateEligibilityStatus.EXCLUDED_INVALID_CONTACT.value, "Missing phone number"

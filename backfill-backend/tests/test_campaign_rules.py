@@ -71,6 +71,36 @@ class CampaignRulesTests(unittest.TestCase):
         status, _ = _evaluate_row(same_time, self.patient, self.canceled, _Settings())
         self.assertEqual(status, CandidateEligibilityStatus.EXCLUDED_NOT_AFTER_OPEN_SLOT.value)
 
+    def test_excludes_sms_opt_out(self) -> None:
+        after = Appointment(
+            id=22,
+            patient_id=2,
+            facility_id=1,
+            cpt_code="MRI_BRAIN",
+            status="scheduled",
+            scheduled_start_at=datetime(2026, 6, 15, 10, 0, tzinfo=timezone.utc),
+        )
+        self.patient.sms_opt_out = True
+
+        status, reason = _evaluate_row(after, self.patient, self.canceled, _Settings())
+        self.assertEqual(status, CandidateEligibilityStatus.EXCLUDED_INVALID_CONTACT.value)
+        self.assertEqual(reason, "SMS opt-out")
+
+    def test_excludes_suppressed_patient(self) -> None:
+        after = Appointment(
+            id=23,
+            patient_id=2,
+            facility_id=1,
+            cpt_code="MRI_BRAIN",
+            status="scheduled",
+            scheduled_start_at=datetime(2026, 6, 15, 10, 0, tzinfo=timezone.utc),
+        )
+        self.patient.suppressed = True
+
+        status, reason = _evaluate_row(after, self.patient, self.canceled, _Settings())
+        self.assertEqual(status, CandidateEligibilityStatus.EXCLUDED_INVALID_CONTACT.value)
+        self.assertEqual(reason, "Suppressed by backfill suppression rules")
+
     def test_settings_snapshot_contains_m1_runtime_settings(self) -> None:
         settings = BackfillAgentSettings(
             id=1,

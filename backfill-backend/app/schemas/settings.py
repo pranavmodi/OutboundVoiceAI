@@ -1,6 +1,10 @@
 from datetime import datetime, time
 
+from typing import Literal
+
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+SmsProviderMode = Literal["mock", "twilio"]
 
 
 class SettingsOut(BaseModel):
@@ -26,6 +30,7 @@ class SettingsOut(BaseModel):
     allowed_sms_template_id: int | None
     allowed_voice_template_id: int | None
     closeout_message_template_id: int | None
+    sms_provider: str
     updated_at: datetime
 
     model_config = {"from_attributes": True}
@@ -53,6 +58,7 @@ class SettingsUpdate(BaseModel):
     allowed_sms_template_id: int | None = None
     allowed_voice_template_id: int | None = None
     closeout_message_template_id: int | None = None
+    sms_provider: SmsProviderMode
 
     @field_validator("campaign_timeout_minutes")
     @classmethod
@@ -63,6 +69,6 @@ class SettingsUpdate(BaseModel):
 
     @model_validator(mode="after")
     def validate_contact_window(self) -> "SettingsUpdate":
-        if self.contact_window_end <= self.contact_window_start:
-            raise ValueError("contact_window_end must be after contact_window_start")
+        if self.contact_window_end == self.contact_window_start:
+            raise ValueError("contact_window_end must differ from contact_window_start")
         return self

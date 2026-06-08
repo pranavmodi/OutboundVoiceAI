@@ -32,6 +32,7 @@ const TIMEZONE_OPTIONS = [
   "America/Denver",
   "America/Chicago",
   "America/New_York",
+  "Asia/Kolkata",
   "UTC",
 ];
 
@@ -66,6 +67,7 @@ function settingsToForm(s: BackfillSettings): BackfillSettingsUpdate {
     allowed_sms_template_id: s.allowed_sms_template_id,
     allowed_voice_template_id: s.allowed_voice_template_id,
     closeout_message_template_id: s.closeout_message_template_id,
+    sms_provider: s.sms_provider,
   };
 }
 
@@ -116,7 +118,11 @@ function NumberField({
   );
 }
 
-export function SettingsPanel() {
+type SettingsPanelProps = {
+  onSmsModeChanged?: () => void;
+};
+
+export function SettingsPanel({ onSmsModeChanged }: SettingsPanelProps) {
   const { getSettings, putSettings } = useBackfillApi();
   const [saved, setSaved] = useState<BackfillSettingsUpdate | null>(null);
   const [form, setForm] = useState<BackfillSettingsUpdate | null>(null);
@@ -191,6 +197,7 @@ export function SettingsPanel() {
       setSaved(f);
       setForm(f);
       setBlackoutText(blackoutToText(data.agent_blackout_dates));
+      onSmsModeChanged?.();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save settings");
     } finally {
@@ -440,6 +447,43 @@ export function SettingsPanel() {
               onCheckedChange={(checked) => patch({ late_response_closeout_enabled: checked })}
             />
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">SMS mode</CardTitle>
+          <CardDescription>
+            Mock simulates send and receive in the UI (no Twilio). Live uses Twilio for real texts
+            and requires ngrok + inbound webhook for patient replies.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="sms_provider">Outbound / inbound SMS</Label>
+            <Select
+              value={form.sms_provider}
+              onValueChange={(v) => patch({ sms_provider: v as "mock" | "twilio" })}
+            >
+              <SelectTrigger id="sms_provider">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="mock">Mock (dev) — simulated SMS thread on campaigns</SelectItem>
+                <SelectItem value="twilio">Live Twilio — real SMS to patient phones</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          {form.sms_provider === "mock" ? (
+            <p className="text-sm text-muted-foreground">
+              After cancel, open a running campaign and use the mock SMS panel to reply YES or NO.
+            </p>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              Set <code className="bg-muted px-1 rounded">BACKFILL_PUBLIC_BASE_URL</code> and Twilio
+              inbound webhook on your SMS number.
+            </p>
+          )}
         </CardContent>
       </Card>
 

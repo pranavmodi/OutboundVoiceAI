@@ -14,6 +14,18 @@ class Settings(BaseSettings):
     radflow_webhook_enabled: bool = True
     radflow_webhook_token: str = ""
     backfill_simulator_enabled: bool = True
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = ""
+    twilio_sms_from_number: str = ""
+    backfill_sms_provider: str = "mock"
+    backfill_public_base_url: str = ""
+    twilio_webhook_auth_enabled: bool = False
+    backfill_voice_provider: str = "twilio"
+    backfill_appointment_api_base_url: str = ""
+    backfill_appointment_api_token: str = ""
+    backfill_wave_worker_enabled: bool = False
+    backfill_wave_worker_poll_seconds: int = 15
+    backfill_wave_worker_batch_size: int = 25
 
 
 settings = Settings()

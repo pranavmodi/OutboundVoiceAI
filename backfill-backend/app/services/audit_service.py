@@ -15,6 +15,7 @@ async def log_action(
     payload: dict | None = None,
     channel: str = ActionChannel.SYSTEM.value,
     wave_number: int | None = None,
+    provider_message_id: str | None = None,
 ) -> None:
     session.add(
         BackfillActionLog(
@@ -23,6 +24,7 @@ async def log_action(
             channel=channel,
             action_type=action_type,
             outcome=outcome,
+            provider_message_id=provider_message_id,
             raw_response_payload=payload,
             wave_number=wave_number,
         )

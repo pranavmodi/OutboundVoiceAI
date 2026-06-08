@@ -230,6 +230,23 @@ When the checklist passes, Milestone 1 foundation is ready for handoff to [Miles
 
 ---
 
+## Milestone 2 — Twilio local setup (Step 1.1)
+
+Decisions are in [`integrations.md`](./integrations.md) § Twilio. No webhook code exists yet; this section is for when you wire Twilio in Phase 3.
+
+1. Copy Twilio vars from repo-root `.env` (if present) into `backfill-backend/.env`:
+   - `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`
+   - `TWILIO_SMS_FROM_NUMBER` — must be a **dedicated backfill** number, not the scheduling line
+2. Start the backend: `cd backfill-backend && ./run.sh`
+3. Expose `:8001` with ngrok: `ngrok http 8001`
+4. Set `BACKFILL_PUBLIC_BASE_URL=https://<your-ngrok-host>` in `backfill-backend/.env` and restart
+5. In Twilio console → your backfill number → **A MESSAGE COMES IN**:
+   - `POST https://<your-ngrok-host>/api/webhooks/sms/inbound` (handler ships in M2 Phase 3)
+
+Until Phase 3 is implemented, Twilio will POST to a 404 — that is expected.
+
+---
+
 ## Common failure modes
 
 | Symptom | Cause | Fix |

@@ -1,5 +1,6 @@
 "use client";
 
+import { MockSmsPanel } from "@/components/backfill/MockSmsPanel";
 import { useBackfillApi } from "@/hooks/useBackfillApi";
 import type { Campaign, CampaignDetail, CampaignListParams, Facility, TimelineEntry } from "@/types/backfill";
 import { useCallback, useEffect, useState } from "react";
@@ -54,9 +55,10 @@ const STATUS_OPTIONS = [
 
 type Props = {
   refreshKey?: number;
+  mockSmsEnabled?: boolean;
 };
 
-export function CampaignsPanel({ refreshKey = 0 }: Props) {
+export function CampaignsPanel({ refreshKey = 0, mockSmsEnabled = false }: Props) {
   const { listCampaigns, listFacilities, getCampaign, getCampaignTimeline, stopCampaign } =
     useBackfillApi();
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
@@ -403,6 +405,13 @@ export function CampaignsPanel({ refreshKey = 0 }: Props) {
                   <p className="text-sm">
                     <strong>Close reason:</strong> {selected.closed_reason}
                   </p>
+                )}
+
+                {mockSmsEnabled && (
+                  <MockSmsPanel
+                    campaign={selected}
+                    onUpdated={() => openDetail(selected.id)}
+                  />
                 )}
 
                 <table className="w-full text-sm">

@@ -140,6 +140,7 @@ export type BackfillSettings = {
   allowed_sms_template_id: number | null;
   allowed_voice_template_id: number | null;
   closeout_message_template_id: number | null;
+  sms_provider: "mock" | "twilio";
   updated_at: string;
 };
 
@@ -149,4 +150,27 @@ export type AgentStatus = {
   enabled: boolean;
   status: string;
   service: string;
+  sms_provider: string;
+  sms_mode: string;
+  mock_sms_enabled: boolean;
+};
+
+export type MockSmsMessage = {
+  id: string;
+  direction: string;
+  campaign_id: number;
+  candidate_id: number | null;
+  patient_id: number | null;
+  patient_name: string | null;
+  from_number: string;
+  to_number: string;
+  body: string;
+  created_at: string;
+};
+
+export type MockSmsReplyResult = {
+  status: string;
+  campaign_id: number | null;
+  candidate_id: number | null;
+  message: string | null;
 };

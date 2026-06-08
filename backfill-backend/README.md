@@ -40,7 +40,8 @@ See [`../docs/cancellation-backfill/integrations.md`](../docs/cancellation-backf
 - [x] Settings API, campaigns list/detail/timeline/stop, agent status
 - [x] Frontend `/backfill` — Campaigns + Settings tabs
 - [x] RadFlow cancellation webhook + idempotency (`X-RadFlow-Event-Id`)
-- [ ] Milestone 2 — wave engine, SMS/voice, Reports
+- [x] M2 Step 1.1 — Twilio integration decision ([`integrations.md`](../docs/cancellation-backfill/integrations.md) § Twilio)
+- [ ] Milestone 2 — wave engine, SMS/voice, Reports (implementation)
 
 ## Tests
 

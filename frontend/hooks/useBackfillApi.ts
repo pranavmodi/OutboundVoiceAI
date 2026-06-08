@@ -11,6 +11,8 @@ import type {
   CampaignListResponse,
   CancelResult,
   Facility,
+  MockSmsMessage,
+  MockSmsReplyResult,
   TimelineEntry,
 } from "@/types/backfill";
 
@@ -103,6 +105,21 @@ export function useBackfillApi() {
     []
   );
 
+  const listMockSmsMessages = useCallback(
+    (campaignId: number) =>
+      fetchApi<MockSmsMessage[]>(`/api/mock-sms/campaigns/${campaignId}/messages`),
+    []
+  );
+
+  const mockSmsReply = useCallback(
+    (campaignId: number, body: string, patientId?: number) =>
+      fetchApi<MockSmsReplyResult>(`/api/mock-sms/campaigns/${campaignId}/reply`, {
+        method: "POST",
+        body: JSON.stringify({ body, patient_id: patientId ?? null }),
+      }),
+    []
+  );
+
   const getSettings = useCallback(() => fetchApi<BackfillSettings>("/api/settings"), []);
 
   const putSettings = useCallback(
@@ -124,6 +141,8 @@ export function useBackfillApi() {
       getCampaign,
       getCampaignTimeline,
       stopCampaign,
+      listMockSmsMessages,
+      mockSmsReply,
       getSettings,
       putSettings,
     }),
@@ -136,6 +155,8 @@ export function useBackfillApi() {
       getCampaign,
       getCampaignTimeline,
       stopCampaign,
+      listMockSmsMessages,
+      mockSmsReply,
       getSettings,
       putSettings,
     ]

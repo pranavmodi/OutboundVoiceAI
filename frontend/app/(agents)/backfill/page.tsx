@@ -5,12 +5,31 @@ import { SettingsPanel } from "@/components/backfill/SettingsPanel";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useBackfillApi } from "@/hooks/useBackfillApi";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { CalendarX, AlertCircle } from "lucide-react";
+import type { AgentStatus } from "@/types/backfill";
 
 export default function BackfillPage() {
   const { getAgentStatus } = useBackfillApi();
   const [status, setStatus] = useState<"loading" | "ok" | "down">("loading");
+  const [agentInfo, setAgentInfo] = useState<AgentStatus | null>(null);
+
+  const refreshAgentStatus = useCallback(() => {
+    getAgentStatus()
+      .then((res) => {
+        if (res && res.status === "ok") {
+          setStatus("ok");
+          setAgentInfo(res);
+        } else {
+          setStatus("down");
+          setAgentInfo(null);
+        }
+      })
+      .catch(() => {
+        setStatus("down");
+        setAgentInfo(null);
+      });
+  }, [getAgentStatus]);
 
   useEffect(() => {
     let cancelled = false;
@@ -19,8 +38,10 @@ export default function BackfillPage() {
         if (cancelled) return;
         if (res && res.status === "ok") {
           setStatus("ok");
+          setAgentInfo(res);
         } else {
           setStatus("down");
+          setAgentInfo(null);
         }
       })
       .catch(() => {
@@ -67,10 +88,10 @@ export default function BackfillPage() {
             </TabsTrigger>
           </TabsList>
           <TabsContent value="campaigns">
-            <CampaignsPanel />
+            <CampaignsPanel mockSmsEnabled={agentInfo?.mock_sms_enabled ?? false} />
           </TabsContent>
           <TabsContent value="settings">
-            <SettingsPanel />
+            <SettingsPanel onSmsModeChanged={refreshAgentStatus} />
           </TabsContent>
         </Tabs>
       )}

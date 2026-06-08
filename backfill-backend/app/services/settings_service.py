@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.backfill import BackfillAgentSettings
 from app.schemas.settings import SettingsOut, SettingsUpdate
+from app.services.sms_runtime import get_effective_sms_provider, set_sms_provider
 
 
 def _utcnow() -> datetime:
@@ -47,6 +48,7 @@ def settings_to_out(row: BackfillAgentSettings) -> SettingsOut:
         allowed_sms_template_id=row.allowed_sms_template_id,
         allowed_voice_template_id=row.allowed_voice_template_id,
         closeout_message_template_id=row.closeout_message_template_id,
+        sms_provider=get_effective_sms_provider(),
         updated_at=row.updated_at,
     )
 
@@ -77,6 +79,7 @@ async def update_settings(
     row.allowed_sms_template_id = body.allowed_sms_template_id
     row.allowed_voice_template_id = body.allowed_voice_template_id
     row.closeout_message_template_id = body.closeout_message_template_id
+    set_sms_provider(body.sms_provider)
     row.updated_at = _utcnow()
     await session.flush()
     return row
