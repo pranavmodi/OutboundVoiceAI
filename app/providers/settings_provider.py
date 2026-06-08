@@ -26,10 +26,11 @@ from typing import List
 # without going async. Mirrors the DB row; populated on every settings read and
 # explicitly invalidated on every set/clear. Empty string = "not set in DB"
 # and the env var of the same NAME is used as a fallback.
-_API_KEY_CACHE: dict[str, str] = {"openai": "", "gemini": ""}
+_API_KEY_CACHE: dict[str, str] = {"openai": "", "gemini": "", "grok": ""}
 _API_KEY_ENV_NAMES: dict[str, str] = {
     "openai": "OPENAI_API_KEY",
     "gemini": "GEMINI_API_KEY",
+    "grok": "XAI_API_KEY",
 }
 
 
@@ -146,6 +147,7 @@ def _row_to_settings(row: SystemSettingsRow) -> SystemSettings:
         verbose_logging=ds.get("verbose_logging", False),
         openai_voice=ds.get("openai_voice", "alloy"),
         gemini_voice=ds.get("gemini_voice", "Aoede"),
+        grok_voice=ds.get("grok_voice", "eve"),
         call_greeting=ds.get("call_greeting", DEFAULT_CALL_GREETING),
         max_parallel_calls=_clamp_parallel(ds.get("max_parallel_calls", 1)),
         dispatch_pacing_seconds=int(ds.get("dispatch_pacing_seconds", 1)),
@@ -186,9 +188,11 @@ def _row_to_settings(row: SystemSettingsRow) -> SystemSettings:
     ak = getattr(row, "api_keys", None) or {}
     openai_key = str(ak.get("openai", "") or "")
     gemini_key = str(ak.get("gemini", "") or "")
-    settings.api_keys = ApiKeys(openai=openai_key, gemini=gemini_key)
+    grok_key = str(ak.get("grok", "") or "")
+    settings.api_keys = ApiKeys(openai=openai_key, gemini=gemini_key, grok=grok_key)
     _API_KEY_CACHE["openai"] = openai_key
     _API_KEY_CACHE["gemini"] = gemini_key
+    _API_KEY_CACHE["grok"] = grok_key
     return settings
 
 
@@ -353,6 +357,7 @@ class SettingsProvider:
                 "verbose_logging": dispatcher_settings.verbose_logging,
                 "openai_voice": dispatcher_settings.openai_voice,
                 "gemini_voice": dispatcher_settings.gemini_voice,
+                "grok_voice": dispatcher_settings.grok_voice,
                 "call_greeting": dispatcher_settings.call_greeting,
                 "max_parallel_calls": _clamp_parallel(dispatcher_settings.max_parallel_calls),
                 "dispatch_pacing_seconds": int(dispatcher_settings.dispatch_pacing_seconds),

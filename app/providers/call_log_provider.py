@@ -1,9 +1,9 @@
 """Call log provider — DB-backed."""
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import select, delete, func, case, extract, text
+from sqlalchemy import Integer, select, delete, func, case, cast, extract, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import AsyncSessionLocal
@@ -54,6 +54,10 @@ def _row_to_call_log(row: CallLogRow) -> CallLog:
     cl.recording_size_bytes = row.recording_size_bytes
     cl.recording_duration_seconds = row.recording_duration_seconds
     cl.recording_format = row.recording_format
+
+    # Timings (per-call latency milestones, snake_case key → cumulative ms).
+    # Empty dict on legacy rows pre-migration; guarded so legacy queries don't crash.
+    cl.timings = dict(getattr(row, "timings", None) or {})
 
     # Convert JSONB transcript list to TranscriptEntry objects
     raw = row.transcript or []
@@ -140,6 +144,10 @@ class CallLogProvider:
         cl.preferred_callback_time = None
         cl.queue_snapshot = queue_snapshot
         cl.transcript = []
+        # CallLog uses __new__ here to skip the dataclass __init__, so the
+        # default_factory for timings never fires. Set it explicitly — the
+        # to_dict path reads self.timings unconditionally.
+        cl.timings = {}
         cl.error_code = None
         cl.error_message = None
         cl.recording_sid = None
@@ -269,7 +277,101 @@ class CallLogProvider:
                 row.transcript = current
                 await session.commit()
 
-    async def end_call(self, call_id: str, outcome: CallOutcome):
+    async def relabel_swept_technical_errors(self) -> int:
+        """One-shot migration: rows previously swept as technical_error
+        (when this method labelled them FAILED+TECHNICAL_ERROR) should be
+        relabeled as COMPLETED so they read neutrally.
+
+        Heuristic: outcome='disconnected' AND call_disposition='technical_error'.
+        That combination is only produced by an older version of
+        sweep_stale_in_progress_calls — the live end_call path always uses
+        derive_status_and_disposition, which never emits this pair (a real
+        DISCONNECTED outcome derives to either CALLED+HUNG_UP or
+        FAILED+DISCONNECTED_NUMBER depending on had_patient_speech /
+        duration; a real TECHNICAL_ERROR disposition comes from
+        outcome=FAILED). Idempotent — once relabeled the row no longer
+        matches the filter.
+        """
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(CallLogRow).where(
+                    CallLogRow.outcome == "disconnected",
+                    CallLogRow.call_disposition == "technical_error",
+                )
+            )
+            rows = list(result.scalars().all())
+            for row in rows:
+                row.outcome = CallOutcome.COMPLETED.value
+                status, disposition = derive_status_and_disposition(
+                    outcome=CallOutcome.COMPLETED,
+                    error_code=row.error_code,
+                    had_patient_speech=False,
+                    duration_seconds=row.duration_seconds or 0,
+                )
+                row.call_status = status.value
+                row.call_disposition = disposition.value
+            if rows:
+                await session.commit()
+        return len(rows)
+
+    async def sweep_stale_in_progress_calls(self, older_than_minutes: int = 10) -> int:
+        """Mark orphaned in_progress call_log rows as DISCONNECTED.
+
+        A row gets stuck at outcome='in_progress' when the orchestrator's
+        end_call cleanup never runs — backend killed mid-call, Twilio
+        webhook missed, page closed mid-/v2-test call, etc. Such rows
+        clutter the history view forever ("In Progress" with 0:00 duration)
+        and inflate active-call counts.
+
+        Sweeps any row with outcome='in_progress' and started_at older than
+        ``older_than_minutes`` (default 10), setting:
+          - ended_at = now
+          - duration_seconds = now - started_at
+          - outcome = COMPLETED (→ derives to CallStatus.CALLED +
+            CallDisposition.COMPLETED so the history badge reads neutrally
+            instead of as a system error; if anything went wrong it's
+            already captured in the dispatcher_events / voice_error log
+            for that call, and that's where to look for diagnostics).
+
+        Idempotent: re-running on a clean DB is a no-op. Safe to call from
+        the FastAPI lifespan startup hook.
+
+        Returns the number of rows updated.
+        """
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(minutes=older_than_minutes)
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(CallLogRow).where(
+                    CallLogRow.outcome == "in_progress",
+                    CallLogRow.started_at < cutoff,
+                )
+            )
+            rows = result.scalars().all()
+            for row in rows:
+                row.outcome = CallOutcome.COMPLETED.value
+                row.ended_at = now
+                if row.started_at:
+                    row.duration_seconds = int((now - row.started_at).total_seconds())
+                status, disposition = derive_status_and_disposition(
+                    outcome=CallOutcome.COMPLETED,
+                    error_code=row.error_code,
+                    had_patient_speech=False,  # can't tell post-hoc; doesn't affect COMPLETED branch
+                    duration_seconds=row.duration_seconds or 0,
+                )
+                row.call_status = status.value
+                row.call_disposition = disposition.value
+            if rows:
+                await session.commit()
+
+        # Drop them from the in-memory active set too so dispatcher slots
+        # don't stay reserved against ghosts.
+        for row in rows:
+            self._active_call_ids.pop(row.call_id, None)
+
+        return len(rows)
+
+    async def end_call(self, call_id: str, outcome: CallOutcome, timings: Optional[dict] = None):
         now = datetime.now(timezone.utc)
         async with AsyncSessionLocal() as session:
             result = await session.execute(
@@ -281,6 +383,12 @@ class CallLogProvider:
                 row.outcome = outcome.value
                 if row.started_at:
                     row.duration_seconds = int((now - row.started_at).total_seconds())
+                if timings:
+                    # Merge with anything already on the row — last write wins
+                    # per key. Lets a partial timings dict (e.g. a call that
+                    # errored before first_audio) coexist with any pre-existing
+                    # values.
+                    row.timings = {**(row.timings or {}), **timings}
 
                 # Derive call_status + call_disposition from the full context
                 transcript = row.transcript or []
@@ -482,8 +590,8 @@ class CallLogProvider:
         """Aggregate call outcomes by day-of-week and hour-of-day over the last N days.
 
         Returns two breakdowns:
-        - by_day: list of {day, day_name, total, transferred, no_answer, voicemail, transfer_rate, ...}
-        - by_hour: list of {hour, label, total, transferred, no_answer, voicemail, transfer_rate, ...}
+        - by_day: list of {day, day_name, total, transferred, no_answer, voicemail, transfer_rate, avg_ttfs_ms, ...}
+        - by_hour: list of {hour, label, total, transferred, no_answer, voicemail, transfer_rate, avg_ttfs_ms, ...}
         """
         from datetime import timedelta
 
@@ -522,6 +630,15 @@ class CallLogProvider:
             (CallLogRow.call_disposition == "completed", 1),
         ))
         total_count = func.count(CallLogRow.call_id)
+        ttfs_ms = cast(CallLogRow.timings["first_audio_out"].astext, Integer)
+        ttfs_count = func.count(ttfs_ms)
+        avg_ttfs_ms = func.avg(ttfs_ms)
+        fast_ttfs_count = func.count(case(
+            (ttfs_ms < 2000, 1),
+        ))
+        acceptable_ttfs_count = func.count(case(
+            (ttfs_ms < 4000, 1),
+        ))
 
         # Exclude mock-mode calls and known test patients
         base_filter = [
@@ -545,6 +662,10 @@ class CallLogProvider:
                     technical_error_count.label("technical_error"),
                     disconnected_number_count.label("disconnected_number"),
                     completed_count.label("completed"),
+                    ttfs_count.label("ttfs_count"),
+                    avg_ttfs_ms.label("avg_ttfs_ms"),
+                    fast_ttfs_count.label("fast_ttfs_count"),
+                    acceptable_ttfs_count.label("acceptable_ttfs_count"),
                 )
                 .where(*base_filter)
                 .group_by(dow)
@@ -566,6 +687,10 @@ class CallLogProvider:
                     technical_error_count.label("technical_error"),
                     disconnected_number_count.label("disconnected_number"),
                     completed_count.label("completed"),
+                    ttfs_count.label("ttfs_count"),
+                    avg_ttfs_ms.label("avg_ttfs_ms"),
+                    fast_ttfs_count.label("fast_ttfs_count"),
+                    acceptable_ttfs_count.label("acceptable_ttfs_count"),
                 )
                 .where(*base_filter)
                 .group_by(hour)
@@ -579,8 +704,12 @@ class CallLogProvider:
         def _rate(n, total):
             return round(n / total * 100, 1) if total > 0 else 0.0
 
+        def _ms(value):
+            return int(round(float(value))) if value is not None else None
+
         def _build_row(r, **extra):
             t = r.total
+            ttfs_samples = r.ttfs_count or 0
             return {
                 **extra,
                 "total": t,
@@ -593,6 +722,12 @@ class CallLogProvider:
                 "technical_error": r.technical_error,
                 "disconnected_number": r.disconnected_number,
                 "completed": r.completed,
+                "ttfs_count": ttfs_samples,
+                "avg_ttfs_ms": _ms(r.avg_ttfs_ms),
+                "fast_ttfs_count": r.fast_ttfs_count or 0,
+                "acceptable_ttfs_count": r.acceptable_ttfs_count or 0,
+                "fast_ttfs_rate": _rate(r.fast_ttfs_count, ttfs_samples),
+                "acceptable_ttfs_rate": _rate(r.acceptable_ttfs_count, ttfs_samples),
                 "transfer_rate": _rate(r.transferred, t),
                 "no_answer_rate": _rate(r.no_answer, t),
                 "voicemail_rate": _rate(r.voicemail, t),
@@ -613,6 +748,10 @@ class CallLogProvider:
         grand_transferred = sum(d["transferred"] for d in by_day)
         grand_no_answer = sum(d["no_answer"] for d in by_day)
         grand_voicemail = sum(d["voicemail"] for d in by_day)
+        grand_ttfs_count = sum(d["ttfs_count"] for d in by_day)
+        grand_ttfs_weighted = sum((d["avg_ttfs_ms"] or 0) * d["ttfs_count"] for d in by_day)
+        grand_fast_ttfs = sum(d["fast_ttfs_count"] for d in by_day)
+        grand_acceptable_ttfs = sum(d["acceptable_ttfs_count"] for d in by_day)
 
         return {
             "days": days,
@@ -621,6 +760,10 @@ class CallLogProvider:
             "overall_transfer_rate": _rate(grand_transferred, grand_total),
             "overall_no_answer_rate": _rate(grand_no_answer, grand_total),
             "overall_voicemail_rate": _rate(grand_voicemail, grand_total),
+            "ttfs_count": grand_ttfs_count,
+            "overall_avg_ttfs_ms": int(round(grand_ttfs_weighted / grand_ttfs_count)) if grand_ttfs_count else None,
+            "overall_fast_ttfs_rate": _rate(grand_fast_ttfs, grand_ttfs_count),
+            "overall_acceptable_ttfs_rate": _rate(grand_acceptable_ttfs, grand_ttfs_count),
             "by_day": by_day,
             "by_hour": by_hour,
         }

@@ -88,6 +88,10 @@ class CallLogRow(Base):
     preferred_callback_time: Mapped[str | None] = mapped_column(String(255), nullable=True)
     queue_snapshot: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     transcript: Mapped[list] = mapped_column(JSONB, default=list)
+    # Time-to-first-speech milestones for this call. Keys are stable snake_case
+    # identifiers (e.g. "voice_connected", "first_audio_out"); values are
+    # cumulative milliseconds since start_call entry.
+    timings: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 

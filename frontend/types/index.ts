@@ -69,7 +69,7 @@ export interface CallLog {
   call_status: string;         // "called" | "failed" | "in_progress"
   call_disposition: string;    // "transferred" | "hung_up" | "no_answer" | etc.
   mock_mode: boolean;          // true if this call was redirected to a test number
-  voice_provider: string;      // "openai" or "gemini"
+  voice_provider: string;      // "openai" | "gemini" | "grok"
   transfer_attempted: boolean;
   transfer_success: boolean;
   voicemail_left: boolean;
@@ -77,6 +77,10 @@ export interface CallLog {
   preferred_callback_time?: string | null;
   queue_snapshot: QueueState | null;
   transcript: TranscriptEntry[];
+  // Per-call latency milestones (snake_case key → cumulative ms since
+  // start_call). Empty {} for calls placed before the timings rollout
+  // or calls that bailed before _timing() fired.
+  timings: Record<string, number>;
   error_code: string | null;
   error_message: string | null;
   recording_sid?: string | null;
@@ -201,6 +205,7 @@ export interface DispatcherSettings {
   verbose_logging?: boolean;
   openai_voice?: string;
   gemini_voice?: string;
+  grok_voice?: string;
   call_greeting?: string;
   // Phase 7: parallel-call cap (1 = single-call legacy behavior; ceiling 10).
   max_parallel_calls?: number;
@@ -243,6 +248,7 @@ export interface ApiKeyStatus {
 export interface ApiKeysStatusResponse {
   openai: ApiKeyStatus;
   gemini: ApiKeyStatus;
+  grok: ApiKeyStatus;
 }
 
 export interface TimeSlotStats {
@@ -256,6 +262,12 @@ export interface TimeSlotStats {
   technical_error: number;
   disconnected_number: number;
   completed: number;
+  ttfs_count: number;
+  avg_ttfs_ms: number | null;
+  fast_ttfs_count: number;
+  acceptable_ttfs_count: number;
+  fast_ttfs_rate: number;
+  acceptable_ttfs_rate: number;
   transfer_rate: number;
   no_answer_rate: number;
   voicemail_rate: number;
@@ -278,6 +290,10 @@ export interface TimePerformance {
   overall_transfer_rate: number;
   overall_no_answer_rate: number;
   overall_voicemail_rate: number;
+  ttfs_count: number;
+  overall_avg_ttfs_ms: number | null;
+  overall_fast_ttfs_rate: number;
+  overall_acceptable_ttfs_rate: number;
   by_day: DayStats[];
   by_hour: HourStats[];
 }

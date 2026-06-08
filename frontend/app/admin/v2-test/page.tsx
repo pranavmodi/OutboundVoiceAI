@@ -160,6 +160,12 @@ function V2TestPageInner() {
   voiceRef.current = voice;
   const audioRef = useRef(audio);
   audioRef.current = audio;
+  // Mirror activeCallId + endCall into refs so the once-only unmount
+  // cleanup can read the latest values without re-binding on every render.
+  const activeCallIdRef = useRef<string | null>(null);
+  activeCallIdRef.current = activeCallId;
+  const endCallRef = useRef(endCall);
+  endCallRef.current = endCall;
 
   // Load catalog on mount.
   useEffect(() => {
@@ -286,6 +292,19 @@ function V2TestPageInner() {
   // attached to a dead WS and the call would have no audio sink).
   useEffect(() => {
     return () => {
+      // If a call is still active when the page unmounts (navigation
+      // away, tab close, hot reload mid-call, etc.), fire-and-forget the
+      // end-call endpoint so the orchestrator's call_log row gets cleaned
+      // up server-side. Without this, the row stays at outcome=
+      // 'in_progress' forever and the startup sweep is the only thing
+      // that eventually disconnects it.
+      const callId = activeCallIdRef.current;
+      if (callId) {
+        endCallRef.current(callId).catch(() => {
+          // best-effort — backend may already be tearing down via the
+          // WebSocket close; either way we just want the side effect.
+        });
+      }
       try {
         audioRef.current.stopRecording();
       } catch {
