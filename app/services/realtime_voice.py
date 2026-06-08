@@ -19,7 +19,7 @@ if _env_path.exists():
 
 
 OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime"
-OPENAI_MODEL = os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime")
+OPENAI_MODEL = os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-2")
 
 
 def _audio_format_spec(audio_format: str, twilio_rate: int = 8000, pcm_rate: int = 24000) -> dict:
@@ -355,6 +355,7 @@ class RealtimeVoiceService(BaseVoiceService):
             "type": "session.update",
             "session": {
                 "type": "realtime",
+                "model": OPENAI_MODEL,
                 "output_modalities": ["audio"],
                 "instructions": (
                     f"{instructions}\n\n"

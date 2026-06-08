@@ -40,23 +40,7 @@ export default function BackfillPage() {
         <span>
           <h1 className="text-2xl font-semibold">Cancellation Backfill</h1>
           <p className="text-sm text-muted-foreground">
-            View and manage backfill campaigns. Appointment simulator:{" "}
-            <a href="/dev/appointments" className="underline">
-              /dev/appointments
-            </a>{" "}
-            (or{" "}
-            <a
-              href={
-                process.env.NEXT_PUBLIC_APPOINTMENT_SIM_URL ||
-                "http://localhost:3001/dev/appointments"
-              }
-              className="underline"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              :3001
-            </a>
-            ).
+            View and manage backfill campaigns.
           </p>
         </span>
       </header>

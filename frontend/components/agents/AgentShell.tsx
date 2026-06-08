@@ -16,7 +16,7 @@ type AgentTab = {
 const AGENTS: AgentTab[] = [
   {
     href: "/",
-    label: "Outbound Caller",
+    label: "Ordered Outbound",
     icon: Phone,
     match: (p) => p === "/" || p.startsWith("/admin") || p.startsWith("/analytics"),
   },
