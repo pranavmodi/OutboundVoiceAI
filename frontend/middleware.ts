@@ -5,7 +5,7 @@ import type { NextRequest } from "next/server";
 // is an independent agent (see docs/cancellation-backfill/architecture.md) —
 // it does not share auth with the outbound caller and must be reachable
 // without the outbound backend running.
-const PUBLIC_PATHS = ["/login", "/backfill"];
+const PUBLIC_PATHS = ["/login", "/backfill", "/dev"];
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
